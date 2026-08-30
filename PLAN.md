@@ -49,8 +49,9 @@ engellemeyecek şekilde tasarlanacak.
 - [x] `sqlx-cli` kurulumu (`--features rustls,postgres`)
 - [x] `PLAN.md` (bu dosya)
 - [x] `README.md` — ne olduğu, nasıl ayağa kaldırılacağı, port tablosu
-- [ ] `LICENSE` seçimi (AGPL-3.0 mu MIT mi? açık kaynak felsefesine göre karar)
-- [ ] **Initial commit**
+- [x] `LICENSE` — **AGPL-3.0-only** (ağ üzerinden sunulan değişikliklerin de
+      paylaşılmasını zorunlu kılar; API-first açık platform için doğru tercih)
+- [x] **Initial commit**
 
 ---
 

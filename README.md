@@ -46,3 +46,8 @@ Gereksinimler: Rust 1.96+, Docker, `sqlx-cli`
 ## Durum
 
 Erken geliştirme. Yol haritası ve ilerleme: [PLAN.md](./PLAN.md)
+
+## Lisans
+
+[AGPL-3.0-only](./LICENSE). Actos'u değiştirip ağ üzerinden bir hizmet olarak
+sunuyorsan, değiştirdiğin kaynağı kullanıcılarına açmak zorundasın.
