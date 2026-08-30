@@ -2,6 +2,7 @@
 
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{Client, config::Region};
+use aws_smithy_http_client::{Builder as HttpClientBuilder, tls};
 
 use crate::config::StorageConfig;
 
@@ -25,7 +26,17 @@ impl Storage {
             "actos-config",
         );
 
+        // HTTPS istemcisini elle kuruyoruz: SDK'nın hazır istemcisi aws-lc-rs
+        // tabanlı, sqlx ise ring kullanıyor. Tek süreçte iki rustls kripto
+        // sağlayıcısı bulunması istenmeyen bir durum, o yüzden ring'te birleştik.
+        let http_client = HttpClientBuilder::new()
+            .tls_provider(tls::Provider::Rustls(
+                tls::rustls_provider::CryptoMode::Ring,
+            ))
+            .build_https();
+
         let s3_config = aws_sdk_s3::Config::builder()
+            .http_client(http_client)
             .region(Region::new(cfg.region.clone()))
             .endpoint_url(cfg.endpoint.clone())
             .credentials_provider(credentials)

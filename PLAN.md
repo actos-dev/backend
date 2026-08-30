@@ -73,28 +73,34 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 2 — Uygulama Çekirdeği
 
-- [ ] **Config yükleme** — `AppConfig` struct'ı, env'den okur (`figment` veya
+- [x] **Config yükleme** — `AppConfig` struct'ı, env'den okur (`figment` veya
       elle `std::env`). Eksik/hatalı env varsa **açılışta** panikle, çalışma
       anında değil. `.env` dev'de `dotenvy` ile yüklenir.
-- [ ] **Tracing** — `tracing` + `tracing-subscriber` (`RUST_LOG`), JSON formatı
+- [x] **Tracing** — `tracing` + `tracing-subscriber` (`RUST_LOG`), JSON formatı
       prod'da, pretty dev'de. Her isteğe `request_id` (UUIDv7) eklenir.
-- [ ] **Hata tipi** — `AppError` (thiserror). `IntoResponse` implementasyonu
+- [x] **Hata tipi** — `AppError` (thiserror). `IntoResponse` implementasyonu
       RFC 9457 gövdesi üretir: `{type, title, status, detail, code, request_id}`.
       **Kural:** 500'lerde iç detay (SQL hatası vb.) asla gövdeye sızmaz, sadece
       loglanır.
-- [ ] **Makine-okunur hata kodları** — `actos-types` içinde enum
+- [x] **Makine-okunur hata kodları** — `actos-types` içinde enum
       (`RATE_LIMITED`, `INVALID_KEY`, `NOT_FOUND`, `VALIDATION_FAILED`, ...).
       AI ajanların hatayı parse edebilmesi için string mesajdan daha önemli.
-- [ ] **AppState** — `PgPool`, Redis pool, S3 client, config; `Arc` ile paylaşılır
-- [ ] **DB pool** — `PgPoolOptions`: max conn, `acquire_timeout`, `test_before_acquire`
-- [ ] **Redis pool** — `deadpool-redis`
-- [ ] **Router iskeleti** + tower katmanları sırasıyla:
-      `TraceLayer` → `RequestId` → `Timeout` → `ConcurrencyLimit` →
-      `RequestBodyLimit` → `Cors` → `NormalizePath`
-- [ ] `GET /health` (sadece 200) ve `GET /health/ready` (DB + Redis + S3 ping)
-- [ ] `GET /version` — sürüm + git SHA (build script ile gömülür)
-- [ ] Graceful shutdown (SIGTERM/SIGINT → in-flight isteklerin bitmesini bekle)
-- [ ] Commit
+- [x] **AppState** — `PgPool`, Redis pool, S3 client, config; `Arc` ile paylaşılır
+- [x] **DB pool** — `PgPoolOptions`: max conn, `acquire_timeout`, `test_before_acquire`
+- [x] **Redis pool** — `deadpool-redis`
+- [x] **Router iskeleti** + tower katmanları. Uygulanan sıra (dıştan içe):
+      `NormalizePath` → `SetRequestId` → `Trace` → `PropagateRequestId` →
+      `CatchPanic` → `SensitiveHeaders` → `Cors` → `Timeout` →
+      `ConcurrencyLimit` → `RequestBodyLimit`.
+      (`NormalizePath` en dışta olmak zorunda — yönlendirmeden önce çalışıyor.
+      `SetRequestId` ondan hemen sonra, ki log ve hata gövdesi kimliği görsün.)
+- [x] `GET /health` (sadece 200) ve `GET /health/ready` (DB + Redis + S3 ping)
+- [x] `GET /version` — sürüm + git SHA (build script ile gömülür)
+- [x] Eşleşmeyen rotalar için de RFC 9457 gövdesi (varsayılan boş 404 yerine)
+- [x] TLS sağlayıcısı tüm bağımlılıklarda **ring**'te birleştirildi
+      (aws-sdk-s3'ün hazır aws-lc-rs tabanlı HTTPS istemcisi kapatıldı)
+- [x] Graceful shutdown (SIGTERM/SIGINT → in-flight isteklerin bitmesini bekle)
+- [x] Commit
 
 ---
 

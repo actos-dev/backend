@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 /// yenisi eklenir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
+// Bilerek `non_exhaustive` değil: yeni bir kod eklendiğinde onu HTTP durumuna
+// ve başlığa eşleyen `match`'lerin derlenmemesini istiyoruz. Yeni kod eklemek
+// zaten API sözleşmesinde bir değişiklik.
 pub enum ErrorCode {
     /// İstek gövdesi/parametreleri doğrulamadan geçmedi.
     ValidationFailed,

@@ -19,6 +19,7 @@ redis = { workspace = true }
 deadpool-redis = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-sdk-s3 = { workspace = true }
+aws-smithy-http-client = { workspace = true }
 
 [lints]
 workspace = true

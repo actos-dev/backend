@@ -1,21 +1,87 @@
 //! Actos REST API sunucusu.
 
-use std::net::SocketAddr;
+mod app;
+mod error;
+mod routes;
+mod state;
+mod telemetry;
 
-use axum::{Router, routing::get};
+use std::process::ExitCode;
+
+use actos_core::{Config, Storage, cache, db};
+use tower::Layer as _;
+use tower_http::normalize_path::NormalizePathLayer;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+async fn main() -> ExitCode {
+    // Geliştirmede .env; üretimde gerçek ortam değişkenleri kullanılır,
+    // dosyanın yokluğu hata değildir.
+    let _ = dotenvy::dotenv();
+    telemetry::init();
 
-    // Faz 2'de burası AppConfig'ten okunacak; şimdilik iskelet.
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3100));
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            tracing::error!("başlatılamadı: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    let app = Router::new().route("/health", get(|| async { "ok" }));
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::from_env()?;
+    tracing::info!(?config, "yapılandırma yüklendi");
+
+    // Üçü de burada doğrulanıyor: bağımlılığı olmayan bir sunucu ayağa
+    // kalkıp sağlıklı görünmesin.
+    let db = db::connect(&config.database).await?;
+    let redis = cache::connect(&config.redis).await?;
+    let storage = Storage::new(&config.storage);
+    storage.ping().await?;
+    tracing::info!(bucket = storage.bucket(), "nesne depolama hazır");
+
+    let addr = config.server.addr;
+    let state = state::AppState::new(config, db, redis, storage);
+
+    // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın
+    // dışında kalıyor: `/posts/` ile `/posts` aynı rotaya düşsün.
+    let service = NormalizePathLayer::trim_trailing_slash().layer(app::build(state));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("actos-api dinlemede: http://{addr}");
-    axum::serve(listener, app).await?;
 
+    axum::serve(
+        listener,
+        <_ as axum::ServiceExt<axum::extract::Request>>::into_make_service(service),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
+
+    tracing::info!("kapandı");
     Ok(())
+}
+
+/// SIGTERM/SIGINT geldiğinde işlenmekte olan isteklerin bitmesini bekler.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => tracing::error!("SIGTERM dinlenemedi: {e}"),
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("SIGINT alındı, kapanılıyor"),
+        () = terminate => tracing::info!("SIGTERM alındı, kapanılıyor"),
+    }
 }

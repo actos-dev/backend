@@ -58,9 +58,17 @@ http = "1.5.0"
 redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
 deadpool-redis = "0.23.1"
 
-aws-config = { version = "1.11.0", default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
 aws-credential-types = "1.3.0"
-aws-sdk-s3 = { version = "1.144.0", default-features = false, features = ["rt-tokio", "sigv4a"] }
+# TLS sağlayıcısı bilinçli olarak **ring**: sqlx da ring kullanıyor ve tek bir
+# süreçte iki farklı rustls kripto sağlayıcısı bulunması çalışma anında
+# belirsizliğe yol açıyor. Bu yüzden aws-sdk-s3'ün hazır HTTPS istemcisi
+# (aws-lc-rs tabanlı) kapalı; istemciyi aws-smithy-http-client ile elle kuruyoruz.
+aws-sdk-s3 = { version = "1.144.0", default-features = false, features = [
+    "rt-tokio",
+    "http-1x",
+    "behavior-version-latest",
+] }
+aws-smithy-http-client = { version = "1.4.0", default-features = false, features = ["rustls-ring"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
