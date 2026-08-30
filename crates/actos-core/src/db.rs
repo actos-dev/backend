@@ -6,6 +6,14 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::config::DatabaseConfig;
 
+/// Migration'ların tek kaynağı.
+///
+/// `#[sqlx::test]` migration klasörünü crate dizinine göre arar, bizimkiler
+/// ise workspace kökünde. Yolu her test dosyasında tekrarlamak yerine burada
+/// bir kez sabitliyoruz; testler `#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]`
+/// yazarak bunu kullanır.
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
 /// Havuzu kur ve bağlantıyı **hemen** doğrula.
 ///
 /// Tembel bağlantı kurmuyoruz: veritabanı erişilemiyorsa bunu açılışta
