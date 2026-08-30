@@ -4,6 +4,7 @@
 //! ileride farklı bir taşıma katmanından (gRPC, iş kuyruğu, seed script'i)
 //! kullanılabilmesi ve testlerin HTTP kurmadan yazılabilmesi.
 
+pub mod auth;
 pub mod cache;
 pub mod config;
 pub mod cursor;

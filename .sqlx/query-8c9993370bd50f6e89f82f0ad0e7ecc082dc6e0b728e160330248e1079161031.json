@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO bans (actor_id, banned_by, reason, banned_at, expires_at)\n        VALUES ($1, $2, 'geçmiş ban', now() - interval '2 hours', now() - interval '1 hour')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8c9993370bd50f6e89f82f0ad0e7ecc082dc6e0b728e160330248e1079161031"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO recovery_codes (actor_id, code_hash) VALUES ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e3e69b4d79cced475d2123fa2dd44e5128dba4a5c5d52926d749381461b323ed"
+}

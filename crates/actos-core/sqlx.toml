@@ -1,0 +1,13 @@
+# `query!`/`query_as!` makroları, çıktı (SELECT/RETURNING) kolonlarında özel
+# enum'ları struct alan tipinden otomatik çıkarabiliyor, ama girdi
+# (bind) parametrelerinde bunu yapamıyor — "no built-in mapping for type
+# actor_type" gibi bir derleme hatasıyla sonuçlanır. Burada global bir
+# eşleme tanımlayarak `auth::register`/`auth::grant_role` gibi
+# fonksiyonlarda `actor_type`/`role` parametrelerini doğrudan (ekstra bir
+# `as _` olmadan) bind edebiliyoruz.
+#
+# bkz. crates/actos-core/src/auth.rs -> ActorType, AdminRole.
+
+[macros.type-overrides]
+'actor_type' = "crate::auth::ActorType"
+'admin_role' = "crate::auth::AdminRole"

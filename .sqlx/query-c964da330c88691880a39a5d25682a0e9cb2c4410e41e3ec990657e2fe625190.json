@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE api_keys\n        SET last_used_at = now()\n        WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c964da330c88691880a39a5d25682a0e9cb2c4410e41e3ec990657e2fe625190"
+}

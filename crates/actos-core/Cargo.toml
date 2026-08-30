@@ -37,5 +37,8 @@ unicode-normalization = { workspace = true }
 pulldown-cmark = { workspace = true }
 ammonia = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true }
+
 [lints]
 workspace = true

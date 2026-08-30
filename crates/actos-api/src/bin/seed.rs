@@ -13,7 +13,11 @@
 
 use std::process::ExitCode;
 
-use actos_core::{Config, db, secret};
+use actos_core::{
+    Config,
+    auth::{self, ActorType, AdminRole},
+    db,
+};
 use sqlx::PgPool;
 
 #[tokio::main]
@@ -67,72 +71,29 @@ async fn run(username: &str) -> Result<Outcome, Box<dyn std::error::Error>> {
         return Ok(Outcome::AdminAlreadyExists);
     }
 
-    let generated_key = secret::generate_api_key();
-    let recovery_codes = secret::generate_recovery_codes(10)
-        .map_err(|e| format!("kurtarma kodları üretilemedi: {e}"))?;
+    // `auth::register` actor + ilk API key + 10 kurtarma kodunu tek
+    // transaction'da yazar (bkz. crates/actos-core/src/auth.rs). Admin rolü
+    // onun bilmediği ayrı bir kavram; bu yüzden `auth::grant_role` ikinci,
+    // bağımsız bir adım. Aradaki kısacık pencerede bir hata olursa (actor
+    // ve key var ama rol yok), bu script yeniden çalıştırılamaz
+    // (`admin_already_exists` koruması yalnızca "bir admin var mı"na
+    // bakar) — o durumda operatörün `admin_roles`'a satırı elle eklemesi
+    // gerekir. Script tek seferlik ve elle çalıştırıldığı için bu
+    // trade-off kabul edilebilir.
+    let registration = auth::register(&pool, username, ActorType::Human, None).await?;
 
-    let mut tx = pool.begin().await?;
-
-    let actor_id = sqlx::query!(
-        r#"
-        INSERT INTO actors (username, actor_type)
-        VALUES ($1, 'human')
-        RETURNING id
-        "#,
-        username,
-    )
-    .fetch_one(&mut *tx)
-    .await?
-    .id;
-
-    // granted_by = NULL: rolü veren başka bir admin yok, platformun ilk
+    // granted_by = None: rolü veren başka bir admin yok, platformun ilk
     // admin'i bu script tarafından doğrudan atanıyor (bkz.
     // migrations/0012_admin_roles.up.sql üzerindeki COMMENT).
-    sqlx::query!(
-        r#"
-        INSERT INTO admin_roles (actor_id, role, granted_by)
-        VALUES ($1, 'admin', NULL)
-        "#,
-        actor_id,
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query!(
-        r#"
-        INSERT INTO api_keys (id, actor_id, secret_hash, label)
-        VALUES ($1, $2, $3, $4)
-        "#,
-        generated_key.key_id,
-        actor_id,
-        generated_key.secret_hash,
-        "ilk admin (seed script)",
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    for code in &recovery_codes {
-        sqlx::query!(
-            r#"
-            INSERT INTO recovery_codes (actor_id, code_hash)
-            VALUES ($1, $2)
-            "#,
-            actor_id,
-            code.hash,
-        )
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    tx.commit().await?;
+    auth::grant_role(&pool, registration.actor.id, AdminRole::Admin, None).await?;
 
     // Sırlar buradan sonra hiçbir yere (özellikle `tracing`'e) yazılmaz;
     // yalnızca stdout'a, yalnızca bu çalıştırmada basılır.
     print_secrets(
         username,
-        actor_id,
-        &generated_key.plaintext,
-        &recovery_codes,
+        registration.actor.id,
+        &registration.api_key,
+        &registration.recovery_codes,
     );
 
     Ok(Outcome::AdminCreated)
@@ -146,12 +107,7 @@ async fn admin_already_exists(pool: &PgPool) -> Result<bool, sqlx::Error> {
     .await
 }
 
-fn print_secrets(
-    username: &str,
-    actor_id: i64,
-    api_key: &str,
-    recovery_codes: &[secret::GeneratedRecoveryCode],
-) {
+fn print_secrets(username: &str, actor_id: i64, api_key: &str, recovery_codes: &[String]) {
     println!();
     println!("========================================================================");
     println!(" İLK ADMIN OLUŞTURULDU");
@@ -166,7 +122,7 @@ fn print_secrets(
     println!(" KURTARMA KODLARI (10 adet, her biri tek kullanımlık, bir daha gösterilmeyecek):");
     println!();
     for (i, code) in recovery_codes.iter().enumerate() {
-        println!("   {:>2}. {}", i + 1, code.plaintext);
+        println!("   {:>2}. {}", i + 1, code);
     }
     println!();
     println!("========================================================================");
