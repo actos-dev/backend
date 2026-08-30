@@ -1,0 +1,18 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Ortam / sırlar
+.env
+.env.*
+!.env.example
+
+# Editör / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Yerel geçici
+/tmp/
+*.log

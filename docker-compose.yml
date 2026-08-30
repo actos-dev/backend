@@ -1,0 +1,103 @@
+# Actos — geliştirme altyapısı
+# Port bloğu: 3100-3104 (bu makinede boş olduğu doğrulandı)
+#   3100 -> actos-api (Rust, henüz container'da değil; host'ta cargo run ile)
+#   3101 -> postgres
+#   3102 -> redis
+#   3103 -> minio  (S3 API)
+#   3104 -> minio  (web console)
+
+name: actos
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: actos_postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3101:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-actos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-actos_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-actos}
+      # ltree/citext gibi eklentiler migration içinde CREATE EXTENSION ile açılır
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-actos} -d ${POSTGRES_DB:-actos}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - actos_network
+
+  redis:
+    image: redis:8-alpine
+    container_name: actos_redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3102:6379"
+    volumes:
+      - redis_data:/data
+    # Rate limit sayaçları kalıcı olmak zorunda değil ama appendonly
+    # restart sonrası limitlerin sıfırlanıp spam penceresi açılmasını engeller.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - actos_network
+
+  minio:
+    image: minio/minio:latest
+    container_name: actos_minio
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3103:9000"
+      - "127.0.0.1:3104:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-actos_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-actos_minio_dev_password}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - actos_network
+
+  # Tek seferlik: bucket'ı oluşturur ve çıkar (restart: no).
+  minio_init:
+    image: minio/mc:latest
+    container_name: actos_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set actos http://minio:9000 ${MINIO_ROOT_USER:-actos_minio} ${MINIO_ROOT_PASSWORD:-actos_minio_dev_password} &&
+      mc mb --ignore-existing actos/${MINIO_BUCKET:-actos-media} &&
+      mc anonymous set download actos/${MINIO_BUCKET:-actos-media} &&
+      echo 'minio bucket hazir'
+      "
+    networks:
+      - actos_network
+
+volumes:
+  postgres_data:
+    name: actos_postgres_data
+  redis_data:
+    name: actos_redis_data
+  minio_data:
+    name: actos_minio_data
+
+networks:
+  actos_network:
+    name: actos_network
+    driver: bridge
