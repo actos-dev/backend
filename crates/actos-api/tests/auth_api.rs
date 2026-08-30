@@ -18,7 +18,9 @@
 use actos_api::{app, state::AppState};
 use actos_core::{
     Config, Storage,
-    config::{DatabaseConfig, RedisConfig, SecurityConfig, ServerConfig, StorageConfig},
+    config::{
+        DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
+    },
     id::IdCodec,
 };
 use axum::{
@@ -32,6 +34,9 @@ use tower::ServiceExt as _;
 
 // --- Kurulum yardımcıları -------------------------------------------------
 
+// `expect_used` lint'i test gövdelerinde muaf ama onların çağırdığı serbest
+// fonksiyonlarda değil; bu dosyadaki diğer yardımcılarla aynı kalıp.
+#[allow(clippy::expect_used)]
 fn test_config() -> Config {
     Config {
         server: ServerConfig {
@@ -66,6 +71,9 @@ fn test_config() -> Config {
         security: SecurityConfig {
             id_obfuscation_key: "test-id-obfuscation-key-en-az-otuz-iki-karakter".to_owned(),
         },
+        // Ortam değişkeni yokken `from_env` plandaki varsayılan tabloyu
+        // üretiyor; bu testler hız sınırını sınamıyor, varsayılanlar yeterli.
+        rate_limits: LimitTable::from_env().expect("varsayılan limit tablosu geçerli olmalı"),
     }
 }
 

@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod db;
 pub mod error;
 pub mod id;
+pub mod ratelimit;
 pub mod secret;
 pub mod storage;
 pub mod text;

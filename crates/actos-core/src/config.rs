@@ -6,6 +6,11 @@
 
 use std::{fmt, net::SocketAddr, str::FromStr, time::Duration};
 
+use crate::{
+    auth::ActorType,
+    ratelimit::{RateLimitConfig, Scope, Subject},
+};
+
 /// Yapılandırma okunurken oluşan hatalar.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -24,6 +29,7 @@ pub struct Config {
     pub redis: RedisConfig,
     pub storage: StorageConfig,
     pub security: SecurityConfig,
+    pub rate_limits: LimitTable,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +82,9 @@ impl fmt::Debug for Config {
             .field("redis", &"<gizli>")
             .field("storage", &"<gizli>")
             .field("security", &"<gizli>")
+            // Sır değil: operasyonda "hangi limitler yürürlükte" sorusuna
+            // loglardan cevap verebilmek daha değerli.
+            .field("rate_limits", &self.rate_limits)
             .finish()
     }
 }
@@ -126,6 +135,7 @@ impl Config {
             security: SecurityConfig {
                 id_obfuscation_key: required("ID_OBFUSCATION_KEY")?,
             },
+            rate_limits: LimitTable::from_env()?,
         };
 
         config.validate()?;
@@ -174,5 +184,261 @@ where
                 name,
                 detail: e.to_string(),
             }),
+    }
+}
+
+// --- Hız sınırlama (rate limiting) limit tablosu -----------------------
+//
+// PLAN.md "Faz 6"daki varsayılan tablo burada kodlanır ama **sabit değil**:
+// her hücre kendi `RATE_LIMIT_..._CAPACITY` / `..._WINDOW_SECS` çifti ile
+// ortamdan override edilebilir. `actos_core::ratelimit::RateLimiter::check`,
+// `Subject::Actor { actor_type, .. }`'daki `actor_type`'a bakarak doğru
+// kademeyi (human/ai_agent) kendisi seçmek için bu tabloyu kullanır — çağıran
+// tarafın kademe seçmesi gerekmez. `override_cfg` parametresi, seçilen
+// kademenin *üstüne* geçilen, `actors.rate_limit_config` jsonb'sinden gelen
+// **kişiye özel** bir override'dır (bkz. [`crate::ratelimit::config_from_json`]).
+//
+// `Config`'in bir alanı: `Config::from_env()` başarısız olursa (ör. bir
+// `RATE_LIMIT_..._CAPACITY` sıfırsa) süreç, tıpkı diğer yapılandırma
+// hataları gibi, ilk isteği beklemeden açılışta durur.
+
+/// Kimlikli (actor başına) istekler için, `actor_type`'a göre değişen
+/// scope başına limitler.
+#[derive(Clone, Copy, Debug)]
+pub struct ScopeLimits {
+    pub post: RateLimitConfig,
+    pub comment: RateLimitConfig,
+    pub vote: RateLimitConfig,
+    pub read: RateLimitConfig,
+    pub upload: RateLimitConfig,
+}
+
+/// Kimliksiz (IP başına) istekler için scope başına limitler.
+#[derive(Clone, Copy, Debug)]
+pub struct AnonymousLimits {
+    pub register: RateLimitConfig,
+    pub recover: RateLimitConfig,
+    pub read: RateLimitConfig,
+    /// Ayrıca tablolanmamış diğer tüm yazma uçları (ör. follow, delete) için
+    /// tek, muhafazakâr bir kova. [`Scope::Write`] ve kimliksiz isteklerde
+    /// [`Scope::Post`]/[`Scope::Comment`]/[`Scope::Vote`]/[`Scope::Upload`]
+    /// gibi normalde kimlikli olması beklenen ama bir şekilde kimliksiz
+    /// çağrılan scope'lar bu kovaya düşer.
+    pub write: RateLimitConfig,
+}
+
+/// Rate limiting için tüm varsayılan limitler: `human`/`ai_agent`
+/// (kimlikli) ve `anonymous` (IP başına).
+#[derive(Clone, Copy, Debug)]
+pub struct LimitTable {
+    pub human: ScopeLimits,
+    pub ai_agent: ScopeLimits,
+    pub anonymous: AnonymousLimits,
+}
+
+impl LimitTable {
+    /// Bir `Scope` + `Subject` çifti için **varsayılan** (kişiye özel
+    /// override'sız) limiti döner: `Subject::Actor { actor_type, .. }`
+    /// için `actor_type`'ın gerçek kademesi (bkz. [`Self::for_actor_type`]),
+    /// `Subject::Ip` için IP başına (anonim) tablo.
+    ///
+    /// [`crate::ratelimit::RateLimiter::check`] bunu **her zaman** çağırır —
+    /// `override_cfg: None` verildiğinde döndürdüğü değer doğrudan kullanılır,
+    /// `Some(cfg)` verildiğinde ise `cfg` bunun *yerine* geçer (kademe zaten
+    /// doğru seçilmiş olur; `override_cfg`'nin işi kademe seçmek değil,
+    /// `actors.rate_limit_config`'ten gelen kişiye özel bir sınırı
+    /// uygulamaktır).
+    #[must_use]
+    pub fn resolve(&self, scope: Scope, subject: &Subject) -> RateLimitConfig {
+        match subject {
+            Subject::Actor { actor_type, .. } => self.for_actor_type(scope, *actor_type),
+            Subject::Ip(_) => match scope {
+                Scope::Register => self.anonymous.register,
+                Scope::Recover => self.anonymous.recover,
+                Scope::Read => self.anonymous.read,
+                Scope::Post | Scope::Comment | Scope::Vote | Scope::Upload | Scope::Write => {
+                    self.anonymous.write
+                }
+            },
+        }
+    }
+
+    /// Belirli bir `actor_type` için scope başına limiti döner.
+    ///
+    /// [`Self::resolve`] tarafından `Subject::Actor`'ın kendi `actor_type`'ı
+    /// ile çağrılır — `RateLimiter::check` bunu otomatik yaptığı için normal
+    /// akışta **doğrudan çağrılması gerekmez**. Public kalmasının nedeni
+    /// test edilebilirlik ve HTTP katmanının (ör. bir yönetim panelinde
+    /// "bu actor_type için mevcut limit ne?" göstermek gibi) ihtiyaç
+    /// duyabileceği kenar durumlar.
+    #[must_use]
+    pub fn for_actor_type(&self, scope: Scope, actor_type: ActorType) -> RateLimitConfig {
+        let tier = match actor_type {
+            ActorType::AiAgent => &self.ai_agent,
+            // İnsan, sistem botu ve organizasyon güvenli tarafta kalır
+            // (human tier). Bu tipler için daha gevşek bir limit gerekiyorsa
+            // actor'e özel `rate_limit_config` jsonb override'ı kullanılmalı.
+            ActorType::Human | ActorType::SystemBot | ActorType::Organization => &self.human,
+        };
+        match scope {
+            Scope::Post => tier.post,
+            Scope::Comment => tier.comment,
+            Scope::Vote => tier.vote,
+            Scope::Read => tier.read,
+            Scope::Upload => tier.upload,
+            // Register/Recover/Write kimlikli actor'ler için tablolanmadı
+            // (PLAN.md'de yalnızca IP başına tanımlı) — savunmacı varsayılan
+            // olarak anonim "diğer yazmalar" kovasına düşer.
+            Scope::Register | Scope::Recover | Scope::Write => self.anonymous.write,
+        }
+    }
+
+    /// Ortamdan oku ve doğrula (bkz. [`Self::validate`]).
+    ///
+    /// # Errors
+    /// Bir değer çözümlenemiyorsa veya bir kapasite sıfırsa.
+    pub fn from_env() -> Result<Self, ConfigError> {
+        // `$cap_env`/`$win_env` derleme zamanı string literalleri olduğu
+        // için `optional::<T>(name: &'static str)` ile doğrudan uyumlu.
+        macro_rules! rl {
+            ($cap_env:literal, $win_env:literal, $default_capacity:expr, $default_window_secs:expr) => {
+                RateLimitConfig {
+                    capacity: optional($cap_env)?.unwrap_or($default_capacity),
+                    window: Duration::from_secs(
+                        optional($win_env)?.unwrap_or($default_window_secs),
+                    ),
+                }
+            };
+        }
+
+        let table = Self {
+            human: ScopeLimits {
+                post: rl!(
+                    "RATE_LIMIT_POST_HUMAN_CAPACITY",
+                    "RATE_LIMIT_POST_HUMAN_WINDOW_SECS",
+                    10,
+                    3600
+                ),
+                comment: rl!(
+                    "RATE_LIMIT_COMMENT_HUMAN_CAPACITY",
+                    "RATE_LIMIT_COMMENT_HUMAN_WINDOW_SECS",
+                    60,
+                    3600
+                ),
+                vote: rl!(
+                    "RATE_LIMIT_VOTE_HUMAN_CAPACITY",
+                    "RATE_LIMIT_VOTE_HUMAN_WINDOW_SECS",
+                    300,
+                    3600
+                ),
+                read: rl!(
+                    "RATE_LIMIT_READ_HUMAN_CAPACITY",
+                    "RATE_LIMIT_READ_HUMAN_WINDOW_SECS",
+                    600,
+                    60
+                ),
+                upload: rl!(
+                    "RATE_LIMIT_UPLOAD_HUMAN_CAPACITY",
+                    "RATE_LIMIT_UPLOAD_HUMAN_WINDOW_SECS",
+                    20,
+                    3600
+                ),
+            },
+            ai_agent: ScopeLimits {
+                post: rl!(
+                    "RATE_LIMIT_POST_AI_AGENT_CAPACITY",
+                    "RATE_LIMIT_POST_AI_AGENT_WINDOW_SECS",
+                    30,
+                    3600
+                ),
+                comment: rl!(
+                    "RATE_LIMIT_COMMENT_AI_AGENT_CAPACITY",
+                    "RATE_LIMIT_COMMENT_AI_AGENT_WINDOW_SECS",
+                    200,
+                    3600
+                ),
+                vote: rl!(
+                    "RATE_LIMIT_VOTE_AI_AGENT_CAPACITY",
+                    "RATE_LIMIT_VOTE_AI_AGENT_WINDOW_SECS",
+                    1000,
+                    3600
+                ),
+                read: rl!(
+                    "RATE_LIMIT_READ_AI_AGENT_CAPACITY",
+                    "RATE_LIMIT_READ_AI_AGENT_WINDOW_SECS",
+                    1200,
+                    60
+                ),
+                upload: rl!(
+                    "RATE_LIMIT_UPLOAD_AI_AGENT_CAPACITY",
+                    "RATE_LIMIT_UPLOAD_AI_AGENT_WINDOW_SECS",
+                    20,
+                    3600
+                ),
+            },
+            anonymous: AnonymousLimits {
+                register: rl!(
+                    "RATE_LIMIT_REGISTER_IP_CAPACITY",
+                    "RATE_LIMIT_REGISTER_IP_WINDOW_SECS",
+                    3,
+                    3600
+                ),
+                recover: rl!(
+                    "RATE_LIMIT_RECOVER_IP_CAPACITY",
+                    "RATE_LIMIT_RECOVER_IP_WINDOW_SECS",
+                    5,
+                    86_400
+                ),
+                read: rl!(
+                    "RATE_LIMIT_READ_IP_CAPACITY",
+                    "RATE_LIMIT_READ_IP_WINDOW_SECS",
+                    120,
+                    60
+                ),
+                write: rl!(
+                    "RATE_LIMIT_WRITE_IP_CAPACITY",
+                    "RATE_LIMIT_WRITE_IP_WINDOW_SECS",
+                    30,
+                    3600
+                ),
+            },
+        };
+
+        table.validate()?;
+        Ok(table)
+    }
+
+    /// Sıfır kapasiteli bir kova, Lua script'inde sıfıra bölmeye yol açar
+    /// (`window_ms / capacity`) — açılışta yakalanmalı, ilk isteğin 500
+    /// döndürmesini beklememeli.
+    fn validate(&self) -> Result<(), ConfigError> {
+        let all = [
+            ("RATE_LIMIT_POST_HUMAN_CAPACITY", self.human.post),
+            ("RATE_LIMIT_COMMENT_HUMAN_CAPACITY", self.human.comment),
+            ("RATE_LIMIT_VOTE_HUMAN_CAPACITY", self.human.vote),
+            ("RATE_LIMIT_READ_HUMAN_CAPACITY", self.human.read),
+            ("RATE_LIMIT_UPLOAD_HUMAN_CAPACITY", self.human.upload),
+            ("RATE_LIMIT_POST_AI_AGENT_CAPACITY", self.ai_agent.post),
+            (
+                "RATE_LIMIT_COMMENT_AI_AGENT_CAPACITY",
+                self.ai_agent.comment,
+            ),
+            ("RATE_LIMIT_VOTE_AI_AGENT_CAPACITY", self.ai_agent.vote),
+            ("RATE_LIMIT_READ_AI_AGENT_CAPACITY", self.ai_agent.read),
+            ("RATE_LIMIT_UPLOAD_AI_AGENT_CAPACITY", self.ai_agent.upload),
+            ("RATE_LIMIT_REGISTER_IP_CAPACITY", self.anonymous.register),
+            ("RATE_LIMIT_RECOVER_IP_CAPACITY", self.anonymous.recover),
+            ("RATE_LIMIT_READ_IP_CAPACITY", self.anonymous.read),
+            ("RATE_LIMIT_WRITE_IP_CAPACITY", self.anonymous.write),
+        ];
+        for (name, cfg) in all {
+            if cfg.capacity == 0 {
+                return Err(ConfigError::Invalid {
+                    name,
+                    detail: "kapasite sıfır olamaz".to_owned(),
+                });
+            }
+        }
+        Ok(())
     }
 }
