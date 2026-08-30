@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use actos_core::{Config, Storage};
+use actos_core::{Config, Storage, id::IdCodec};
 use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 
@@ -20,17 +20,25 @@ struct Inner {
     db: PgPool,
     redis: RedisPool,
     storage: Storage,
+    id_codec: IdCodec,
 }
 
 impl AppState {
     #[must_use]
-    pub fn new(config: Config, db: PgPool, redis: RedisPool, storage: Storage) -> Self {
+    pub fn new(
+        config: Config,
+        db: PgPool,
+        redis: RedisPool,
+        storage: Storage,
+        id_codec: IdCodec,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 config,
                 db,
                 redis,
                 storage,
+                id_codec,
             }),
         }
     }
@@ -53,5 +61,10 @@ impl AppState {
     #[must_use]
     pub fn storage(&self) -> &Storage {
         &self.inner.storage
+    }
+
+    #[must_use]
+    pub fn id_codec(&self) -> &IdCodec {
+        &self.inner.id_codec
     }
 }

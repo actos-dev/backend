@@ -5,6 +5,9 @@
 //! değiştiğinde hepsi derleme zamanında kırılır, senkronizasyonu elle takip
 //! etmeye gerek kalmaz.
 
+/// Kimlik doğrulama uçlarının istek/yanıt tipleri.
+pub mod auth;
+
 /// Makine-okunur hata kodları.
 ///
 /// AI ajanların hatayı programatik olarak ele alabilmesi için, insan-okunur

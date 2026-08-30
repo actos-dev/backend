@@ -205,7 +205,7 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 5 — Kimlik Doğrulama
 
-- [ ] **API key formatı:** `actos_<key_id_b62>_<secret_b62>`
+- [x] **API key formatı:** `actos_<key_id_b62>_<secret_b62>`
       - `key_id` = `api_keys.id` (uuid) → lookup için indexlenmiş, **hash'lenmemiş**
       - `secret` = 32 rastgele bayt (256 bit) → **SHA-256** ile hash'lenip saklanır
       - Neden key_id ayrı: sadece hash saklasak doğrulamada tüm satırları
@@ -218,27 +218,27 @@ engellemeyecek şekilde tasarlanacak.
       - **Recovery kodları Argon2id kalır:** onlar insan tarafından yazılabilsin
         diye kısa (~60 bit) ve veritabanı sızarsa çevrimdışı denenebilirler
       - Prefix (`actos_`) sayesinde sızan key'ler secret-scanner'larca yakalanabilir
-- [ ] `POST /auth/register` → `{username, actor_type}`
+- [x] `POST /auth/register` → `{username, actor_type}`
       - Yanıt: `{actor, api_key, recovery_codes[10]}` — **hepsi bir kez gösterilir**
-      - IP başına sıkı rate limit + (opsiyonel) proof-of-work ileride
-- [ ] **Auth middleware** — `Authorization: Bearer <key>`
+      - Rate limit Faz 6'da eklenecek (bu uçta henüz yok)
+- [x] **Auth middleware** — `Authorization: Bearer <key>`
       - Key'i parse et → `key_id` ile satırı çek → `revoked_at` kontrol →
         Argon2 doğrula → `actor` yükle → ban kontrolü → `Extension<CurrentActor>`
       - `last_used_at` güncellemesi **fire-and-forget** (her isteği yavaşlatmasın;
         Redis'te biriktirip periyodik flush)
       - Redis cache'e gerek yok: SHA-256 doğrulaması zaten mikrosaniyeler
         sürüyor (Argon2 seçilseydi gerekecekti)
-- [ ] `GET /auth/whoami` → `{actor, roles, key_label, rate_limits}`
-- [ ] `POST /auth/keys` — yeni key üret (label ile)
-- [ ] `GET /auth/keys` — key listesi (secret asla dönmez; `key_id`, label, tarihler)
-- [ ] `DELETE /auth/keys/{key_id}` — revoke
-- [ ] `POST /auth/recover` → `{username, recovery_code}` → yeni API key.
+- [x] `GET /auth/whoami` → `{actor, roles, key_label, rate_limits}`
+- [x] `POST /auth/keys` — yeni key üret (label ile)
+- [x] `GET /auth/keys` — key listesi (secret asla dönmez; `key_id`, label, tarihler)
+- [x] `DELETE /auth/keys/{key_id}` — revoke
+- [x] `POST /auth/recover` → `{username, recovery_code}` → yeni API key.
       Kod tek kullanımlık (`used_at`), **çok sıkı** rate limit + brute-force koruması
-- [ ] `POST /auth/recovery-codes/regenerate` — mevcut key ile; eskiler iptal olur
-- [ ] Sabit zamanlı karşılaştırma, kullanıcı sayımını (enumeration) engelleyen
+- [x] `POST /auth/recovery-codes/regenerate` — mevcut key ile; eskiler iptal olur
+- [x] Sabit zamanlı karşılaştırma, kullanıcı sayımını (enumeration) engelleyen
       jenerik hata mesajları
-- [ ] **Testler:** geçerli/geçersiz/revoke edilmiş key, banlı actor, bozuk format
-- [ ] Commit
+- [x] **Testler:** geçerli/geçersiz/revoke edilmiş key, banlı actor, bozuk format
+- [x] Commit
 
 ---
 

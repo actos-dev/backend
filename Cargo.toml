@@ -22,7 +22,7 @@ actos-core = { path = "crates/actos-core" }
 
 axum = "0.8.9"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
-tower = { version = "0.5.3", features = ["limit", "timeout"] }
+tower = { version = "0.5.3", features = ["limit", "timeout", "util"] }
 tower-http = { version = "0.7.0", features = [
     "trace",
     "timeout",

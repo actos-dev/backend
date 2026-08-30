@@ -1,14 +1,9 @@
 //! Actos REST API sunucusu.
 
-mod app;
-mod error;
-mod routes;
-mod state;
-mod telemetry;
-
 use std::process::ExitCode;
 
-use actos_core::{Config, Storage, cache, db};
+use actos_api::{app, state};
+use actos_core::{Config, Storage, cache, db, id::IdCodec};
 use tower::Layer as _;
 use tower_http::normalize_path::NormalizePathLayer;
 
@@ -17,7 +12,7 @@ async fn main() -> ExitCode {
     // Geliştirmede .env; üretimde gerçek ortam değişkenleri kullanılır,
     // dosyanın yokluğu hata değildir.
     let _ = dotenvy::dotenv();
-    telemetry::init();
+    actos_api::telemetry::init();
 
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
@@ -40,8 +35,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     storage.ping().await?;
     tracing::info!(bucket = storage.bucket(), "nesne depolama hazır");
 
+    // Boş anahtarla açılış başarısız olmalı — dış ID'lerin tahmin edilebilir
+    // olması demek (bkz. `crates/actos-core/src/id.rs`).
+    let id_codec = IdCodec::new(&config.security.id_obfuscation_key)?;
+
     let addr = config.server.addr;
-    let state = state::AppState::new(config, db, redis, storage);
+    let state = state::AppState::new(config, db, redis, storage, id_codec);
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın
     // dışında kalıyor: `/posts/` ile `/posts` aynı rotaya düşsün.
