@@ -69,3 +69,19 @@
 Bu fazda **sadece kolon olarak** tanımlanır; güncelleme mantığı uygulama
 katmanında ve ilgili işlemle **aynı transaction** içinde yazılacak (Faz 9/11).
 Trigger ile güncelleme yapma.
+
+## Bilerek uygulama katmanına bırakılan kurallar
+
+Bunlar unutulmuş değil, **kasıtlı**. Şemada bir kısıt aramayın:
+
+| Kural | Neden şemada değil |
+|---|---|
+| Sayaç güncellemeleri (`score`, `upvotes`, `downvotes`, `comment_count`) | Oyu yazan işlemle aynı transaction içinde yapılıyor. Trigger'a bırakılırsa oy verme ile sayaç arasında görünmez bir kilit sırası oluşur. |
+| Kendi içeriğine oy vermeyi engelleme | `votes` satırı `contents.actor_id`'yi görmediği için basit bir CHECK'le ifade edilemez, trigger gerekirdi. Oy veren kod yolu sayaçları güncellemek için içerik satırını zaten okuyor — kontrol orada bedava. |
+| Etiket sayısı üst sınırı (post başına 10) | Ürün kuralı, veri bütünlüğü kuralı değil; zamanla değişmesi beklenir. |
+| Ban süresi dolduğunda erişimin geri açılması | `bans.expires_at` sadece veri; yorumlaması okuma yolunda yapılır. |
+
+Buna karşılık **şemada tutulan** kurallar, her kod yolundan (seed script'i, elle
+SQL, ileride yazılacak servisler) geçmesi gerektiği için oradadır: ağaç
+tutarlılığı (`path`/`depth`/`root_post_id`), derinlik sınırı, silinmiş içeriğe
+yanıt yasağı, `admin_actions_log`'un değiştirilemezliği.
