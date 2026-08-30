@@ -63,6 +63,14 @@ sha2 = "0.11.0"
 subtle = "2.6.1"
 hex = "0.4.3"
 
+# Faz 4 — ortak yardımcılar
+hmac = "0.13.0"
+base64 = "0.23.1"
+validator = { version = "0.21.0", features = ["derive"] }
+unicode-normalization = "0.1.25"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+ammonia = "4.1.4"
+
 redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
 deadpool-redis = "0.23.1"
 
