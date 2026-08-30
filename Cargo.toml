@@ -1,0 +1,65 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/actos-types",
+    "crates/actos-core",
+    "crates/actos-api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "AGPL-3.0-only"
+repository = "https://github.com/actos/actos-backend"
+authors = ["Actos katkıcıları"]
+
+# Tüm sürümler burada pinlenir; crate'ler `workspace = true` ile alır.
+# Böylece iki crate aynı bağımlılığın iki farklı sürümünü çekemez.
+[workspace.dependencies]
+actos-types = { path = "crates/actos-types" }
+actos-core = { path = "crates/actos-core" }
+
+axum = "0.8.9"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
+tower = "0.5.3"
+tower-http = "0.7.0"
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "chrono",
+    "uuid",
+    "json",
+] }
+
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+dotenvy = "0.15.7"
+uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "warn"
+dbg_macro = "warn"
+
+# Geliştirmede derleme hızı için bağımlılıkları optimize et, kendi kodumuzu etme
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

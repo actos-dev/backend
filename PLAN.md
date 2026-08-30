@@ -57,17 +57,17 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 1 — Cargo Workspace İskeleti
 
-- [ ] Kök `Cargo.toml` — `[workspace]`, `resolver = "3"`, `[workspace.dependencies]`
+- [x] Kök `Cargo.toml` — `[workspace]`, `resolver = "3"`, `[workspace.dependencies]`
       (tüm sürümler tek yerde pinlenir, crate'ler `workspace = true` ile alır)
-- [ ] `crates/actos-types/` — istek/yanıt DTO'ları, enum'lar, hata kodları.
+- [x] `crates/actos-types/` — istek/yanıt DTO'ları, enum'lar, hata kodları.
       **Kritik:** backend, CLI ve Rust SDK bu crate'i paylaşacak; API şekli
       değişince hepsi derleme zamanında kırılacak.
-- [ ] `crates/actos-core/` — domain mantığı + DB erişimi (framework'ten bağımsız)
-- [ ] `crates/actos-api/` — axum binary; sadece HTTP katmanı
-- [ ] `rust-toolchain.toml` — sürüm sabitle (stable 1.96), `rustfmt` + `clippy`
-- [ ] `rustfmt.toml`, `clippy.toml`; `cargo clippy -- -D warnings` temiz
-- [ ] `cargo build` başarılı, `cargo run -p actos-api` "hello" basıyor
-- [ ] Commit
+- [x] `crates/actos-core/` — domain mantığı + DB erişimi (framework'ten bağımsız)
+- [x] `crates/actos-api/` — axum binary; sadece HTTP katmanı
+- [x] `rust-toolchain.toml` — sürüm sabitle (stable 1.96), `rustfmt` + `clippy`
+- [x] `rustfmt.toml`, `clippy.toml`; `cargo clippy -- -D warnings` temiz
+- [x] `cargo build` başarılı, `cargo run -p actos-api` "hello" basıyor
+- [x] Commit
 
 ---
 

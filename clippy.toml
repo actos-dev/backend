@@ -1,0 +1,10 @@
+# Karmaşık tip uyarısı eşiği — sqlx/axum imzaları doğal olarak uzun
+type-complexity-threshold = 500
+
+# Kod içinde geçen ve yazım hatası sanılmaması gereken isimler
+doc-valid-idents = ["MinIO", "PostgreSQL", "OpenAPI", "WebP", "Argon2id", "..."]
+
+# panik/unwrap disiplini için: testler hariç yasak (lint'ler Cargo.toml'da)
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
