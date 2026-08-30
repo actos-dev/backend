@@ -34,8 +34,14 @@
 4. **FK'ler:** `ON DELETE` davranışı **her zaman** açıkça yazılır.
    - Actor'a bağlı içerik: `ON DELETE CASCADE` **kullanma** — actor soft-delete
      ediliyor, satırlar kalmalı. `ON DELETE RESTRICT` kullan.
-   - Saf ilişki tabloları (`votes`, `follows`, `saves`, `content_tags`):
-     `ON DELETE CASCADE` uygun.
+   - Saf ilişki tabloları — **tam liste**: `votes`, `follows`, `saves`,
+     `content_tags`. Bunlar `ON DELETE CASCADE` kullanır; iki tarafı da
+     silinmişse satırın taşıdığı bilgi zaten kalmaz.
+   - Actor'ın *durumunu* tutan tablolar (`bans`, `admin_roles`) ilişki tablosu
+     GİBİ görünür ama değildir: `RESTRICT` kullanırlar. Bir ban kaydının actor
+     silinince sessizce yok olması moderasyon geçmişinin kaybıdır. RESTRICT,
+     silmeyi başarısız kılarak önce banın bilinçli olarak kaldırılmasını
+     zorunlu tutar. (0012/0013 bu kuraldan sapmıştı, 0018 ile düzeltildi.)
 5. **Enum'lar:** PostgreSQL native `CREATE TYPE ... AS ENUM`. Değer listesi
    plandakiyle birebir aynı.
 6. **Kısmi index:** canlı satırlar sorgulanacaksa `WHERE deleted_at IS NULL`

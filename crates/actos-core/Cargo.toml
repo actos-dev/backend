@@ -14,12 +14,20 @@ serde = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 
 redis = { workspace = true }
 deadpool-redis = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-smithy-http-client = { workspace = true }
+
+argon2 = { workspace = true }
+rand = { workspace = true }
+base62 = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+hex = { workspace = true }
 
 [lints]
 workspace = true

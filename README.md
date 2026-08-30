@@ -36,9 +36,23 @@ cp .env.example .env          # gerekiyorsa değerleri düzenle
 docker compose up -d          # postgres + redis + minio
 docker compose ps             # üçü de "healthy" olmalı
 
-cargo sqlx migrate run        # şemayı kur
+sqlx migrate run              # şemayı kur (18 migration)
+cargo run -p actos-api --bin seed -- <kullanıcı_adı>   # ilk admin'i oluştur
 cargo run -p actos-api        # API'yi başlat
 ```
+
+Seed script'i API key'i ve 10 kurtarma kodunu **bir kez** basar; e-posta ile
+sıfırlama olmadığı için kaydedilmezse hesaba erişim kalıcı olarak kaybedilir.
+İlk admin bilerek API üzerinden oluşturulamaz.
+
+Veritabanı olmadan derlemek için (CI bunu kullanır):
+
+```bash
+SQLX_OFFLINE=true cargo check --workspace
+```
+
+Sorgu imzaları `.sqlx/` altında commit'lidir; `query!` makrolarını
+değiştirdikten sonra `cargo sqlx prepare --workspace` ile tazelenmeli.
 
 Gereksinimler: Rust 1.96+, Docker, `sqlx-cli`
 (`cargo install sqlx-cli --no-default-features --features rustls,postgres`).
@@ -46,6 +60,9 @@ Gereksinimler: Rust 1.96+, Docker, `sqlx-cli`
 ## Durum
 
 Erken geliştirme. Yol haritası ve ilerleme: [PLAN.md](./PLAN.md)
+
+Veritabanı şeması: [docs/schema.md](./docs/schema.md) —
+migration yazım kuralları: [docs/db-conventions.md](./docs/db-conventions.md)
 
 ## Lisans
 

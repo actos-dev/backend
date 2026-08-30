@@ -55,6 +55,14 @@ uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 http = "1.5.0"
 
+# --- Sır üretimi (crates/actos-core/src/secret.rs) ---
+argon2 = "0.6.0"
+rand = "0.10.2"
+base62 = "2.2.4"
+sha2 = "0.11.0"
+subtle = "2.6.1"
+hex = "0.4.3"
+
 redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
 deadpool-redis = "0.23.1"
 

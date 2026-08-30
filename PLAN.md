@@ -109,20 +109,20 @@ engellemeyecek şekilde tasarlanacak.
 > Her tablo **ayrı migration**. `sqlx migrate add -r <ad>` (reversible).
 > Her migration'dan sonra `sqlx migrate run` **ve** `sqlx migrate revert` test edilir.
 
-- [ ] `0001_extensions` — `ltree`, `citext`, `pg_trgm`, `pgcrypto`
-- [ ] `0002_actors`
+- [x] `0001_extensions` — `ltree`, `citext`, `pg_trgm`, `pgcrypto`
+- [x] `0002_actors`
       - `id bigserial PK`, `username citext UNIQUE NOT NULL`
       - `actor_type` enum: `human | ai_agent | system_bot | organization`
       - `display_name`, `bio`, `avatar_object_key` (nullable)
       - `rate_limit_config jsonb NOT NULL DEFAULT '{}'` — boş = global varsayılan
       - `created_at`, `updated_at`, `deleted_at`
       - CHECK: username `^[a-z0-9_]{3,32}$`, rezerve isim listesi (`admin`, `actos`, `api`, ...)
-- [ ] `0003_api_keys`
+- [x] `0003_api_keys`
       - `id uuid PK DEFAULT gen_random_uuid()`, `actor_id`, `secret_hash text`
       - `label`, `created_at`, `last_used_at`, `revoked_at`
       - Index: `(actor_id) WHERE revoked_at IS NULL`
-- [ ] `0004_recovery_codes` — `actor_id`, `code_hash`, `used_at`, `created_at`
-- [ ] `0005_contents`
+- [x] `0004_recovery_codes` — `actor_id`, `code_hash`, `used_at`, `created_at`
+- [x] `0005_contents`
       - `id bigserial PK`, `actor_id`, `root_post_id`, `parent_content_id`
       - `path ltree NOT NULL`, `depth int` (ltree'den türetilir, sorgu kolaylığı)
       - `content_type` enum `post | comment`
@@ -134,39 +134,43 @@ engellemeyecek şekilde tasarlanacak.
       - CHECK: `content_type='post'` ise `title IS NOT NULL AND parent_content_id IS NULL`;
         `comment` ise `title IS NULL AND parent_content_id IS NOT NULL`
       - CHECK: `depth <= 32` (sonsuz nesting DoS'unu engeller)
-- [ ] `0006_contents_indexes`
+- [x] `0006_contents_indexes`
       - GIST `path`, `(root_post_id, path)`
       - `(actor_id, created_at DESC) WHERE deleted_at IS NULL`
       - `(hot_score DESC, id DESC) WHERE content_type='post' AND deleted_at IS NULL`
       - `(created_at DESC, id DESC) WHERE content_type='post' AND deleted_at IS NULL`
       - `(score DESC, id DESC) WHERE content_type='post' AND deleted_at IS NULL`
-- [ ] `0007_tags` + `content_tags`
+- [x] `0007_tags` + `content_tags`
       - `tags(id, name citext UNIQUE, created_at)`; isim normalizasyonu (lowercase, trim)
       - `content_tags(content_id, tag_id)` composite PK + ters index
       - Post başına max tag sayısı (10) uygulama katmanında
-- [ ] `0008_attachments` — `content_id`, `object_key`, `byte_size bigint`,
+- [x] `0008_attachments` — `content_id`, `object_key`, `byte_size bigint`,
       `mime_type`, `width`, `height`, `checksum_sha256`, `created_at`
-- [ ] `0009_votes` — `(actor_id, content_id)` PK, `value smallint CHECK (value IN (-1,1))`,
+- [x] `0009_votes` — `(actor_id, content_id)` PK, `value smallint CHECK (value IN (-1,1))`,
       `created_at`, `updated_at`; ters index `(content_id)`
-- [ ] `0010_follows` — `(follower_actor_id, followed_actor_id)` PK,
+- [x] `0010_follows` — `(follower_actor_id, followed_actor_id)` PK,
       CHECK kendini takip edemez; ters index
-- [ ] `0011_saves` — `(actor_id, content_id)` PK
-- [ ] `0012_admin_roles` — `actor_id` PK, `role` enum `admin | moderator`,
+- [x] `0011_saves` — `(actor_id, content_id)` PK
+- [x] `0012_admin_roles` — `actor_id` PK, `role` enum `admin | moderator`,
       `granted_by`, `granted_at`
-- [ ] `0013_bans` — `actor_id` PK, `banned_by`, `reason`, `banned_at`, `expires_at`
-- [ ] `0014_reports` — + UNIQUE `(reporter_actor_id, target_type, target_id)`,
+- [x] `0013_bans` — `actor_id` PK, `banned_by`, `reason`, `banned_at`, `expires_at`
+- [x] `0014_reports` — + UNIQUE `(reporter_actor_id, target_type, target_id)`,
       index `(status, created_at)`
-- [ ] `0015_admin_actions_log` — append-only; UPDATE/DELETE'i engelleyen trigger
-- [ ] `0016_edit_history` — (opsiyonel, v1'de yazılır ama endpoint'i sonra açılır)
-- [ ] `0017_triggers` — `updated_at` otomatik güncelleme trigger'ı
-- [ ] **Sır ilkelleri** (seed script'inin ön koşulu, Faz 5'ten öne alındı):
+- [x] `0015_admin_actions_log` — append-only; UPDATE/DELETE'i engelleyen trigger
+- [x] `0016_edit_history` — (opsiyonel, v1'de yazılır ama endpoint'i sonra açılır)
+- [x] `0017_triggers` — `updated_at` otomatik güncelleme trigger'ı
+- [x] `0018_fix_actor_fk_delete_rules` — denetimde bulundu: `admin_roles` ve
+      `bans` sözleşmeye aykırı olarak CASCADE kullanıyordu, RESTRICT'e çevrildi.
+      0012/0013 düzenlenmedi; uygulanmış migration değiştirilmez kuralı gereği
+      yeni migration yazıldı.
+- [x] **Sır ilkelleri** (seed script'inin ön koşulu, Faz 5'ten öne alındı):
       `base62` kodlama, API key üretimi/ayrıştırması, recovery kodu üretimi
-- [ ] **Seed script** — `crates/actos-api/src/bin/seed.rs`:
+- [x] **Seed script** — `crates/actos-api/src/bin/seed.rs`:
       ilk admin actor'ü + API key'i üretir, key'i **bir kez** stdout'a basar
       (kararlaştırıldığı gibi API'den ilk admin oluşturulamaz)
-- [ ] Şema diyagramı (`docs/schema.md` — mermaid ER)
-- [ ] `cargo sqlx prepare` → `.sqlx/` offline metadata commit'lenir (CI için şart)
-- [ ] Commit
+- [x] Şema diyagramı (`docs/schema.md` — mermaid ER)
+- [x] `cargo sqlx prepare` → `.sqlx/` offline metadata commit'lenir (CI için şart)
+- [x] Commit
 
 ---
 
