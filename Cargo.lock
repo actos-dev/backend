@@ -35,6 +35,7 @@ dependencies = [
  "aws-smithy-http-client",
  "base62",
  "base64 0.23.1",
+ "chrono",
  "deadpool-redis",
  "hex",
  "hmac",
@@ -42,6 +43,7 @@ dependencies = [
  "rand",
  "redis",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "sqlx",
  "subtle",
@@ -666,6 +668,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 

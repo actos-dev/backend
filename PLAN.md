@@ -176,27 +176,30 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 4 — Ortak Yardımcılar
 
-- [ ] **Base62 dış ID** (`actos-core::id`)
+- [x] **Base62 dış ID** (`actos-core::id`)
       - `bigint` ↔ base62 string dönüşümü
       - Ham sayının tahmin edilmesini engellemek için **anahtarlı 64-bit Feistel
         permütasyonu** (`ID_OBFUSCATION_KEY`), sonra base62 encode.
         Böylece `p_7fGh2` gibi ID'ler ardışık değil, ekstra DB kolonu da gerekmiyor.
-      - Tip prefix'i: `a_` actor, `p_` post, `c_` comment, `t_` tag —
-        yanlış tipte ID gönderilirse parse aşamasında reddedilir
+      - Tip öneki: `a_` actor, `c_` içerik, `t_` etiket. Post ve yorum **ayrı
+        önek almadı**: ikisi de `contents` tablosunda, aynı ID uzayında —
+        ayrı önek `/contents/{id}` gibi ikisini de kabul eden uçları bozardı.
+        Buna karşılık Feistel'e alan ayrımı kondu: `actors`'taki 5 ile
+        `contents`'teki 5 farklı dış ID'ye eşleniyor.
       - Serde ile şeffaf serialize/deserialize (`PublicId<Actor>` newtype)
       - **Test:** 100k rastgele id için round-trip, çakışma yok
-- [ ] **Cursor** (`actos-core::cursor`)
+- [x] **Cursor** (`actos-core::cursor`)
       - `(sort_key, id)` çiftini base64url'e kodlar
       - HMAC ile imzalanır → elle kurcalanmış cursor reddedilir
       - Sıralama değişirse (`sort=new` → `sort=top`) cursor geçersiz sayılır
-- [ ] **Girdi doğrulama** — `validator` crate; başlık/gövde uzunluk limitleri,
+- [x] **Girdi doğrulama** — `validator` crate; başlık/gövde uzunluk limitleri,
       Unicode normalizasyonu (NFC), sıfır-genişlik karakter temizliği
-- [ ] **Markdown sanitizasyonu** — `pulldown-cmark` + `ammonia` allowlist.
+- [x] **Markdown sanitizasyonu** — `pulldown-cmark` + `ammonia` allowlist.
       Ham HTML **kapalı** (v1). `javascript:` şemalı linkler engellenir.
       Render sunucuda mı istemcide mi? → **Sunucu ham markdown döner**, ayrıca
       `?render=html` ile sanitize edilmiş HTML seçeneği (istemciler için kolaylık)
-- [ ] **Zaman yardımcıları** — `chrono`/`jiff`, hep UTC
-- [ ] Commit
+- [x] **Zaman yardımcıları** — `chrono`/`jiff`, hep UTC
+- [x] Commit
 
 ---
 
