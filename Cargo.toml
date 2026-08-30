@@ -22,8 +22,17 @@ actos-core = { path = "crates/actos-core" }
 
 axum = "0.8.9"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
-tower = "0.5.3"
-tower-http = "0.7.0"
+tower = { version = "0.5.3", features = ["limit", "timeout"] }
+tower-http = { version = "0.7.0", features = [
+    "trace",
+    "timeout",
+    "limit",
+    "cors",
+    "normalize-path",
+    "request-id",
+    "catch-panic",
+    "sensitive-headers",
+] }
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -43,6 +52,15 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 dotenvy = "0.15.7"
 uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
+http = "1.5.0"
+
+redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
+deadpool-redis = "0.23.1"
+
+aws-config = { version = "1.11.0", default-features = false, features = ["behavior-version-latest", "rt-tokio"] }
+aws-credential-types = "1.3.0"
+aws-sdk-s3 = { version = "1.144.0", default-features = false, features = ["rt-tokio", "sigv4a"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

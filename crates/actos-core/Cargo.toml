@@ -15,5 +15,10 @@ sqlx = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+redis = { workspace = true }
+deadpool-redis = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+
 [lints]
 workspace = true
