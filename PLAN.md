@@ -20,7 +20,7 @@
 | Dosya | MinIO (S3-uyumlu), bucket `actos-media` |
 | Auth | **Tek yöntem:** API key (Bearer). E-posta yok, OAuth yok, JWT yok. |
 | Kurtarma | Kayıtta bir kez gösterilen tek kullanımlık recovery kodları |
-| Şifre/sır hash | **Argon2id** (API key secret'ı ve recovery kodları için) |
+| Şifre/sır hash | API key secret'ı → **SHA-256**; recovery kodları → **Argon2id**. Gerekçe Faz 5'te. |
 | ID | İç: `bigint`. Dış: **base62 string** (ham sayı asla dışarı sızmaz) |
 | Sayfalama | **Keyset (cursor)** — `offset` yok |
 | Silme | **Soft-delete** (`deleted_at`), hard delete sadece GDPR-vari özel akış |
@@ -159,6 +159,8 @@ engellemeyecek şekilde tasarlanacak.
 - [ ] `0015_admin_actions_log` — append-only; UPDATE/DELETE'i engelleyen trigger
 - [ ] `0016_edit_history` — (opsiyonel, v1'de yazılır ama endpoint'i sonra açılır)
 - [ ] `0017_triggers` — `updated_at` otomatik güncelleme trigger'ı
+- [ ] **Sır ilkelleri** (seed script'inin ön koşulu, Faz 5'ten öne alındı):
+      `base62` kodlama, API key üretimi/ayrıştırması, recovery kodu üretimi
 - [ ] **Seed script** — `crates/actos-api/src/bin/seed.rs`:
       ilk admin actor'ü + API key'i üretir, key'i **bir kez** stdout'a basar
       (kararlaştırıldığı gibi API'den ilk admin oluşturulamaz)
@@ -198,9 +200,16 @@ engellemeyecek şekilde tasarlanacak.
 
 - [ ] **API key formatı:** `actos_<key_id_b62>_<secret_b62>`
       - `key_id` = `api_keys.id` (uuid) → lookup için indexlenmiş, **hash'lenmemiş**
-      - `secret` = 32 rastgele bayt → Argon2id ile hash'lenip saklanır
-      - Neden: sadece hash saklasak her istekte tüm satırları hash'lememiz
-        gerekirdi; key_id ile tek satır çekip tek Argon2 doğrulaması yapıyoruz
+      - `secret` = 32 rastgele bayt (256 bit) → **SHA-256** ile hash'lenip saklanır
+      - Neden key_id ayrı: sadece hash saklasak doğrulamada tüm satırları
+        taramamız gerekirdi; key_id ile tek satır çekip tek karşılaştırma yapıyoruz
+      - **Neden Argon2 değil SHA-256:** yavaş KDF'lerin varlık sebebi düşük
+        entropili insan şifreleridir. Burada sır 256 bit ve bizim ürettiğimiz
+        bir rastgele değer — kaba kuvvet zaten imkânsız, yavaşlatmanın kazancı
+        yok. Buna karşılık her isteği Argon2 ile yavaşlatmanın bedeli gerçek.
+        Karşılaştırma sabit zamanlı (`subtle`) yapılır.
+      - **Recovery kodları Argon2id kalır:** onlar insan tarafından yazılabilsin
+        diye kısa (~60 bit) ve veritabanı sızarsa çevrimdışı denenebilirler
       - Prefix (`actos_`) sayesinde sızan key'ler secret-scanner'larca yakalanabilir
 - [ ] `POST /auth/register` → `{username, actor_type}`
       - Yanıt: `{actor, api_key, recovery_codes[10]}` — **hepsi bir kez gösterilir**
@@ -210,7 +219,8 @@ engellemeyecek şekilde tasarlanacak.
         Argon2 doğrula → `actor` yükle → ban kontrolü → `Extension<CurrentActor>`
       - `last_used_at` güncellemesi **fire-and-forget** (her isteği yavaşlatmasın;
         Redis'te biriktirip periyodik flush)
-      - Doğrulanmış key'ler için kısa TTL'li (60 sn) Redis cache — Argon2 pahalı
+      - Redis cache'e gerek yok: SHA-256 doğrulaması zaten mikrosaniyeler
+        sürüyor (Argon2 seçilseydi gerekecekti)
 - [ ] `GET /auth/whoami` → `{actor, roles, key_label, rate_limits}`
 - [ ] `POST /auth/keys` — yeni key üret (label ile)
 - [ ] `GET /auth/keys` — key listesi (secret asla dönmez; `key_id`, label, tarihler)

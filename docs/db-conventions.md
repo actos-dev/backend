@@ -85,3 +85,14 @@ Buna karşılık **şemada tutulan** kurallar, her kod yolundan (seed script'i, 
 SQL, ileride yazılacak servisler) geçmesi gerektiği için oradadır: ağaç
 tutarlılığı (`path`/`depth`/`root_post_id`), derinlik sınırı, silinmiş içeriğe
 yanıt yasağı, `admin_actions_log`'un değiştirilemezliği.
+
+## Uygulanmış migration'lar değiştirilemez
+
+sqlx her migration'ın sağlamasını (checksum) `_sqlx_migrations` tablosunda
+tutar; uygulanmış bir dosyayı sonradan düzenlemek o veritabanında
+`migration was previously applied but has been modified` hatası verir.
+
+Bu kural **yayına çıktıktan sonra mutlaktır**. Bu noktadan önce (henüz hiçbir
+kalıcı veritabanı yokken) yalnızca yorum/COMMENT düzeltmeleri için bir kez
+esnetildi — 0003'ün hash açıklaması SHA-256 kararıyla çelişiyordu ve yalan
+söyleyen bir şema yorumu bırakmak istemedik. Bundan sonra: yeni migration yaz.

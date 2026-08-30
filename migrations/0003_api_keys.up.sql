@@ -1,6 +1,6 @@
 -- Bir actor'ün birden fazla aktif API key'i olabilir (CLI, web, otomasyon
 -- script'i için ayrı ayrı). Key doğrulaması `id` ile satır bulup tek bir
--- Argon2 doğrulaması yapma prensibine dayanır (bkz. aşağıdaki COMMENT'ler).
+-- hash karşılaştırması yapma prensibine dayanır (bkz. aşağıdaki COMMENT'ler).
 
 CREATE TABLE api_keys (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -22,11 +22,13 @@ COMMENT ON TABLE api_keys IS
 COMMENT ON COLUMN api_keys.id IS
     'Kasıtlı olarak bigint DEĞİL, uuid: API key string''inin içinde (actos_<id_b62>_<secret_b62>) '
     'açıkça taşınır, bu yüzden tahmin edilemez olmalı. Kendisi hash''lenmez: doğrulama akışı önce '
-    'bu id ile tek bir satır bulur, sonra sadece o satırın secret_hash''ine karşı tek bir Argon2 '
+    'bu id ile tek bir satır bulur, sonra sadece o satırın secret_hash''ine karşı tek bir '
     'doğrulaması yapar. Sadece hash saklansaydı (id olmadan) her istekte tüm satırları hash''lemek '
     'gerekirdi — bu hem yavaş hem DoS''a açık olurdu.';
 COMMENT ON COLUMN api_keys.secret_hash IS
-    'Key''in secret bölümünün Argon2id hash''i. Düz metin secret hiçbir zaman saklanmaz.';
+    'Key''in secret bölümünün SHA-256 hash''i (hex). Düz metin secret hiçbir zaman saklanmaz. '
+    'Argon2 değil çünkü secret 256 bit rastgele: yavaş KDF''in kazancı yok, bedeli her istekte ödenirdi. '
+    'Recovery kodları ise (kısa ve insan tarafından yazılabilir olduğu için) Argon2id ile hash''lenir.';
 COMMENT ON COLUMN api_keys.label IS
     'Kullanıcının key''e verdiği serbest metin etiket, ör. "cli-macbook".';
 COMMENT ON COLUMN api_keys.revoked_at IS
