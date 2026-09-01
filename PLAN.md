@@ -350,26 +350,26 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 11 — Oy / Takip / Kaydet
 
-- [ ] `PUT /contents/{id}/vote` → `{value: 1|-1|0}` (0 = oyu geri çek) — idempotent
+- [x] `PUT /contents/{id}/vote` → `{value: 1|-1|0}` (0 = oyu geri çek) — idempotent
       - `votes` upsert + `contents.score/upvotes/downvotes` atomik güncelleme
       - **Aynı transaction'da**, yoksa sayaçlar kayar
       - Kendi içeriğine oy vermeyi engelle (ya da izin ver? → **engelle**)
-- [ ] `PUT /actors/{username}/follow` / `DELETE` — idempotent
-- [ ] `PUT /contents/{id}/save` / `DELETE`
-- [ ] `GET /me/saves` — cursor'lu
-- [ ] `GET /me/votes?content_ids=...` — istemcinin oy durumunu toplu sorgulaması
+- [x] `PUT /actors/{username}/follow` / `DELETE` — idempotent
+- [x] `PUT /contents/{id}/save` / `DELETE`
+- [x] `GET /me/saves` — cursor'lu
+- [x] `GET /me/votes?content_ids=...` — istemcinin oy durumunu toplu sorgulaması
       (feed'de her post için ayrı istek atmasın)
-- [ ] Testler: eşzamanlı 100 oy → sayaç tutarlı mı (transaction testi)
-- [ ] Commit
+- [x] Testler: eşzamanlı 100 oy → sayaç tutarlı mı (transaction testi)
+- [x] Commit
 
 ---
 
 ## Faz 12 — Feed ve Sıralama
 
-- [ ] `GET /feed?sort=hot|new|top&window=day|week|month|all&cursor=...`
+- [x] `GET /feed?sort=hot|new|top&window=day|week|month|all&cursor=...`
       (amac.txt'teki `GET posts/mainpage`)
-- [ ] `GET /feed/following` — takip edilenlerin postları (auth gerekli)
-- [ ] **Hot score formülü** (Reddit tarzı):
+- [x] `GET /feed/following` — takip edilenlerin postları (auth gerekli)
+- [x] **Hot score formülü** (Reddit tarzı):
       `sign(score) * log10(max(|score|,1)) + epoch_seconds / 45000`
       - ~~`log10(max(|score|,1)) + sign(score) * (epoch_seconds / 45000)`~~
         **Düzeltildi:** `sign` çarpanı yanlış terimdeydi. O hâliyle
@@ -381,11 +381,11 @@ engellemeyecek şekilde tasarlanacak.
         çarpar, zaman terimi koşulsuz eklenir.
       - Her post için `hot_score` kolonunda saklanır
       - Oy geldiğinde anında güncellenir + periyodik job son 7 günü yeniden hesaplar
-- [ ] Periyodik job altyapısı — `tokio` task + `tokio-cron-scheduler`,
+- [x] Periyodik job altyapısı — `tokio` task + `tokio-cron-scheduler`,
       **advisory lock** ile (birden fazla instance çalışırsa iki kere hesaplamasın)
-- [ ] Keyset sayfalama her sıralama için doğru index'i kullanıyor mu →
+- [x] Keyset sayfalama her sıralama için doğru index'i kullanıyor mu →
       `EXPLAIN ANALYZE` ile doğrula, `docs/query-plans.md`'ye kaydet
-- [ ] Commit
+- [x] Commit
 
 ---
 
@@ -524,6 +524,35 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 11 ve 12'den çıkanlar:**
+
+- **Hot score formülü düzeltildi** (bkz. Faz 12 maddesi): `sign` çarpanı log
+  terimine taşındı. Eski hâlinde oy almamış her post dibe düşüyordu.
+- **`docs/query-plans.md` eklendi.** Genel feed üç sıralamada da doğru
+  index'i kullanıyor, sort adımı yok. Ama iki uç top-N heapsort'a düşüyor ve
+  **Faz 17'ye devredildi**:
+  - `GET /feed/following` takip sayısıyla doğrusal büyüyor; cursor aralık
+    sınırı olarak kullanılamadığı için çok yazan bir yazarın satırları
+    sayfa başına tekrar okunup filtreleniyor.
+  - `GET /tags/{name}/posts` etiket popülerliğiyle büyüyor.
+  İkisi de doğruluk değil maliyet sorunu.
+- **Periyodik iş altyapısı hazır** (`crates/actos-api/src/jobs.rs`). Faz 14+
+  yeni bir bakım işi eklerse `spawn_periodic` ile bağlar; advisory lock'ı
+  işin kendi içine koymak kural (fonksiyon nereden çağrılırsa çağrılsın
+  koruma birlikte gelsin diye).
+- **`hot_score` iki yerden yazılıyor** (oy anında + periyodik tazeleme) ve
+  formül iki SQL literalinde tekrarlanıyor — `sqlx::query!` sabit referansı
+  kabul etmediği için. **Biri değişirse diğeri de değişmeli.**
+- Kendi içeriğine **oy** vermek engelli ama **kaydetmek** serbest; ayrım
+  bilinçli (oy sıralamayı etkiler, kayıt kişisel bir yer imi).
+- Silinmiş hedefler için asimetri: takip **edilemez** ama takipten
+  **çıkarılabilir**; içerik kaydedilemez ama kaydı kaldırılabilir. Faz 14'te
+  moderasyon uçları yazılırken bu desen korunmalı — aksi hâlde kullanıcının
+  listesinde kaldırılamayan satırlar sıkışır.
+- Yeni ortam değişkeni: `HOT_SCORE_INTERVAL_SECS` (varsayılan 15 dk,
+  `0` = kapalı). `TAG_CLEANUP_INTERVAL_SECS` ile birlikte Faz 19/20 dağıtım
+  listesine girmeli.
 
 **Faz 10'dan çıkanlar:**
 
