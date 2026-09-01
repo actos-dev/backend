@@ -86,6 +86,55 @@ impl Storage {
             .map(|_| ())
             .map_err(|e| StorageError::Unreachable(e.to_string()))
     }
+
+    /// Bir nesneyi bucket'a yazar.
+    ///
+    /// `content_type` yanıt header'ı olarak saklanıyor: bucket public-read
+    /// olduğu için tarayıcı dosyayı doğrudan bu tipe göre yorumluyor
+    /// (bkz. [`Self::public_url`]). Yanlış tip göndermek bir görselin
+    /// indirilmesine ya da daha kötüsü yanlış yorumlanmasına yol açardı —
+    /// bu yüzden çağıran onu tahmin etmiyor, `crate::media` normalize
+    /// sonrası sabit `image/webp` veriyor.
+    ///
+    /// # Errors
+    /// Yükleme başarısız olursa [`StorageError::Unreachable`].
+    pub async fn put_object(
+        &self,
+        object_key: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> Result<(), StorageError> {
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(object_key)
+            .content_type(content_type)
+            .body(bytes.into())
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| StorageError::Unreachable(e.to_string()))
+    }
+
+    /// Bir nesneyi bucket'tan siler.
+    ///
+    /// S3 semantiği gereği **var olmayan bir anahtarı silmek de başarılı
+    /// sayılır**; bu idempotency çağıranın işine geliyor (bkz.
+    /// `crate::attachment::delete_attachment` — veritabanı satırı ile
+    /// nesnenin ayrı düşmesi hâlinde tekrar denenebilsin).
+    ///
+    /// # Errors
+    /// Silme başarısız olursa [`StorageError::Unreachable`].
+    pub async fn delete_object(&self, object_key: &str) -> Result<(), StorageError> {
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(object_key)
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| StorageError::Unreachable(e.to_string()))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

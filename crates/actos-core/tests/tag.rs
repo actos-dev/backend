@@ -28,7 +28,7 @@ async fn seed_post(pool: &PgPool, username: &str, tags: &[&str]) -> i64 {
         .expect("actor oluşturulabilmeli");
 
     let owned: Vec<String> = tags.iter().map(|t| (*t).to_owned()).collect();
-    let post = content::create_post(pool, &reg.actor, "başlık", "gövde", &owned, None)
+    let post = content::create_post(pool, &reg.actor, "başlık", "gövde", &owned, None, &[])
         .await
         .expect("post oluşturulabilmeli");
 

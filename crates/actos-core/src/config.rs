@@ -42,6 +42,10 @@ pub struct ServerConfig {
     pub max_concurrent_requests: usize,
     /// İstek gövdesi üst sınırı (dosya yükleme kendi daha yüksek limitini kullanır).
     pub max_body_bytes: usize,
+    /// `POST /uploads` için gövde üst sınırı (bkz. PLAN.md Faz 13: 8 MB).
+    /// [`Self::max_body_bytes`]'tan ayrı ve daha yüksek: genel uçlar JSON
+    /// alıyor, yükleme ucu görsel.
+    pub max_upload_bytes: usize,
     /// Kullanılmayan etiketleri toplayan periyodik işin çalışma aralığı
     /// (bkz. `crate::tag::cleanup_unused`). Sıfır verilirse iş hiç
     /// başlatılmaz — tek seferlik bir kurulumda ya da temizliği dışarıdan
@@ -50,6 +54,9 @@ pub struct ServerConfig {
     /// `hot_score` tazeleme işinin çalışma aralığı (bkz.
     /// `crate::feed::recompute_hot_scores`). Sıfır = iş hiç başlatılmaz.
     pub hot_score_interval: Duration,
+    /// Bağlanmamış yüklemeleri toplayan işin aralığı (bkz.
+    /// `crate::attachment::cleanup_orphaned`). Sıfır = iş hiç başlatılmaz.
+    pub orphan_cleanup_interval: Duration,
     /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
     /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
     /// güvenilebileceğini belirler.
@@ -143,6 +150,7 @@ impl Config {
                 ),
                 max_concurrent_requests: optional("MAX_CONCURRENT_REQUESTS")?.unwrap_or(512),
                 max_body_bytes: optional("MAX_BODY_BYTES")?.unwrap_or(1024 * 1024),
+                max_upload_bytes: optional("MAX_UPLOAD_BYTES")?.unwrap_or(8 * 1024 * 1024),
                 trusted_proxy_hops: optional("TRUSTED_PROXY_HOPS")?.unwrap_or(0),
                 // Varsayılan 6 saat: etiket çöpü birikmesi yavaş bir olgu
                 // (yalnızca bir post'un son etiketi kalktığında oluşur),
@@ -156,6 +164,11 @@ impl Config {
                 // değerleri tazeliyor, sık koşmasının bir karşılığı yok.
                 hot_score_interval: Duration::from_secs(
                     optional("HOT_SCORE_INTERVAL_SECS")?.unwrap_or(15 * 60),
+                ),
+                // Varsayılan 1 saat. Yetim yüklemeler 24 saatten eski
+                // olduğunda siliniyor, yani daha sık koşmanın karşılığı yok.
+                orphan_cleanup_interval: Duration::from_secs(
+                    optional("ORPHAN_CLEANUP_INTERVAL_SECS")?.unwrap_or(60 * 60),
                 ),
             },
             database: DatabaseConfig {

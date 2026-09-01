@@ -17,6 +17,9 @@ pub mod content;
 /// Oy / takip / kaydetme uçlarının istek-yanıt tipleri.
 pub mod interaction;
 
+/// Dosya yükleme uçlarının yanıt tipleri.
+pub mod upload;
+
 /// Makine-okunur hata kodları.
 ///
 /// AI ajanların hatayı programatik olarak ele alabilmesi için, insan-okunur

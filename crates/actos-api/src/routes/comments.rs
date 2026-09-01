@@ -141,13 +141,33 @@ async fn create_comment(
         .transpose()
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let content =
-        core_comment::create_comment(state.db(), &current.actor, post_id, parent_id, &req.body)
-            .await
-            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    let attachment_ids = crate::routes::posts::decode_attachment_ids(
+        req.attachment_ids.as_deref(),
+        state.id_codec(),
+    )
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let summary = content_summary(&content, state.id_codec())
+    let content = core_comment::create_comment(
+        state.db(),
+        &current.actor,
+        post_id,
+        parent_id,
+        &req.body,
+        &attachment_ids,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let ekler = actos_core::attachment::list_for_content(state.db(), content.id)
+        .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let summary = crate::routes::posts::content_summary_with(
+        &content,
+        state.id_codec(),
+        Some((&ekler, state.storage())),
+    )
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let location = format!("/comments/{}", summary.id);
     let mut response = (StatusCode::CREATED, Json(summary)).into_response();
@@ -246,8 +266,16 @@ async fn get_comment(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let comment = content_summary(&comment, state.id_codec())
+    let ekler = actos_core::attachment::list_for_content(state.db(), comment_id)
+        .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let comment = crate::routes::posts::content_summary_with(
+        &comment,
+        state.id_codec(),
+        Some((&ekler, state.storage())),
+    )
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let ancestors = ancestors
         .iter()

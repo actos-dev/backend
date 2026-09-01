@@ -289,6 +289,10 @@ async fn attach_tags(conn: &mut PgConnection, content_id: i64, tags: &[String]) 
 /// dokümantasyonu) — `INSERT`, `trg_contents_set_path` trigger'ının
 /// bunları hesaplamasına bırakılıyor.
 ///
+/// `attachment_ids` verilirse o yüklemeler **aynı transaction'da** bu
+/// post'a bağlanıyor (bkz. [`crate::attachment::attach_to_content`]);
+/// yalnızca çağıranın kendi, henüz bağlanmamış yüklemeleri kabul edilir.
+///
 /// # Errors
 /// `title`/`body`/`tags`/`metadata` doğrulamadan geçmezse
 /// [`Error::Validation`]; veritabanı hatası [`Error::Database`].
@@ -299,6 +303,7 @@ pub async fn create_post(
     body: &str,
     tags: &[String],
     metadata: Option<JsonValue>,
+    attachment_ids: &[i64],
 ) -> Result<Content> {
     let title = text::validate_title(title).map_err(|e| Error::Validation(e.to_string()))?;
     if title.is_empty() {
@@ -329,6 +334,11 @@ pub async fn create_post(
     .await?;
 
     attach_tags(&mut tx, row.id, &tags).await?;
+
+    // Ekler **aynı transaction'da** bağlanıyor: ek bağlama başarısız
+    // olursa (ör. başkasının yüklemesi istendi) post da oluşmamalı, yoksa
+    // istemcinin gönderdiğinden farklı bir post yaratmış olurduk.
+    crate::attachment::attach_to_content(&mut tx, row.id, author.id, attachment_ids).await?;
 
     tx.commit().await?;
 

@@ -5,6 +5,7 @@
 //! kullanılabilmesi ve testlerin HTTP kurmadan yazılabilmesi.
 
 pub mod actor;
+pub mod attachment;
 pub mod auth;
 pub mod cache;
 pub mod comment;
@@ -17,6 +18,7 @@ pub mod feed;
 pub mod id;
 pub mod idempotency;
 pub mod interaction;
+pub mod media;
 pub mod ratelimit;
 pub mod secret;
 pub mod storage;

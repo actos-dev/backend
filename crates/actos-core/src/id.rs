@@ -153,6 +153,20 @@ impl IdKind for Tag {
     const PREFIX: &'static str = "t";
 }
 
+/// `attachments` tablosundaki satırlar (Faz 13).
+pub struct Attachment;
+impl IdKind for Attachment {
+    const TAG: u8 = 3;
+    const PREFIX: &'static str = "f";
+}
+
+/// `reports` tablosundaki satırlar (Faz 14).
+pub struct Report;
+impl IdKind for Report {
+    const TAG: u8 = 4;
+    const PREFIX: &'static str = "r";
+}
+
 /// ID üretme/ayrıştırma sırasında oluşan hatalar. Hiçbiri panik değildir:
 /// istemciden gelen bozuk bir ID, bu tiplerden biriyle geri döner.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

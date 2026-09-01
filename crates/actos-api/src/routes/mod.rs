@@ -9,6 +9,7 @@ pub mod interactions;
 pub mod meta;
 pub mod posts;
 pub mod tags;
+pub mod uploads;
 
 use axum::{Router, http::HeaderMap, routing::get};
 
@@ -27,6 +28,7 @@ pub fn router() -> Router<AppState> {
         .merge(tags::router())
         .merge(interactions::router())
         .merge(feed::router())
+        .merge(uploads::router())
         .fallback(not_found)
 }
 

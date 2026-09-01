@@ -48,6 +48,18 @@ pub enum Error {
     Internal(String),
 }
 
+impl From<crate::storage::StorageError> for Error {
+    /// Depolama hatası istemcinin girdisiyle ilgili değil, sunucunun bir
+    /// bağımlılığının erişilemez olmasıyla ilgili — bu yüzden
+    /// [`Error::Internal`]. Mesaj yalnızca loglara gidiyor
+    /// ([`Error::public_detail`] `Internal` için genel bir metin döner),
+    /// yani MinIO'nun iç adresleri ya da hata ayrıntıları istemciye
+    /// sızmıyor.
+    fn from(err: crate::storage::StorageError) -> Self {
+        Self::Internal(format!("depolama: {err}"))
+    }
+}
+
 impl Error {
     /// Bu hatanın makine-okunur kodu.
     #[must_use]

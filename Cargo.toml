@@ -20,7 +20,7 @@ authors = ["Actos katkıcıları"]
 actos-types = { path = "crates/actos-types" }
 actos-core = { path = "crates/actos-core" }
 
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
 tower = { version = "0.5.3", features = ["limit", "timeout", "util"] }
 tower-http = { version = "0.7.0", features = [
@@ -59,6 +59,21 @@ dotenvy = "0.15.7"
 uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 http = "1.5.0"
+
+# --- Görsel işleme (crates/actos-core/src/media.rs, Faz 13) ---
+# `default-features = false`: varsayılan `default-formats` avif/exr/tiff gibi
+# kabul etmediğimiz onlarca kod çözücüyü de getiriyor. Yalnızca allowlist'teki
+# dört biçimi açmak hem derleme süresini hem de saldırı yüzeyini küçültüyor —
+# reddedeceğimiz bir biçimin kod çözücüsünü binary'de taşımanın anlamı yok.
+image = { version = "0.25.10", default-features = false, features = [
+    "jpeg",
+    "png",
+    "gif",
+    "webp",
+    "rayon",
+] }
+# Magic byte tespiti. Uzantıya ve `Content-Type` header'ına asla güvenmiyoruz.
+infer = "0.22.0"
 
 # --- Sır üretimi (crates/actos-core/src/secret.rs) ---
 argon2 = "0.6.0"

@@ -46,7 +46,7 @@ async fn seed_actor(pool: &PgPool, username: &str) -> ActorRecord {
 
 #[allow(clippy::expect_used)]
 async fn seed_post(pool: &PgPool, author: &ActorRecord) -> i64 {
-    content::create_post(pool, author, "başlık", "gövde", &[], None)
+    content::create_post(pool, author, "başlık", "gövde", &[], None, &[])
         .await
         .expect("post oluşturulabilmeli")
         .id

@@ -37,12 +37,14 @@ fn test_config() -> Config {
             request_timeout: std::time::Duration::from_secs(30),
             max_concurrent_requests: 512,
             max_body_bytes: 1024 * 1024,
+            max_upload_bytes: 8 * 1024 * 1024,
             trusted_proxy_hops: 0,
             // Testler router'ı doğrudan çağırıyor, periyodik iş hiç
             // başlatılmıyor; alan yalnızca `Config`'in parçası olduğu
             // için dolduruluyor.
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
+            orphan_cleanup_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),

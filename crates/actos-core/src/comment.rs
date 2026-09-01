@@ -253,6 +253,7 @@ pub async fn create_comment(
     post_id: i64,
     parent_id: Option<i64>,
     body: &str,
+    attachment_ids: &[i64],
 ) -> Result<Content> {
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     if body.is_empty() {
@@ -283,6 +284,9 @@ pub async fn create_comment(
     .await?;
 
     increment_ancestor_counts(&mut tx, inserted.id).await?;
+
+    // Ekler aynı transaction'da (bkz. `crate::content::create_post`).
+    crate::attachment::attach_to_content(&mut tx, inserted.id, author.id, attachment_ids).await?;
 
     tx.commit().await?;
 

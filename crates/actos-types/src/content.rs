@@ -91,6 +91,18 @@ pub struct ContentSummary {
     pub created_at: String,
     /// RFC 3339. `None` ise hiç düzenlenmedi.
     pub edited_at: Option<String>,
+    /// Bu içeriğe bağlı yüklemeler.
+    ///
+    /// **`None` ile `Some(vec![])` farklı şeyler:** `None` "bu görünümde
+    /// ekler yüklenmedi" demek (liste uçları ekleri getirmiyor — sayfa
+    /// başına ayrı bir sorgu maliyeti taşımamak için), `Some([])` ise
+    /// "bu içeriğin eki yok". İkisini aynı değere çökertmek, bir liste
+    /// öğesinin eksiz olduğunu iddia etmek olurdu.
+    ///
+    /// Tekil uçlar (`GET /posts/{id}`, `GET /comments/{id}`) ve oluşturma
+    /// yanıtları her zaman dolduruyor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<crate::upload::UploadResponse>>,
     /// `true` ise bu içerik soft-delete edilmiş; `title`/`body` gerçek
     /// değerleri taşımaz (bkz. modül dokümantasyonu).
     pub deleted: bool,
@@ -108,6 +120,10 @@ pub struct CreatePostRequest {
     /// Verilmezse boş obje (`{}`) varsayılır.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+    /// `POST /uploads`'tan dönen ek id'leri. Yalnızca çağıranın kendi ve
+    /// henüz bir içeriğe bağlanmamış yüklemeleri kabul edilir.
+    #[serde(default)]
+    pub attachment_ids: Option<Vec<String>>,
 }
 
 /// `PATCH /posts/{id}` istek gövdesi.
@@ -149,6 +165,10 @@ pub struct PostListResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateCommentRequest {
     pub body: String,
+    /// `POST /uploads`'tan dönen ek id'leri. Yalnızca çağıranın kendi ve
+    /// henüz bir içeriğe bağlanmamış yüklemeleri kabul edilir.
+    #[serde(default)]
+    pub attachment_ids: Option<Vec<String>>,
     /// Verilmezse yorum post'un doğrudan çocuğu olur; verilirse o yoruma
     /// yanıt olur. Dış id (`c_...`) biçiminde.
     #[serde(default)]

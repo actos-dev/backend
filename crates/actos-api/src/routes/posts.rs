@@ -146,6 +146,35 @@ pub(crate) fn content_summary(
     content: &core_content::Content,
     id_codec: &IdCodec,
 ) -> Result<ContentSummary, Error> {
+    content_summary_with(content, id_codec, None)
+}
+
+/// [`content_summary`]'nin ekleri de dolduran hâli.
+///
+/// `ekler` `None` ise DTO'daki alan da `None` kalır — "yüklenmedi" ile
+/// "yok" ayrımı için bkz. `actos_types::content::ContentSummary`.
+pub(crate) fn content_summary_with(
+    content: &core_content::Content,
+    id_codec: &IdCodec,
+    ekler: Option<(&[actos_core::attachment::Attachment], &actos_core::Storage)>,
+) -> Result<ContentSummary, Error> {
+    let attachments = match ekler {
+        None => None,
+        Some((liste, storage)) => Some(
+            liste
+                .iter()
+                .map(|ek| crate::routes::uploads::upload_response(ek, id_codec, storage))
+                .collect::<Result<Vec<_>, Error>>()?,
+        ),
+    };
+    content_summary_inner(content, id_codec, attachments)
+}
+
+fn content_summary_inner(
+    content: &core_content::Content,
+    id_codec: &IdCodec,
+    attachments: Option<Vec<actos_types::upload::UploadResponse>>,
+) -> Result<ContentSummary, Error> {
     let id = id_codec.encode::<ContentIdKind>(content.id)?;
 
     let author = if content.author_deleted {
@@ -189,8 +218,33 @@ pub(crate) fn content_summary(
         comment_count: content.comment_count,
         created_at: content.created_at.to_rfc3339(),
         edited_at: content.edited_at.map(|t| t.to_rfc3339()),
+        attachments,
         deleted,
     })
+}
+
+/// Ek dış id'lerini iç `bigint`'lere çözer.
+///
+/// Bozuk bir id burada **hata üretiyor**, sessizce atlanmıyor
+/// (`GET /me/votes`'un toplu aramasının aksine): istemci bir ek göndermek
+/// istediğini açıkça söylüyor, onu sessizce düşürmek gönderdiğinden farklı
+/// bir post yaratmak olurdu.
+///
+/// `pub(crate)`: `crate::routes::comments` de aynı çözümü kullanıyor.
+pub(crate) fn decode_attachment_ids(
+    raw: Option<&[String]>,
+    id_codec: &IdCodec,
+) -> Result<Vec<i64>, Error> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    raw.iter()
+        .map(|s| {
+            id_codec
+                .decode::<actos_core::id::Attachment>(s)
+                .map_err(|_| Error::NotFound("attachment"))
+        })
+        .collect()
 }
 
 /// Ham `{id}` path segmentini iç `bigint`'e çözer.
@@ -242,6 +296,9 @@ async fn create_post(
     headers: HeaderMap,
     Json(req): Json<CreatePostRequest>,
 ) -> Result<Response, ApiError> {
+    let attachment_ids = decode_attachment_ids(req.attachment_ids.as_deref(), state.id_codec())
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
     let idempotency_key = headers
         .get(IDEMPOTENCY_KEY_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -276,11 +333,16 @@ async fn create_post(
         &req.body,
         &req.tags,
         req.metadata,
+        &attachment_ids,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let summary = content_summary(&content, state.id_codec())
+    let ekler = actos_core::attachment::list_for_content(state.db(), content.id)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let summary = content_summary_with(&content, state.id_codec(), Some((&ekler, state.storage())))
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let location = format!("/posts/{}", summary.id);
@@ -327,7 +389,11 @@ async fn get_post(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let summary = content_summary(&content, state.id_codec())
+    let ekler = actos_core::attachment::list_for_content(state.db(), content_id)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let summary = content_summary_with(&content, state.id_codec(), Some((&ekler, state.storage())))
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());

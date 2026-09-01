@@ -37,6 +37,10 @@ unicode-normalization = { workspace = true }
 pulldown-cmark = { workspace = true }
 ammonia = { workspace = true }
 
+# Görsel işleme (Faz 13)
+image = { workspace = true }
+infer = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
 
