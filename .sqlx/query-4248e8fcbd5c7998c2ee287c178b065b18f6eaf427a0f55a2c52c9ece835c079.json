@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT previous_title, previous_body FROM edit_history WHERE content_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "previous_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edit_history",
+            "name": "previous_title"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "previous_body",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edit_history",
+            "name": "previous_body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "4248e8fcbd5c7998c2ee287c178b065b18f6eaf427a0f55a2c52c9ece835c079"
+}

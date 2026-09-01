@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO content_tags (content_id, tag_id)\n        SELECT $1, * FROM UNNEST($2::bigint[])\n        ON CONFLICT DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "56780d35e3e6437a2b13a98dfb776d13195f665beca581712e96f83844dd844c"
+}

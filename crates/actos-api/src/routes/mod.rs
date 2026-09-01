@@ -4,6 +4,7 @@ pub mod actors;
 pub mod auth;
 pub mod health;
 pub mod meta;
+pub mod posts;
 
 use axum::{Router, http::HeaderMap, routing::get};
 
@@ -17,6 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/version", get(meta::version))
         .merge(auth::router())
         .merge(actors::router())
+        .merge(posts::router())
         .fallback(not_found)
 }
 

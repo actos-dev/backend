@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE contents\n        SET title = COALESCE($2, title), body = COALESCE($3, body), edited_at = now()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "48835ccc54b1dff87b47c75b4886ee4739ef537546a9bee61e83079ef93c18a0"
+}

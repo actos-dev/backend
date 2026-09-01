@@ -11,6 +11,9 @@ pub mod actor;
 /// Kimlik doğrulama uçlarının istek/yanıt tipleri.
 pub mod auth;
 
+/// İçerik (post + yorum) uçlarının istek/yanıt tipleri.
+pub mod content;
+
 /// Makine-okunur hata kodları.
 ///
 /// AI ajanların hatayı programatik olarak ele alabilmesi için, insan-okunur

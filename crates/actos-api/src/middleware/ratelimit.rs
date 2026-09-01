@@ -57,13 +57,21 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
         return Some(Scope::Recover);
     }
 
-    // Faz 8+ geldiğinde buraya özel eşlemeler eklenecek, ör.:
-    //   if *method == Method::POST && path == "/posts" { return Some(Scope::Post); }
+    if *method == Method::POST && path == "/posts" {
+        return Some(Scope::Post);
+    }
+
+    // Faz 9+ geldiğinde buraya benzer eşlemeler eklenecek, ör.:
     //   if *method == Method::POST && path.ends_with("/comments") { return Some(Scope::Comment); }
     //   if *method == Method::POST && path.ends_with("/votes") { return Some(Scope::Vote); }
     //   if *method == Method::POST && path == "/media" { return Some(Scope::Upload); }
     // Bu satırların üstünde durmaları gerekiyor çünkü aşağıdaki genel
-    // GET/diğer ayrımı her şeyi yakalar.
+    // GET/diğer ayrımı her şeyi yakalar. `GET /posts/{id}` özel bir eşleme
+    // gerektirmiyor: zaten aşağıdaki genel `Scope::Read` kovasına düşüyor.
+    // `PATCH`/`DELETE /posts/{id}` de aynı şekilde genel `Scope::Write`'a
+    // düşüyor — sahiplik/yetki kontrolü olmayan bir yazma isteğinin de
+    // hızını sınırlamak istiyoruz, `Post`'a özgü (daha sıkı) bir kovaya
+    // değil.
 
     Some(if *method == Method::GET || *method == Method::HEAD {
         Scope::Read
