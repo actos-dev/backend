@@ -158,11 +158,22 @@ pub struct RateLimitDecision {
 
 // --- Redis anahtar şeması --------------------------------------------------
 //
-// `rl:{scope}:{a|i}:{kimlik}` — ör. `rl:post:a:42`, `rl:register:i:203.0.113.7`.
-// IPv6 adresleri (`2001:db8::1` gibi) `:` içerir; bu bilinçli olarak sorun
-// değil çünkü anahtar geri ayrıştırılmıyor, sadece Redis'in opak bir string
-// olarak sakladığı bir tanımlayıcı. Biçim yine de tutarlı kalsın diye her
-// zaman `rl:<scope>:<a|i>:<kimlik>` şeklinde kurulur.
+// `{prefix}rl:{scope}:{a|i}:{kimlik}` — ör. `rl:post:a:42`,
+// `rl:register:i:203.0.113.7`. IPv6 adresleri (`2001:db8::1` gibi) `:`
+// içerir; bu bilinçli olarak sorun değil çünkü anahtar geri ayrıştırılmıyor,
+// sadece Redis'in opak bir string olarak sakladığı bir tanımlayıcı. Biçim
+// yine de tutarlı kalsın diye her zaman `<prefix>rl:<scope>:<a|i>:<kimlik>`
+// şeklinde kurulur.
+//
+// `prefix` üretimde her zaman boştur ([`RateLimiter::new`]) — yalnızca
+// [`RateLimiter::with_prefix`] ile testler tarafından doldurulur. Amacı: bir
+// aktör ID'si (izole test veritabanlarının her biri kendi otoincrement
+// sırasını `1`'den başlattığı için) ya da bir istemci IP'si (test harness'i
+// `ConnectInfo` sağlamadığında hepsi `0.0.0.0`'a düşer) paralel çalışan
+// testler arasında çakışabiliyor; aynı Redis'i paylaşan iki test aynı kovayı
+// paylaşırsa birbirinin token'ını tüketip rastgele 429 alır (flaky test).
+// Her test kendi benzersiz önekiyle kurulursa, üretim anahtar şemasına hiç
+// dokunmadan tamamen izole bir anahtar uzayı alır.
 //
 // `Subject::Actor`'daki `actor_type` **anahtara girmez**: yalnızca kademe
 // seçiminde kullanılır (bkz. [`Subject`] üzerindeki yorum). Girseydi, bir
@@ -171,10 +182,10 @@ pub struct RateLimitDecision {
 // isteğe izin verilmiş olurdu — tam da token bucket'ın önlemeye çalıştığı
 // türden bir sızıntı.
 
-fn bucket_key(scope: Scope, subject: &Subject) -> String {
+fn bucket_key(prefix: &str, scope: Scope, subject: &Subject) -> String {
     match subject {
-        Subject::Actor { id, .. } => format!("rl:{}:a:{id}", scope.as_key_str()),
-        Subject::Ip(ip) => format!("rl:{}:i:{ip}", scope.as_key_str()),
+        Subject::Actor { id, .. } => format!("{prefix}rl:{}:a:{id}", scope.as_key_str()),
+        Subject::Ip(ip) => format!("{prefix}rl:{}:i:{ip}", scope.as_key_str()),
     }
 }
 
@@ -276,6 +287,15 @@ static DRAIN_HASH_SCRIPT: LazyLock<Script> = LazyLock::new(|| Script::new(DRAIN_
 /// HASH anahtarı. Sabit/global olması bilinçli: amaç, birden fazla API
 /// instance'ının `last_used_at` dokunuşlarını **tek bir yerde** biriktirip,
 /// Faz 12'de kurulacak periyodik iş tarafından tek seferde boşaltılmasıdır.
+///
+/// Yine de [`RateLimiter::key_prefix`]'e tabidir (bkz. [`RateLimiter::
+/// key_touch_hash`]): üretimde prefix boş olduğu için bu sabit değişmeden
+/// kullanılır, ama testlerde prefixlenmezse bu HASH da bucket anahtarları
+/// gibi paralel test binary'leri arasında paylaşılır — nitekim
+/// `crate::middleware::identity` her kimlikli istekte `record_key_use`
+/// çağırdığından, `actos-api`nin `auth_api.rs` testleri ile `actos-core`nin
+/// kendi `record_key_use_ve_drain_key_uses` testi aynı anda koşunca bu HASH
+/// üzerinde çakışıp o testin "tam olarak 2 giriş" varsayımını bozuyordu.
 const KEY_TOUCH_HASH: &str = "rl:key_touches";
 
 // --- RateLimiter -----------------------------------------------------------
@@ -286,12 +306,39 @@ const KEY_TOUCH_HASH: &str = "rl:key_touches";
 pub struct RateLimiter {
     pool: Pool,
     limits: LimitTable,
+    /// Bkz. yukarıdaki "Redis anahtar şeması" bölümü. Üretimde her zaman
+    /// boş string (`RateLimiter::new`); yalnızca testler `with_prefix` ile
+    /// doldurur.
+    key_prefix: String,
 }
 
 impl RateLimiter {
     #[must_use]
     pub fn new(pool: Pool, limits: LimitTable) -> Self {
-        Self { pool, limits }
+        Self {
+            pool,
+            limits,
+            key_prefix: String::new(),
+        }
+    }
+
+    /// [`Self::new`] ile aynı, ama tüm Redis kova anahtarlarının başına
+    /// `key_prefix` eklenir.
+    ///
+    /// **Yalnızca testler için.** Üretim kodu bu fonksiyonu hiç çağırmamalı
+    /// — tek bir API sürecinde birden fazla `RateLimiter` yaşamıyor, anahtar
+    /// uzayını bölmenin bir gerekçesi yok. Testlerde ise gerçek bir Redis'e
+    /// karşı çalışan paralel testlerin (`cargo test` varsayılan olarak
+    /// paralel koşar) aynı kovayı paylaşıp birbirinin token'ını tüketmesini
+    /// önler (bkz. anahtar şeması bölümündeki gerekçe). Her test kendi
+    /// benzersiz önekiyle (ör. bir `Uuid`) bir `RateLimiter` kurmalı.
+    #[must_use]
+    pub fn with_prefix(pool: Pool, limits: LimitTable, key_prefix: impl Into<String>) -> Self {
+        Self {
+            pool,
+            limits,
+            key_prefix: key_prefix.into(),
+        }
     }
 
     /// Bir istek için hız sınırlama kararı üretir.
@@ -351,7 +398,7 @@ impl RateLimiter {
         let cfg = override_cfg
             .copied()
             .unwrap_or_else(|| self.limits.resolve(scope, subject));
-        let key = bucket_key(scope, subject);
+        let key = bucket_key(&self.key_prefix, scope, subject);
 
         let mut conn = match self.pool.get().await {
             Ok(conn) => conn,
@@ -430,6 +477,14 @@ impl RateLimiter {
 
     // --- `last_used_at` tamponu (Faz 5'ten devir) ---------------------
 
+    /// [`KEY_TOUCH_HASH`]'in bu limiter'ın `key_prefix`'iyle sarılmış hâli.
+    /// Bkz. `KEY_TOUCH_HASH` üzerindeki yorum: prefix üretimde boş olduğu
+    /// için davranış değişmiyor, testlerde ise bu HASH'i de bucket
+    /// anahtarları gibi izole eder.
+    fn key_touch_hash(&self) -> String {
+        format!("{}{KEY_TOUCH_HASH}", self.key_prefix)
+    }
+
     /// Bir API key'in kullanıldığını Redis'te biriktirir.
     ///
     /// `auth::touch_key` şu an dakikada bir doğrudan `UPDATE` atıyor; bu iki
@@ -456,7 +511,10 @@ impl RateLimiter {
             }
         };
 
-        if let Err(err) = conn.hset(KEY_TOUCH_HASH, key_id.to_string(), now_ms).await {
+        if let Err(err) = conn
+            .hset(self.key_touch_hash(), key_id.to_string(), now_ms)
+            .await
+        {
             tracing::warn!(
                 key_id = %key_id,
                 error = %err,
@@ -482,7 +540,7 @@ impl RateLimiter {
         };
 
         let raw: RedisResult<std::collections::HashMap<String, String>> = DRAIN_HASH_SCRIPT
-            .key(KEY_TOUCH_HASH)
+            .key(self.key_touch_hash())
             .invoke_async(&mut conn)
             .await;
 

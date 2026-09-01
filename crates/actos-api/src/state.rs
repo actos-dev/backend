@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use actos_core::{Config, Storage, id::IdCodec};
+use actos_core::{Config, Storage, id::IdCodec, ratelimit::RateLimiter};
 use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 
@@ -21,6 +21,12 @@ struct Inner {
     redis: RedisPool,
     storage: Storage,
     id_codec: IdCodec,
+    // `RateLimiter`'ın kendisi ucuz klonlanabilir olmak zorunda değil (bkz.
+    // o tip üzerindeki yorum) — burada tek bir örneği `Arc`layıp
+    // paylaşıyoruz. `identity`/`ratelimit` middleware'leri fire-and-forget
+    // görevlere (`tokio::spawn`) taşımak için ayrıca sahipli bir `Arc`
+    // klonuna ihtiyaç duyuyor (bkz. `Self::rate_limiter_handle`).
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl AppState {
@@ -31,6 +37,7 @@ impl AppState {
         redis: RedisPool,
         storage: Storage,
         id_codec: IdCodec,
+        rate_limiter: RateLimiter,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -39,6 +46,7 @@ impl AppState {
                 redis,
                 storage,
                 id_codec,
+                rate_limiter: Arc::new(rate_limiter),
             }),
         }
     }
@@ -66,5 +74,18 @@ impl AppState {
     #[must_use]
     pub fn id_codec(&self) -> &IdCodec {
         &self.inner.id_codec
+    }
+
+    #[must_use]
+    pub fn rate_limiter(&self) -> &RateLimiter {
+        &self.inner.rate_limiter
+    }
+
+    /// [`Self::rate_limiter`] ile aynı `RateLimiter`'a sahipli bir tutamaç —
+    /// isteği geciktirmemesi gereken `tokio::spawn` görevlerine
+    /// taşınabilsin diye (ör. `record_key_use`). `Arc::clone` ucuz.
+    #[must_use]
+    pub fn rate_limiter_handle(&self) -> Arc<RateLimiter> {
+        Arc::clone(&self.inner.rate_limiter)
     }
 }

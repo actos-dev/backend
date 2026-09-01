@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use actos_api::{app, state};
-use actos_core::{Config, Storage, cache, db, id::IdCodec};
+use actos_core::{Config, Storage, cache, db, id::IdCodec, ratelimit::RateLimiter};
 use tower::Layer as _;
 use tower_http::normalize_path::NormalizePathLayer;
 
@@ -39,8 +39,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // olması demek (bkz. `crates/actos-core/src/id.rs`).
     let id_codec = IdCodec::new(&config.security.id_obfuscation_key)?;
 
+    // `redis.clone()` ucuz: `deadpool_redis::Pool` zaten `Arc` tabanlı.
+    let rate_limiter = RateLimiter::new(redis.clone(), config.rate_limits);
+
     let addr = config.server.addr;
-    let state = state::AppState::new(config, db, redis, storage, id_codec);
+    let state = state::AppState::new(config, db, redis, storage, id_codec, rate_limiter);
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın
     // dışında kalıyor: `/posts/` ile `/posts` aynı rotaya düşsün.
@@ -49,9 +52,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("actos-api dinlemede: http://{addr}");
 
+    // `into_make_service_with_connect_info`: hız sınırlama middleware'inin
+    // IP başına limit uygulayabilmesi için `ConnectInfo<SocketAddr>`
+    // extension'ı her isteğe eklenmesi gerekiyor (bkz.
+    // `crates/actos-api/src/middleware/ratelimit.rs`). `NormalizePathLayer`
+    // bunun **dışında** kalıyor ama bu satır bütün `service`'i (NormalizePath
+    // + router) sarmaladığı için extension router'a ulaşana kadar zaten
+    // ekli oluyor.
     axum::serve(
         listener,
-        <_ as axum::ServiceExt<axum::extract::Request>>::into_make_service(service),
+        <_ as axum::ServiceExt<axum::extract::Request>>::into_make_service_with_connect_info::<
+            std::net::SocketAddr,
+        >(service),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;

@@ -1,5 +1,7 @@
 //! HTTP hata yanıtları — RFC 9457 (`application/problem+json`).
 
+use std::sync::Arc;
+
 use actos_core::Error;
 use actos_types::ErrorCode;
 use axum::{
@@ -15,15 +17,34 @@ use crate::telemetry::REQUEST_ID_HEADER;
 ///
 /// Ayrı bir tip olmasının sebebi yalnızca yönelim kuralı (orphan rule) değil:
 /// `actos-core`'un HTTP'den habersiz kalması bilinçli bir katman ayrımı.
+///
+/// **`inner` neden `Arc<Error>`, düz `Error` değil:** kimlik çözümleme
+/// middleware'i (`crate::middleware::identity`) doğrulama hatasını istek
+/// başına **bir kez** üretip request extension'ına koyuyor; o extension'ı
+/// hem `CurrentActor` hem `OptionalActor` extractor'ı okuyabiliyor (bkz. o
+/// modüllerin dokümantasyonu). `actos_core::Error` `Clone` değil (içinde
+/// `sqlx::Error` var), bu yüzden extension'da paylaşılabilir tek biçim
+/// `Arc<Error>` — `ApiError` de aynı türü taşıyarak ekstra bir kopyalama/
+/// dönüştürme katmanına gerek bırakmıyor.
 #[derive(Debug)]
 pub struct ApiError {
-    inner: Error,
+    inner: Arc<Error>,
     request_id: Option<String>,
 }
 
 impl ApiError {
     #[must_use]
-    pub const fn new(inner: Error) -> Self {
+    pub fn new(inner: Error) -> Self {
+        Self {
+            inner: Arc::new(inner),
+            request_id: None,
+        }
+    }
+
+    /// [`Self::new`] ile aynı, ama zaten `Arc`'lanmış bir hatadan kurar —
+    /// bkz. `inner` alanı üzerindeki yorum.
+    #[must_use]
+    pub const fn from_arc(inner: Arc<Error>) -> Self {
         Self {
             inner,
             request_id: None,
@@ -113,7 +134,9 @@ impl IntoResponse for ApiError {
 
         // 429'da istemciye ne zaman tekrar deneyeceğini söylemek zorundayız —
         // özellikle otomatik ajanlar için bu tahmin edilecek bir şey olmamalı.
-        if let Error::RateLimited { retry_after_secs } = self.inner
+        // `self.inner` artık `Arc<Error>` olduğu için sahiplik alınamıyor —
+        // referans üzerinden eşleniyor.
+        if let Error::RateLimited { retry_after_secs } = self.inner.as_ref()
             && let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string())
         {
             response.headers_mut().insert(header::RETRY_AFTER, value);

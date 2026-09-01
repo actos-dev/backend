@@ -42,6 +42,23 @@ pub struct ServerConfig {
     pub max_concurrent_requests: usize,
     /// İstek gövdesi üst sınırı (dosya yükleme kendi daha yüksek limitini kullanır).
     pub max_body_bytes: usize,
+    /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
+    /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
+    /// güvenilebileceğini belirler.
+    ///
+    /// **`0` (varsayılan): `X-Forwarded-For` tamamen yok sayılır**, istemci
+    /// IP'si olarak her zaman soket adresi (`ConnectInfo`) kullanılır. Bu
+    /// güvenli varsayılandır: istemci bu header'ı kendi uydurabilir, önünde
+    /// gerçekten bir proxy yoksa (ya da proxy bu header'ı kendi
+    /// yazmıyor/temizlemiyorsa) `XFF`'e güvenmek IP başına hız sınırını
+    /// tamamen atlatılabilir kılar.
+    ///
+    /// `N > 0` verildiğinde, gerçek istemci IP'sinin `XFF` zincirinde
+    /// **sağdan `N+1`. sırada** olduğu varsayılır (soldan değil — sol taraf
+    /// istemcinin uydurabildiği kısım). Seçim mantığı ve birim testleri
+    /// `actos-api`'de (`crates/actos-api/src/middleware/client_ip.rs`) —
+    /// bu crate HTTP'yi bilmiyor, yalnızca değeri taşıyor.
+    pub trusted_proxy_hops: usize,
 }
 
 #[derive(Clone)]
@@ -112,6 +129,7 @@ impl Config {
                 ),
                 max_concurrent_requests: optional("MAX_CONCURRENT_REQUESTS")?.unwrap_or(512),
                 max_body_bytes: optional("MAX_BODY_BYTES")?.unwrap_or(1024 * 1024),
+                trusted_proxy_hops: optional("TRUSTED_PROXY_HOPS")?.unwrap_or(0),
             },
             database: DatabaseConfig {
                 url: required("DATABASE_URL")?,

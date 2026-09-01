@@ -4,16 +4,35 @@
 //! izole Postgres veritabanını alır. Router `tower::ServiceExt::oneshot` ile
 //! doğrudan çağrılır — hiçbir yerde gerçekten ağ dinlenmiyor.
 //!
-//! **`AppState` nasıl kuruldu:** auth uçlarının hiçbiri Redis'e ya da
-//! S3/MinIO'ya dokunmuyor (yalnızca `state.db()` kullanılıyor), bu yüzden bu
-//! testler o servislere gerçekten bağlanmıyor. `deadpool_redis::Config::
-//! create_pool` ve `actos_core::Storage::new` **tembeldir**: ikisi de bir
-//! istemci/havuz nesnesi kurar ama ağa hiç dokunmaz — gerçek bağlantı yalnız
-//! ilk `get()`/istek anında açılır. `Config::from_env()` yerine burada elle,
-//! sahte (hiç çözülmeyecek) redis/S3 adresleriyle bir `Config` kuruluyor; bu
-//! sayede testler CI'da Redis/MinIO ayakta olmasa bile geçer. (Bu iki servis
-//! geliştirme ortamında 3102/3103'te zaten ayakta, ama testin buna bağımlı
-//! olmaması daha sağlam.)
+//! **`AppState` nasıl kuruldu:** Faz 6 ile birlikte `crate::middleware::
+//! ratelimit::enforce` router'a bağlandı ve **her** istekte (sağlık/versiyon
+//! uçları hariç) `actos_core::ratelimit::RateLimiter::check` üzerinden
+//! gerçekten Redis'e gidiyor — auth uçları artık Redis'e "hiç dokunmuyor"
+//! değil. Bu yüzden burada `crates/actos-core/tests/ratelimit.rs`'teki ile
+//! aynı kalıp izleniyor: geliştirme ortamında zaten ayakta olan gerçek
+//! Redis'e (`127.0.0.1:3102`, `docker-compose.yml`'deki `actos_redis`)
+//! bağlanılıyor. Redis ayakta değilse bu dosyadaki testler de (tıpkı
+//! `actos-core/tests/ratelimit.rs` gibi) başarısız olur — ayrı bir "atla"
+//! mekanizması yok, çünkü rate limiting davranışının kendisi burada test
+//! ediliyor (bkz. aşağıdaki "Hız sınırlama" bölümü) ve gerçek Redis olmadan
+//! bunu sınamanın bir yolu yok.
+//!
+//! **Test izolasyonu:** testler paralel koşar ve hepsi aynı Redis'i
+//! paylaşır. İki çakışma kaynağı var: (1) `#[sqlx::test]`'in verdiği her
+//! izole Postgres veritabanı kendi otoincrement `id` sırasını `1`'den
+//! başlatır, yani farklı testlerdeki actor'ler aynı `id`'yi alabilir; (2)
+//! test harness'i gerçek bir soket açmadığı için `ConnectInfo` yok, tüm
+//! kimliksiz istekler aynı `0.0.0.0` IP'sine düşer. İkisi de aynı Redis
+//! kovasını (`rl:<scope>:<a|i>:<kimlik>`) paylaşan iki testin birbirinin
+//! token'ını tüketip rastgele 429 almasına yol açar. Çözüm:
+//! `build_router` her çağrıda `RateLimiter::with_prefix` ile **benzersiz**
+//! bir anahtar önekiyle kurulur — her test kendi izole anahtar uzayında
+//! çalışır, üretim anahtar şemasına dokunulmaz.
+//!
+//! Storage/S3 hâlâ bu testlerde kullanılmıyor (auth uçları `state.storage()`
+//! çağırmıyor), bu yüzden o kısım hâlâ bilerek erişilemez bir adrese
+//! ayarlanıyor — `actos_core::Storage::new`'in tembel oluşu bunu güvenli
+//! kılıyor (bkz. `test_config`).
 
 use actos_api::{app, state::AppState};
 use actos_core::{
@@ -22,6 +41,7 @@ use actos_core::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
     },
     id::IdCodec,
+    ratelimit::RateLimiter,
 };
 use axum::{
     Router,
@@ -44,6 +64,8 @@ fn test_config() -> Config {
             request_timeout: std::time::Duration::from_secs(30),
             max_concurrent_requests: 512,
             max_body_bytes: 1024 * 1024,
+            // Bu testler `X-Forwarded-For` göndermiyor, değeri önemsiz.
+            trusted_proxy_hops: 0,
         },
         database: DatabaseConfig {
             // Gerçek bağlantı `#[sqlx::test]`'in verdiği `PgPool` ile zaten
@@ -54,10 +76,15 @@ fn test_config() -> Config {
             acquire_timeout: std::time::Duration::from_secs(5),
         },
         redis: RedisConfig {
-            // Bilerek çözülemeyecek bir adres: bu testler Redis'e hiç
-            // dokunmuyor, `deadpool_redis` havuzu tembel kurulduğu için bu
-            // sorun olmuyor (bkz. dosya başındaki yorum).
-            url: "redis://127.0.0.1:1/0".to_owned(),
+            // Gerçek, geliştirme ortamında ayakta olan Redis (bkz. dosya
+            // başındaki yorum): rate-limit middleware'i artık her istekte
+            // Redis'e gidiyor, bu yüzden erişilemez bir adres burada
+            // testlerin çoğunu (yazma scope'ları fail-closed olduğu için)
+            // 429'a düşürür. `build_router`, çakışmayı önlemek için bu
+            // havuzu her zaman benzersiz bir anahtar önekiyle sarıyor
+            // (`RateLimiter::with_prefix`) — bu yüzden burada havuz
+            // paylaşılsa bile testler birbirini etkilemiyor.
+            url: "redis://127.0.0.1:3102/0".to_owned(),
             pool_size: 4,
         },
         storage: StorageConfig {
@@ -72,7 +99,13 @@ fn test_config() -> Config {
             id_obfuscation_key: "test-id-obfuscation-key-en-az-otuz-iki-karakter".to_owned(),
         },
         // Ortam değişkeni yokken `from_env` plandaki varsayılan tabloyu
-        // üretiyor; bu testler hız sınırını sınamıyor, varsayılanlar yeterli.
+        // üretiyor. Hız sınırlama davranışını doğrudan sınayan testler bile
+        // (bkz. "Hız sınırlama" bölümü) bu varsayılan tabloyu kullanıyor —
+        // ör. `anonymous.register` varsayılanı 3/saat, bu da tek bir testin
+        // 429'u tetiklemesi için zaten yeterince düşük. Diğer testler için
+        // önemli olan tek şey `build_router`'ın her testi kendi izole
+        // anahtar önekiyle kurması (bkz. dosya başı yorumu) — aksi halde bu
+        // varsayılanlar bile paralel testler arasında çakışırdı.
         rate_limits: LimitTable::from_env().expect("varsayılan limit tablosu geçerli olmalı"),
     }
 }
@@ -86,14 +119,34 @@ fn test_config() -> Config {
 
 #[allow(clippy::expect_used)]
 fn build_router(pool: PgPool) -> Router {
-    let config = test_config();
+    build_router_with_config(test_config(), pool)
+}
+
+/// `build_router`'ın `Config`'i çağırana bıraktığı hâli — hız sınırlama
+/// testleri (bkz. "Hız sınırlama" bölümü) varsayılan `rate_limits`
+/// tablosundaki bir kapasiteyi (ör. `anonymous.register`) sabit sayı olarak
+/// tekrar yazmak yerine `test_config()`'ten okuyup burada geçirebilsin diye
+/// ayrıldı — kapasite ileride değişirse test de otomatik uyum sağlar.
+#[allow(clippy::expect_used)]
+fn build_router_with_config(config: Config, pool: PgPool) -> Router {
     let id_codec = IdCodec::new(&config.security.id_obfuscation_key).expect("geçerli anahtar");
     let redis = deadpool_redis::Config::from_url(config.redis.url.clone())
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .expect("redis pool yapılandırması kurulabilmeli (ağ bağlantısı açmaz)");
     let storage = Storage::new(&config.storage);
 
-    let state = AppState::new(config, pool, redis, storage, id_codec);
+    // `LimitTable` `Copy`, bu yüzden `config` taşınmadan önce okunabiliyor
+    // (main.rs'teki kurulumla aynı sıra). `with_prefix` ile **her çağrıda**
+    // benzersiz bir anahtar öneki verilir (bkz. dosya başındaki "Test
+    // izolasyonu" yorumu) — bu olmadan paralel testler aynı Redis'te aynı
+    // kovaları paylaşıp birbirinin token'ını tüketebilir.
+    let rate_limiter = RateLimiter::with_prefix(
+        redis.clone(),
+        config.rate_limits,
+        format!("test:{}:", uuid::Uuid::new_v4()),
+    );
+
+    let state = AppState::new(config, pool, redis, storage, id_codec, rate_limiter);
     app::build(state)
 }
 
@@ -635,4 +688,113 @@ async fn hicbir_hata_yaniti_sir_sizdirmiyor(pool: PgPool) {
         );
         assert_no_secret_leak(label, &body, &headers);
     }
+}
+
+// --- Hız sınırlama -----------------------------------------------------
+//
+// Faz 6 ile `crate::middleware::ratelimit::enforce` router'a bağlandı; bu
+// iki test o bağlantının **gerçekten** işlediğini kanıtlıyor (token
+// bucket'ın kendisi zaten `actos-core/tests/ratelimit.rs`'te sınanıyor —
+// burada sınanan, HTTP katmanının doğru scope'u seçip doğru header'ları/
+// durum kodunu üretmesi). `POST /auth/register` kullanılıyor çünkü
+// kimliksiz (IP başına) ve düşük varsayılan kapasiteli (3/saat) tek uç —
+// başka bir uçta bunu tetiklemek için ya kimlik kurmak ya da onlarca istek
+// atmak gerekirdi.
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn kayit_limiti_asilinca_429_rate_limited_ve_retry_after_donuyor(pool: PgPool) {
+    let router = build_router(pool);
+
+    // Varsayılan `anonymous.register` kapasitesi kadar istek at — hepsi
+    // izinli olmalı. Kullanıcı adları bilerek farklı: amaç kayıt
+    // mantığını değil, `/auth/register`'a giden isteklerin **kendisinin**
+    // sayılmasını sınamak — middleware token'ı `next.run` çağrılmadan
+    // *önce* tüketir, isteğin sonucundan (409/400/201) bağımsız.
+    let capacity = test_config().rate_limits.anonymous.register.capacity;
+    for i in 0..capacity {
+        let (status, body, _) = send(
+            &router,
+            json_req(
+                "POST",
+                "/auth/register",
+                json!({ "username": format!("rl_reg_user_{i}"), "actor_type": "human", "display_name": null }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "istek {i}/{capacity}: {body}");
+    }
+
+    // Kapasitenin bir fazlası: kovada token kalmadı, reddedilmeli.
+    let (status, body, headers) = send(
+        &router,
+        json_req(
+            "POST",
+            "/auth/register",
+            json!({ "username": "rl_reg_user_over_limit", "actor_type": "human", "display_name": null }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["code"], "RATE_LIMITED");
+
+    let retry_after: u64 = headers
+        .get(header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .expect("Retry-After header'ı sayısal olmalı");
+    assert!(retry_after > 0, "retry_after 0'dan büyük olmalı: {retry_after}");
+
+    // `apply_headers` her yanıta eklenir — sadece izinli olanlara değil,
+    // reddedilen istekte de `X-RateLimit-Remaining: 0` görülmeli.
+    assert_eq!(
+        headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()),
+        Some("0")
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn basarili_yanitta_x_ratelimit_headerlari_dogru(pool: PgPool) {
+    let config = test_config();
+    let capacity = config.rate_limits.anonymous.register.capacity;
+    let window_secs = config.rate_limits.anonymous.register.window.as_secs();
+    let router = build_router_with_config(config, pool);
+
+    let (status, body, headers) = send(
+        &router,
+        json_req(
+            "POST",
+            "/auth/register",
+            json!({ "username": "rl_header_user", "actor_type": "human", "display_name": null }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    assert_eq!(
+        headers
+            .get("x-ratelimit-limit")
+            .and_then(|v| v.to_str().ok()),
+        Some(capacity.to_string().as_str()),
+        "X-RateLimit-Limit, kademenin kapasitesini yansıtmalı"
+    );
+    assert_eq!(
+        headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()),
+        Some((capacity - 1).to_string().as_str()),
+        "bu istekle kapasiteden tam 1 token tüketilmiş olmalı"
+    );
+
+    let reset: u64 = headers
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .expect("X-RateLimit-Reset sayısal olmalı");
+    assert!(
+        reset > 0 && reset <= window_secs,
+        "kovanın tamamen dolmasına kalan süre pencere içinde olmalı: {reset}s (pencere {window_secs}s)"
+    );
 }

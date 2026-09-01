@@ -1,18 +1,19 @@
 //! Kimlik doğrulama extractor'ları.
 //!
-//! `Authorization: Bearer <key>` header'ını `actos_core::auth::authenticate`'e
-//! bağlar. İş mantığının kendisi burada yok — bu modül yalnızca HTTP'ye özgü
-//! kısmı (header ayrıştırma, `FromRequestParts`, fire-and-forget `touch_key`)
-//! üstleniyor.
+//! Gerçek doğrulama artık burada **değil**: `crate::middleware::identity::
+//! resolve`, istek başına bir kez çalışıp `Authorization` header'ını
+//! çözüyor ve sonucu request extension'ına ([`ResolvedIdentity`]) koyuyor —
+//! bunun sebebi, hız sınırlama middleware'inin (`crate::middleware::
+//! ratelimit`) doğru `Subject`'i seçebilmek için kimliği handler'a
+//! girmeden **önce** bilmesi gerekmesi (bkz. o modüllerin dokümantasyonu).
+//! Bu dosya yalnızca o extension'ı okuyup `CurrentActor`/`OptionalActor`'a
+//! çeviriyor — istek başına ikinci bir `authenticate` çağrısı yok.
 
-use axum::{
-    extract::FromRequestParts,
-    http::{header, request::Parts},
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 
 pub use actos_core::auth::AuthenticatedActor;
 
-use crate::{error::ApiError, state::AppState};
+use crate::{error::ApiError, middleware::identity::ResolvedIdentity, state::AppState};
 
 /// Kimliği doğrulanmış bir istek sahibi.
 ///
@@ -34,22 +35,23 @@ impl FromRequestParts<AppState> for CurrentActor {
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &AppState,
+        _state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let raw_key = extract_bearer(parts).ok_or_else(|| {
-            ApiError::new(actos_core::Error::MissingCredentials).with_request_id(&parts.headers)
-        })?;
-
-        let authenticated = actos_core::auth::authenticate(state.db(), &raw_key)
-            .await
-            .map_err(|e| ApiError::new(e).with_request_id(&parts.headers))?;
-
-        // `touch_key` isteği geciktirmemeli: ayrı bir görev olarak fırlatılır,
-        // hatası (bkz. `touch_key` üzerindeki yorum) yalnızca loglanır, isteği
-        // düşürmez.
-        spawn_touch(state, authenticated.key_id);
-
-        Ok(Self(authenticated))
+        match parts.extensions.get::<ResolvedIdentity>() {
+            Some(ResolvedIdentity::Authenticated(actor)) => Ok(Self(actor.clone())),
+            Some(ResolvedIdentity::Failed(err)) => {
+                Err(ApiError::from_arc(err.clone()).with_request_id(&parts.headers))
+            }
+            // `None` normalde hiç oluşmaz — `identity::resolve` middleware'i
+            // her isteği sarmalıyor, extension her zaman dolu olmalı. Yine
+            // de savunmacı: middleware bir şekilde atlanırsa (ör. yanlış
+            // kurulmuş bir test router'ı) sessizce "kimliksiz" davranmak
+            // yerine aynı, doğru hatayı üretmek daha güvenli.
+            Some(ResolvedIdentity::Anonymous) | None => Err(ApiError::new(
+                actos_core::Error::MissingCredentials,
+            )
+            .with_request_id(&parts.headers)),
+        }
     }
 }
 
@@ -70,39 +72,14 @@ impl FromRequestParts<AppState> for OptionalActor {
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &AppState,
+        _state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        if parts.headers.get(header::AUTHORIZATION).is_none() {
-            return Ok(Self(None));
+        match parts.extensions.get::<ResolvedIdentity>() {
+            Some(ResolvedIdentity::Authenticated(actor)) => Ok(Self(Some(actor.clone()))),
+            Some(ResolvedIdentity::Failed(err)) => {
+                Err(ApiError::from_arc(err.clone()).with_request_id(&parts.headers))
+            }
+            Some(ResolvedIdentity::Anonymous) | None => Ok(Self(None)),
         }
-
-        let CurrentActor(actor) = CurrentActor::from_request_parts(parts, state).await?;
-        Ok(Self(Some(actor)))
     }
-}
-
-/// `Authorization` header'ından ham API key'i çıkarır.
-///
-/// `Bearer` öneki büyük/küçük harf duyarsız kabul edilir (istemciler
-/// `bearer` da yazabiliyor) — RFC 7235 şema adlarının case-insensitive
-/// olduğunu söylüyor, biz de buna uyuyoruz.
-fn extract_bearer(parts: &Parts) -> Option<String> {
-    let value = parts.headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, rest) = value.split_once(' ')?;
-    if !scheme.eq_ignore_ascii_case("bearer") {
-        return None;
-    }
-    let key = rest.trim();
-    if key.is_empty() {
-        None
-    } else {
-        Some(key.to_owned())
-    }
-}
-
-fn spawn_touch(state: &AppState, key_id: uuid::Uuid) {
-    let db = state.db().clone();
-    tokio::spawn(async move {
-        actos_core::auth::touch_key(&db, key_id).await;
-    });
 }
