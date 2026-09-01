@@ -317,22 +317,22 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 9 — İçerik: Yorumlar (nested, ltree)
 
-- [ ] **Faz 7'den devir:** `GET /actors/{username}/comments` (cursor'lu)
+- [x] **Faz 7'den devir:** `GET /actors/{username}/comments` (cursor'lu)
 
-- [ ] `POST /posts/{id}/comments` → `{body, parent_id?}`
+- [x] `POST /posts/{id}/comments` → `{body, parent_id?}`
       - `parent_id` yoksa post'un doğrudan çocuğu
       - `path` = `parent.path || c<new_id>`; `depth` hesaplanır, 32 limiti kontrol
       - `contents.comment_count` atomik `+1` (post'ta ve tüm ata yorumlarda)
-- [ ] `GET /posts/{id}/comments?sort=top|new&depth=N&cursor=...`
+- [x] `GET /posts/{id}/comments?sort=top|new&depth=N&cursor=...`
       - `path <@ root.path` ile tek sorguda ağaç çekilir, uygulamada nest edilir
       - Derin ağaçlar için `?parent=<id>` ile alt ağaç ayrıca çekilebilir
         ("daha fazla yanıt yükle")
-- [ ] `GET /comments/{id}` — tek yorum + ata zinciri (breadcrumb)
-- [ ] `PATCH` / `DELETE /comments/{id}`
-- [ ] Silinen yorumun çocukları yaşamaya devam eder (`[silindi]` gövdesi)
-- [ ] **Testler:** 5 seviye derin ağaç kur, doğru sırada döndüğünü doğrula;
+- [x] `GET /comments/{id}` — tek yorum + ata zinciri (breadcrumb)
+- [x] `PATCH` / `DELETE /comments/{id}`
+- [x] Silinen yorumun çocukları yaşamaya devam eder (`[silindi]` gövdesi)
+- [x] **Testler:** 5 seviye derin ağaç kur, doğru sırada döndüğünü doğrula;
       depth limiti aşımı reddediliyor mu
-- [ ] Commit
+- [x] Commit
 
 ---
 
@@ -516,6 +516,29 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 9'dan çıkanlar:**
+
+- **`comment_count` silmede azaltılmıyor** (bilinçli): silinen yorum ağaçta
+  `[silindi]` olarak duruyor, sayaç istemcinin çizdiği düğüm sayısıyla
+  tutarlı kalıyor. Faz 12'nin feed sıralaması bu semantiği varsayabilir.
+- **Tekil okuma kuralı içerik türüne göre ayrıştı:** `GET /posts/{id}`
+  silinmişte `410`, `GET /comments/{id}` ise `200` + `[silindi]`. Sebep
+  yorumun çocuklarını taşıması. Faz 14'te moderasyon uçları yazılırken bu
+  ayrım korunmalı.
+- **Yorumlarda `Idempotency-Key` yok** (yalnızca `POST /posts`'ta). Yorum
+  tekrarının bedeli düşük, hacmi yüksek; her yorumda Redis'e iki tur atmak
+  karşılığını vermezdi. Değişirse `actos_core::idempotency` hazır.
+- **Ağaç uçlarında `?fields=` desteklenmiyor:** filtre düğümün `replies`
+  anahtarını eleyip ağacı düzleştirebilir. Ağaç için alan seçimi ayrı bir
+  tasarım gerektiriyor — Faz 16'da (API dokümantasyonu) karara bağlanmalı.
+- **Performans notu (Faz 17):** her yorum eklemesi kök post satırını
+  `FOR UPDATE` ile kilitliyor, yani aynı posta yazan yorumlar serileşiyor.
+  Sayaç güncellemesi zaten o satırı kilitlediği için ek bir maliyet değil,
+  ama çok yorumlanan bir post için ölçülmeli.
+- `actor::paginate` ve `decode_cursor_with` artık sıralamayı çağırandan
+  alıyor; `Top`/`Hot` sıralamalı yeni listeler (Faz 12 feed) ikinci bir
+  sayfalama kopyası yazmadan bunları kullanabilir.
 
 **Faz 8'den çıkanlar:**
 
