@@ -304,7 +304,15 @@ pub struct Page<T> {
 /// `COUNT(*)` sorgusuna gerek kalmadan yanıtlar — fazladan çekilen tek satır
 /// varsa bir sonraki sayfa vardır, o satır yanıta dahil edilmeden atılır ve
 /// cursor, kalan son (yani `limit`'inci) satırdan türetilir.
-fn paginate<Row, T>(
+///
+/// `pub(crate)`: bu fonksiyon actor'e özel değil, genel bir sayfalama
+/// deseni — `crate::content::list_posts_by_actor` (Faz 7'den devredilen
+/// `GET /actors/{username}/posts`) de aynı `limit + 1` mantığını burada
+/// yeniden yazmak yerine bunu çağırıyor. Tam `pub` yapılmadı çünkü bu
+/// sadece crate-içi bir yeniden kullanım; HTTP katmanının (`actos-api`)
+/// buna doğrudan erişmesi için bir sebep yok, o zaten `Page<T>`'i
+/// `actos_core::actor`/`actos_core::content`'in dönüş tipi olarak görüyor.
+pub(crate) fn paginate<Row, T>(
     mut rows: Vec<Row>,
     limit: i64,
     row_id: impl Fn(&Row) -> i64,
@@ -343,7 +351,7 @@ fn paginate<Row, T>(
 /// (`CursorCodec::decode`), başka bir varyant zaten orada
 /// `CursorError::SortMismatch` ile reddedilir. Yine de panik yerine
 /// savunmacı bir `None` dönüşü tercih edildi.
-fn split_new_cursor(cursor: Option<Cursor>) -> (Option<DateTime<Utc>>, Option<i64>) {
+pub(crate) fn split_new_cursor(cursor: Option<Cursor>) -> (Option<DateTime<Utc>>, Option<i64>) {
     match cursor {
         Some(Cursor {
             sort: SortKey::New { created_at },
@@ -359,12 +367,15 @@ fn split_new_cursor(cursor: Option<Cursor>) -> (Option<DateTime<Utc>>, Option<i6
 /// [`get_profile`], [`list_followers`] ve [`list_following`] aynı kuralı
 /// paylaşıyor: silinmiş bir hesabın listelerine bakmak da profiline bakmak
 /// gibi `410 Gone` döner (bkz. [`get_profile`] üzerindeki gerekçe — aynı
-/// username hâlâ "var", sadece hesap silinmiş).
+/// username hâlâ "var", sadece hesap silinmiş). `crate::content::
+/// list_posts_by_actor` (`GET /actors/{username}/posts`) de bu kuralı
+/// birebir istiyor — bu yüzden `pub(crate)`: aynı "username var mı, canlı
+/// mı" kontrolünü content.rs'te yeniden yazmak yerine burayı çağırıyor.
 ///
 /// # Errors
 /// Kullanıcı adı hiç yoksa [`Error::NotFound`]; actor silinmişse
 /// [`Error::Gone`]; veritabanı hatası [`Error::Database`].
-async fn resolve_live_actor_id(pool: &PgPool, username: &str) -> Result<i64> {
+pub(crate) async fn resolve_live_actor_id(pool: &PgPool, username: &str) -> Result<i64> {
     let normalized = text::normalize_text(username);
 
     let row = sqlx::query!(

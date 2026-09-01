@@ -38,7 +38,9 @@ use serde_json::Value as JsonValue;
 use sqlx::{PgConnection, PgPool};
 
 use crate::{
+    actor::{Page, paginate, resolve_live_actor_id, split_new_cursor},
     auth::{ActorRecord, ActorType, AdminRole},
+    cursor::Cursor,
     error::{Error, Result},
     text,
 };
@@ -88,6 +90,13 @@ pub struct Content {
     pub title: Option<String>,
     pub body: String,
     pub body_format: BodyFormat,
+    /// Serbest biçimli ek veri (bkz. `migrations/0005_contents.up.sql` →
+    /// `contents.metadata` COMMENT'i). `create_post` bunu her zaman
+    /// [`normalize_metadata`]'dan geçmiş, geçerli bir JSON *nesnesi* olarak
+    /// yazar (`ck_contents_metadata_object` de bunu şema seviyesinde
+    /// zorluyor) — bu yüzden burada da her zaman `JsonValue::Object`,
+    /// hiçbir zaman başka bir JSON türü değil.
+    pub metadata: JsonValue,
     pub tags: Vec<String>,
     pub score: i32,
     pub upvotes: i32,
@@ -111,6 +120,7 @@ struct ContentRow {
     title: Option<String>,
     body: String,
     body_format: BodyFormat,
+    metadata: JsonValue,
     score: i32,
     upvotes: i32,
     downvotes: i32,
@@ -145,6 +155,7 @@ impl From<ContentRow> for Content {
             title: row.title,
             body: row.body,
             body_format: row.body_format,
+            metadata: row.metadata,
             tags: row.tags,
             score: row.score,
             upvotes: row.upvotes,
@@ -302,7 +313,11 @@ pub async fn create_post(
         author.id,
         title,
         body,
-        metadata,
+        // Klonlanıyor: aşağıdaki `Ok(Content { metadata, .. })` orijinal
+        // değeri (DB'ye ekstra bir `SELECT` atmadan) geri döndürmek için
+        // hâlâ ihtiyaç duyuyor — `query!` bağladığı argümanın sahipliğini
+        // alıyor.
+        metadata.clone(),
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -319,6 +334,7 @@ pub async fn create_post(
         title: Some(title),
         body,
         body_format: BodyFormat::Markdown,
+        metadata,
         tags,
         score: row.score,
         upvotes: row.upvotes,
@@ -365,6 +381,7 @@ pub async fn get_post(pool: &PgPool, id: i64) -> Result<Content> {
             contents.title,
             contents.body,
             contents.body_format AS "body_format: BodyFormat",
+            contents.metadata,
             contents.score,
             contents.upvotes,
             contents.downvotes,
@@ -565,4 +582,98 @@ pub async fn delete_post(pool: &PgPool, id: i64, actor_id: i64, roles: &[AdminRo
     tx.commit().await?;
 
     Ok(())
+}
+
+// --- Actor'e göre post listesi (Faz 7'den devir) ----------------------
+
+/// `GET /actors/{username}/posts`: bir actor'ün postları, en yeni önce.
+///
+/// **Silinmiş postlar listede hiç görünmez** — `get_post`'un tersine
+/// (satırı `410` ile ama var olarak taşıyan tekil okuma), burada
+/// `contents.deleted_at IS NULL` filtresi SQL seviyesinde uygulanıyor:
+/// bu bir liste ucu, silinmiş bir öğeyi `[silindi]` olarak satır içinde
+/// göstermek (bkz. `actos_types::content` modül dokümantasyonundaki Faz 9/12
+/// senaryosu) bu görevin kapsamında değil — PLAN.md bu uç için yalnızca "cursor'lu,
+/// ContentSummary döndürür" diyor, silinmiş postu maskeli göstermeyi değil.
+/// İleride bir yorum/feed listesi silinmiş öğeleri satır içinde göstermek
+/// isterse bu filtreyi kaldırıp [`Content::deleted_at`]'i kullanabilir; bu
+/// fonksiyon o davranışı şimdiden taahhüt etmiyor.
+///
+/// Sayfalama deseni `crate::actor`'daki `paginate`/`Page`/`limit + 1`
+/// deseninin birebir aynısı (bkz. o modülün dokümantasyonu) — burada
+/// yeniden icat edilmiyor, `pub(crate)` yapılıp buradan çağrılıyor.
+/// `resolve_live_actor_id` de aynı sebeple oradan alınıyor: "username var
+/// mı, canlı mı" kontrolü ve `410` kararı `get_profile`/`list_followers`
+/// ile birebir aynı kural, iki farklı yerde iki farklı kopyası olmamalı.
+///
+/// # Errors
+/// `username` hiç yoksa [`Error::NotFound`]; actor silinmişse
+/// [`Error::Gone`]; veritabanı hatası [`Error::Database`].
+pub async fn list_posts_by_actor(
+    pool: &PgPool,
+    username: &str,
+    cursor: Option<Cursor>,
+    limit: i64,
+) -> Result<Page<Content>> {
+    let actor_id = resolve_live_actor_id(pool, username).await?;
+    let (cursor_created_at, cursor_id) = split_new_cursor(cursor);
+
+    let rows = sqlx::query_as!(
+        ContentRow,
+        r#"
+        SELECT
+            contents.id,
+            contents.content_type AS "content_type: ContentType",
+            contents.title,
+            contents.body,
+            contents.body_format AS "body_format: BodyFormat",
+            contents.metadata,
+            contents.score,
+            contents.upvotes,
+            contents.downvotes,
+            contents.comment_count,
+            contents.created_at,
+            contents.edited_at,
+            contents.deleted_at,
+            actors.id AS author_id,
+            actors.username AS author_username,
+            actors.actor_type AS "author_actor_type: ActorType",
+            actors.display_name AS author_display_name,
+            actors.bio AS author_bio,
+            actors.created_at AS author_created_at,
+            actors.deleted_at AS author_deleted_at,
+            COALESCE(
+                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
+                '{}'
+            ) AS "tags!: Vec<String>"
+        FROM contents
+        JOIN actors ON actors.id = contents.actor_id
+        LEFT JOIN content_tags ON content_tags.content_id = contents.id
+        LEFT JOIN tags ON tags.id = content_tags.tag_id
+        WHERE contents.actor_id = $1
+          AND contents.content_type = 'post'::content_type
+          AND contents.deleted_at IS NULL
+          AND (
+              $2::timestamptz IS NULL
+              OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
+          )
+        GROUP BY contents.id, actors.id
+        ORDER BY contents.created_at DESC, contents.id DESC
+        LIMIT $4
+        "#,
+        actor_id,
+        cursor_created_at,
+        cursor_id,
+        limit + 1,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(paginate(
+        rows,
+        limit,
+        |row: &ContentRow| row.id,
+        |row: &ContentRow| row.created_at,
+        Content::from,
+    ))
 }

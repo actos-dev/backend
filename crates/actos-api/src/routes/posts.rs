@@ -14,6 +14,7 @@ use actos_core::{
     auth::ActorRecord,
     content as core_content,
     id::{Content as ContentIdKind, IdCodec},
+    idempotency::{Begin as IdempotencyBegin, StoredResponse},
 };
 use actos_types::{
     auth::ActorSummary,
@@ -21,24 +22,63 @@ use actos_types::{
 };
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::{
     auth::CurrentActor,
     error::ApiError,
+    fields,
+    routes::actors::{decode_cursor, parse_limit},
     routes::auth::{actor_summary, actor_type_str, encode_actor_id},
     state::AppState,
 };
 
+/// `Idempotency-Key` header'ının adı. `HeaderMap::get` zaten büyük/küçük
+/// harf duyarsız (bkz. `http` crate'i) — burada sabit bir `&str` olarak
+/// tutmak yalnızca yazım hatasını tek bir yere hapsetmek için.
+const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/posts", post(create_post)).route(
-        "/posts/{id}",
-        get(get_post).patch(update_post).delete(delete_post),
-    )
+    Router::new()
+        .route("/posts", post(create_post))
+        .route(
+            "/posts/{id}",
+            get(get_post).patch(update_post).delete(delete_post),
+        )
+        // Faz 7'den devir (bkz. PLAN.md Faz 8): `actos_core::content`'in
+        // fonksiyonunu çağırdığı ve `content_summary`/`fields` gibi bu
+        // dosyaya özel ortak dönüşümleri paylaştığı için mantıksal olarak
+        // burada — path'in `/actors/...` ile başlaması `actos-api`'de
+        // dosya/router ayrımını değiştirmiyor (bkz. `crate::routes::mod`
+        // dokümantasyonu, tüm alt router'lar tek bir ağaçta `merge` edilir).
+        .route("/actors/{username}/posts", get(list_actor_posts))
+}
+
+// --- Query param tipleri -------------------------------------------------
+
+/// `GET /posts/{id}?fields=...` query'si.
+#[derive(Debug, Deserialize)]
+struct PostFieldsQuery {
+    fields: Option<String>,
+}
+
+/// `GET /actors/{username}/posts?cursor=...&limit=...&fields=...` query'si.
+///
+/// `crate::routes::actors::PageQuery`'den farkı yalnızca `fields` alanı —
+/// ayrı bir struct olmasının sebebi bu (paylaşılan bir `PageQuery` + ayrı
+/// bir `fields` extractor'ı iki ayrı `Query<T>` extraction'ı gerektirirdi,
+/// axum bunu tek bir extractor'da birleştirmeyi kolaylaştırmıyor).
+#[derive(Debug, Deserialize)]
+struct ActorPostsQuery {
+    cursor: Option<String>,
+    limit: Option<String>,
+    fields: Option<String>,
 }
 
 // --- Ortak dönüşümler --------------------------------------------------
@@ -113,10 +153,22 @@ fn content_summary(
     };
 
     let deleted = content.deleted_at.is_some();
-    let (title, body) = if deleted {
-        (None, "[silindi]".to_owned())
+    // `title`/`body` ile aynı gerekçe: `metadata` de gerçek gövdenin bir
+    // parçası — bir link post'unun URL önizlemesi gibi veri taşıyabilir.
+    // Silinmiş bir içerik `[silindi]` gövdesiyle görünürken `metadata`'yı
+    // olduğu gibi bırakmak, maskelemeyi yarım bırakan bir yan kanal olurdu.
+    let (title, body, metadata) = if deleted {
+        (
+            None,
+            "[silindi]".to_owned(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        )
     } else {
-        (content.title.clone(), content.body.clone())
+        (
+            content.title.clone(),
+            content.body.clone(),
+            content.metadata.clone(),
+        )
     };
 
     Ok(ContentSummary {
@@ -127,6 +179,7 @@ fn content_summary(
         title,
         body,
         body_format: body_format_str(content.body_format).to_owned(),
+        metadata,
         tags: content.tags.clone(),
         score: content.score,
         upvotes: content.upvotes,
@@ -152,13 +205,64 @@ fn decode_content_id(raw: &str, id_codec: &IdCodec) -> Result<i64, Error> {
 
 // --- Handler'lar -----------------------------------------------------------
 
+/// Bir [`StoredResponse`]'u (daha önce tamamlanmış bir idempotent isteğin
+/// saklanan sonucu) aynı HTTP yanıtına çevirir — istemci bunu ilk isteğin
+/// yanıtından ayırt edemez (bkz. `actos_core::idempotency` modül
+/// dokümantasyonu: "aynı `201`, aynı gövde, aynı `Location`").
+fn stored_response_to_http(stored: StoredResponse) -> Response {
+    let status = StatusCode::from_u16(stored.status).unwrap_or(StatusCode::OK);
+    let mut response = (status, Json(stored.body)).into_response();
+    if let Some(location) = &stored.location
+        && let Ok(value) = HeaderValue::from_str(location)
+    {
+        response.headers_mut().insert(header::LOCATION, value);
+    }
+    response
+}
+
 /// `POST /posts` → `201` + `Location: /posts/{id}`.
+///
+/// **`Idempotency-Key` desteği** (bkz. PLAN.md Faz 8, "buglu ajanlar için
+/// hayat kurtarıcı"): header verilmişse, aynı actor + aynı key ile daha
+/// önce tamamlanmış bir istek varsa yeni bir post oluşturmadan **aynı**
+/// yanıtı aynen döner; başka bir istek aynı anda işleniyorsa `409`
+/// (bkz. `actos_core::idempotency::Begin::InProgress` dokümanı — kararın
+/// gerekçesi burada değil orada, Redis'e dokunan katmanda). Header hiç
+/// verilmemişse davranış birinci turdakiyle birebir aynı — bu bütünüyle
+/// isteğe bağlı bir katman, zorunlu değil.
 async fn create_post(
     current: CurrentActor,
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<CreatePostRequest>,
 ) -> Result<Response, ApiError> {
+    let idempotency_key = headers
+        .get(IDEMPOTENCY_KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+
+    if let Some(key) = &idempotency_key {
+        match state
+            .idempotency()
+            .begin(current.actor.id, key)
+            .await
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?
+        {
+            IdempotencyBegin::Completed(stored) => {
+                return Ok(stored_response_to_http(stored));
+            }
+            IdempotencyBegin::InProgress => {
+                return Err(ApiError::new(Error::Conflict(
+                    "aynı Idempotency-Key ile bir istek hâlâ işleniyor".to_owned(),
+                ))
+                .with_request_id(&headers));
+            }
+            // Yer tutucu bizim koyduğumuz taze bir kayıt — isteği normal
+            // şekilde işleyip aşağıda `complete` ile sonucu yazıyoruz.
+            IdempotencyBegin::Start => {}
+        }
+    }
+
     let content = core_content::create_post(
         state.db(),
         &current.actor,
@@ -174,6 +278,28 @@ async fn create_post(
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let location = format!("/posts/{}", summary.id);
+
+    if let Some(key) = &idempotency_key {
+        // Gövdeyi `StoredResponse` için de aynı struct'tan (`summary`)
+        // üretiyoruz — istemciye giden yanıtla saklanan yanıtın birbirinden
+        // sapması (ör. burada bir alan eklenip orada unutulması) yapısal
+        // olarak imkânsız, ikisi de tek bir serialize'dan geliyor.
+        if let Ok(body) = serde_json::to_value(&summary) {
+            state
+                .idempotency()
+                .complete(
+                    current.actor.id,
+                    key,
+                    &StoredResponse {
+                        status: StatusCode::CREATED.as_u16(),
+                        location: Some(location.clone()),
+                        body,
+                    },
+                )
+                .await;
+        }
+    }
+
     let mut response = (StatusCode::CREATED, Json(summary)).into_response();
     if let Ok(value) = HeaderValue::from_str(&location) {
         response.headers_mut().insert(header::LOCATION, value);
@@ -185,8 +311,9 @@ async fn create_post(
 async fn get_post(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<PostFieldsQuery>,
     headers: HeaderMap,
-) -> Result<Json<ContentSummary>, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     let content_id = decode_content_id(&id, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
@@ -197,7 +324,10 @@ async fn get_post(
     let summary = content_summary(&content, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    Ok(Json(summary))
+    let selected_fields = fields::parse_fields(query.fields.as_deref());
+    let json = fields::apply_fields(&summary, selected_fields.as_deref(), &headers)?;
+
+    Ok(Json(json))
 }
 
 /// `PATCH /posts/{id}` → `200`. Sahibi değilse `403`, yoksa `404`, silinmişse
@@ -244,4 +374,48 @@ async fn delete_post(
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /actors/{username}/posts` → `200` (cursor'lu, en yeni post önce),
+/// `410` (actor silinmiş), `404` (böyle bir username hiç yok). Silinmiş
+/// postlar listede görünmez — bkz. `actos_core::content::
+/// list_posts_by_actor` dokümanı.
+///
+/// Yanıt gövdesi `actos_types::content::PostListResponse`'un şekliyle
+/// (`{"posts": [...], "next_cursor": ...}`) aynı, ama `Json<Value>` olarak
+/// elle kuruluyor: `?fields=` yalnızca `posts` dizisindeki her öğeye
+/// uygulanıyor, sarmalayıcıya değil (bkz. `crate::fields` modül
+/// dokümantasyonu) — bu da öğe başına ayrı bir `apply_fields` çağrısı
+/// gerektiriyor, tek bir `Json<PostListResponse>` ile ifade edilemez.
+async fn list_actor_posts(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+    Query(query): Query<ActorPostsQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let limit = parse_limit(query.limit, &headers)?;
+    let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
+
+    let page = core_content::list_posts_by_actor(state.db(), &username, cursor, limit)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let selected_fields = fields::parse_fields(query.fields.as_deref());
+
+    let posts = page
+        .items
+        .iter()
+        .map(|content| {
+            let summary = content_summary(content, state.id_codec())
+                .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+            fields::apply_fields(&summary, selected_fields.as_deref(), &headers)
+        })
+        .collect::<Result<Vec<Value>, ApiError>>()?;
+
+    let next_cursor = page.next_cursor.map(|c| state.cursor_codec().encode(&c));
+
+    Ok(Json(serde_json::json!({
+        "posts": posts,
+        "next_cursor": next_cursor,
+    })))
 }

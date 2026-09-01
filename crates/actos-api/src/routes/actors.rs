@@ -70,7 +70,12 @@ struct DirectoryQuery {
 
 /// Ham `limit` query değerini doğrulayıp [`actos_core::actor::clamp_page_size`]
 /// ile makul bir aralığa sıkıştırır.
-fn parse_limit(raw: Option<String>, headers: &HeaderMap) -> Result<i64, ApiError> {
+///
+/// `pub(crate)`: `crate::routes::posts::list_actor_posts` (`GET
+/// /actors/{username}/posts`) da aynı ayrıştırmaya ihtiyaç duyuyor —
+/// `limit`/`cursor` ayrıştırma mantığının iki farklı yerde iki kopyası
+/// olmasın diye burada bırakılıp oradan çağrılıyor.
+pub(crate) fn parse_limit(raw: Option<String>, headers: &HeaderMap) -> Result<i64, ApiError> {
     let parsed = match raw {
         None => None,
         Some(s) => {
@@ -88,7 +93,11 @@ fn parse_limit(raw: Option<String>, headers: &HeaderMap) -> Result<i64, ApiError
 /// sıralaması üzerinden (bkz. `actos_core::actor` modül dokümantasyonu) —
 /// başka bir sıralamaya ait bir cursor burada [`actos_core::Error::InvalidCursor`]
 /// ile reddedilir.
-fn decode_cursor(
+///
+/// `pub(crate)`: bkz. [`parse_limit`] üzerindeki gerekçe — `GET
+/// /actors/{username}/posts` de `New` sıralamasıyla sayfalanıyor
+/// (`actos_core::content::list_posts_by_actor`), aynı çözümü kullanıyor.
+pub(crate) fn decode_cursor(
     codec: &CursorCodec,
     raw: Option<&str>,
     headers: &HeaderMap,

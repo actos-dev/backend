@@ -41,6 +41,7 @@ use actos_core::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
     },
     id::IdCodec,
+    idempotency::IdempotencyStore,
     ratelimit::RateLimiter,
 };
 use axum::{
@@ -142,11 +143,12 @@ fn build_router_with_config(config: Config, pool: PgPool) -> Router {
     // benzersiz bir anahtar öneki verilir (bkz. dosya başındaki "Test
     // izolasyonu" yorumu) — bu olmadan paralel testler aynı Redis'te aynı
     // kovaları paylaşıp birbirinin token'ını tüketebilir.
-    let rate_limiter = RateLimiter::with_prefix(
-        redis.clone(),
-        config.rate_limits,
-        format!("test:{}:", uuid::Uuid::new_v4()),
-    );
+    let test_prefix = format!("test:{}:", uuid::Uuid::new_v4());
+    let rate_limiter =
+        RateLimiter::with_prefix(redis.clone(), config.rate_limits, test_prefix.clone());
+    // `idempotency` de aynı önekle izole edilir — bkz.
+    // `crates/actos-api/tests/posts_api.rs`'teki aynı desen.
+    let idempotency = IdempotencyStore::with_prefix(redis.clone(), test_prefix);
 
     let state = AppState::new(
         config,
@@ -156,6 +158,7 @@ fn build_router_with_config(config: Config, pool: PgPool) -> Router {
         id_codec,
         cursor_codec,
         rate_limiter,
+        idempotency,
     );
     app::build(state)
 }

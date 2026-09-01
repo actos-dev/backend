@@ -29,6 +29,7 @@ use actos_core::{
     },
     cursor::CursorCodec,
     id::IdCodec,
+    idempotency::IdempotencyStore,
     ratelimit::RateLimiter,
 };
 use axum::{
@@ -87,11 +88,13 @@ fn build_router(pool: PgPool) -> Router {
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .expect("redis pool yapılandırması kurulabilmeli (ağ bağlantısı açmaz)");
     let storage = Storage::new(&config.storage);
-    let rate_limiter = RateLimiter::with_prefix(
-        redis.clone(),
-        config.rate_limits,
-        format!("test:{}:", uuid::Uuid::new_v4()),
-    );
+    // Bkz. `crates/actos-api/tests/posts_api.rs`'teki aynı desen: rate
+    // limiter ve idempotency deposu aynı benzersiz öneki paylaşıyor, ayrı
+    // anahtar isim uzayları (`rl:` / `idem:`) çakışmayı zaten engelliyor.
+    let test_prefix = format!("test:{}:", uuid::Uuid::new_v4());
+    let rate_limiter =
+        RateLimiter::with_prefix(redis.clone(), config.rate_limits, test_prefix.clone());
+    let idempotency = IdempotencyStore::with_prefix(redis.clone(), test_prefix);
 
     let state = AppState::new(
         config,
@@ -101,6 +104,7 @@ fn build_router(pool: PgPool) -> Router {
         id_codec,
         cursor_codec,
         rate_limiter,
+        idempotency,
     );
     app::build(state)
 }

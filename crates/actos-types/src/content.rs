@@ -67,6 +67,21 @@ pub struct ContentSummary {
     pub body: String,
     /// `"markdown"` veya `"plain"`.
     pub body_format: String,
+    /// Serbest biçimli ek veri, her zaman bir JSON nesnesi (veri yoksa
+    /// `{}`).
+    ///
+    /// **Karar: `{}` iken de alan hep gösterilir, hiçbir zaman
+    /// atlanmıyor.** Alternatif ("boşsa alanı hiç serialize etme",
+    /// `#[serde(skip_serializing_if = "...")]`) bant genişliğinde birkaç
+    /// bayt kazandırırdı, ama bu DTO'daki `tags` (post'un hiç etiketi
+    /// yoksa da `[]` olarak hep dolu) ile aynı ilkeyi bozardı: bir alanın
+    /// var/yok'u onun *tipinden* değil *içeriğinden* etkileniyorsa,
+    /// istemci (özellikle bunu ayrıştıran bir ajan) her alan için iki ayrı
+    /// kod yolu yazmak zorunda kalır ("varsa oku, yoksa `{}` varsay").
+    /// Sabit bir şema — alan her zaman orada, gerekirse boş — hem
+    /// `?fields=metadata` ile açıkça istenebilmesini hem de istemci
+    /// tarafında tek bir ayrıştırma kuralını garanti eder.
+    pub metadata: serde_json::Value,
     pub tags: Vec<String>,
     pub score: i32,
     pub upvotes: i32,
@@ -107,4 +122,23 @@ pub struct CreatePostRequest {
 pub struct UpdatePostRequest {
     pub title: Option<String>,
     pub body: Option<String>,
+}
+
+/// `GET /actors/{username}/posts` yanıt gövdesi.
+///
+/// `actos_types::actor::ActorListResponse` ile aynı sarmalayıcı şekli
+/// (öğe listesi + varsa sonraki sayfanın cursor'ı) — burada alan adı
+/// `posts` (`actors` değil), çünkü uç özellikle post'lara özgü.
+///
+/// **`?fields=` ile alan seçimi bu sarmalayıcıya değil, `posts` içindeki
+/// her öğeye uygulanır** (bkz. `actos-api/src/fields.rs` modül
+/// dokümantasyonu) — yani HTTP katmanı bu tipi hiç kullanmadan, filtrelenmiş
+/// öğelerle aynı şekle (`{"posts": [...], "next_cursor": ...}`) sahip ham
+/// bir `serde_json::Value` üretebilir. Tip yine de burada tanımlı: SDK'lar
+/// filtresiz (tam) yanıtı bu struct'a deserialize edebilsin diye.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostListResponse {
+    pub posts: Vec<ContentSummary>,
+    /// `None` ise bu son sayfadır.
+    pub next_cursor: Option<String>,
 }

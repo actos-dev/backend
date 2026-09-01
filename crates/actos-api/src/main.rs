@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 use actos_api::{app, state};
 use actos_core::{
-    Config, Storage, cache, cursor::CursorCodec, db, id::IdCodec, ratelimit::RateLimiter,
+    Config, Storage, cache, cursor::CursorCodec, db, id::IdCodec, idempotency::IdempotencyStore,
+    ratelimit::RateLimiter,
 };
 use tower::Layer as _;
 use tower_http::normalize_path::NormalizePathLayer;
@@ -47,6 +48,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // `redis.clone()` ucuz: `deadpool_redis::Pool` zaten `Arc` tabanlı.
     let rate_limiter = RateLimiter::new(redis.clone(), config.rate_limits);
+    let idempotency = IdempotencyStore::new(redis.clone());
 
     let addr = config.server.addr;
     let state = state::AppState::new(
@@ -57,6 +59,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         id_codec,
         cursor_codec,
         rate_limiter,
+        idempotency,
     );
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın

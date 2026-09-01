@@ -15,6 +15,7 @@ use actos_core::{
     },
     cursor::CursorCodec,
     id::IdCodec,
+    idempotency::IdempotencyStore,
     ratelimit::RateLimiter,
 };
 use axum::{
@@ -72,11 +73,16 @@ fn build_router(pool: PgPool) -> Router {
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .expect("redis pool yapılandırması kurulabilmeli (ağ bağlantısı açmaz)");
     let storage = Storage::new(&config.storage);
-    let rate_limiter = RateLimiter::with_prefix(
-        redis.clone(),
-        config.rate_limits,
-        format!("test:{}:", uuid::Uuid::new_v4()),
-    );
+    // Aynı benzersiz önek hem rate limiter hem idempotency deposu için:
+    // ikisi de aynı gerçek Redis'i (`127.0.0.1:3102`) paylaşan paralel
+    // testler arasında izolasyon istiyor (bkz. `actos_core::idempotency`
+    // ve `actos_core::ratelimit` modüllerindeki "yalnızca testler için"
+    // gerekçesi) — farklı anahtar isim uzayları (`rl:` / `idem:`) zaten
+    // ayrık olduğu için aynı öneki paylaşmaları çakışmaya yol açmaz.
+    let test_prefix = format!("test:{}:", uuid::Uuid::new_v4());
+    let rate_limiter =
+        RateLimiter::with_prefix(redis.clone(), config.rate_limits, test_prefix.clone());
+    let idempotency = IdempotencyStore::with_prefix(redis.clone(), test_prefix);
 
     let state = AppState::new(
         config,
@@ -86,6 +92,7 @@ fn build_router(pool: PgPool) -> Router {
         id_codec,
         cursor_codec,
         rate_limiter,
+        idempotency,
     );
     app::build(state)
 }
@@ -149,6 +156,25 @@ fn auth_req(method: &str, uri: &str, token: &str) -> Request<Body> {
         .uri(uri)
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())
+        .expect("istek kurulabilmeli")
+}
+
+/// `auth_json_req` + `Idempotency-Key` header'ı — idempotency testleri için.
+#[allow(clippy::expect_used)]
+fn auth_json_req_idem(
+    method: &str,
+    uri: &str,
+    token: &str,
+    idempotency_key: &str,
+    body: Value,
+) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("Idempotency-Key", idempotency_key)
+        .body(Body::from(body.to_string()))
         .expect("istek kurulabilmeli")
 }
 
@@ -693,4 +719,451 @@ async fn silinmis_yazarin_postu_maskeli_gorunur(pool: PgPool) {
     // Post'un kendi gövdesi/başlığı yazarın silinmesinden etkilenmemeli.
     assert_eq!(body["title"], "yazarı silinecek post");
     assert_eq!(body["deleted"], false);
+}
+
+// --- Idempotency-Key -------------------------------------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn idempotency_ikinci_istek_yeni_post_yaratmaz_ayni_yaniti_doner(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "idem_author").await;
+
+    let idem_key = "retry-key-1";
+    let body = json!({ "title": "idempotent post", "body": "gövde", "tags": ["rust"] });
+
+    let (status1, body1, headers1) = send(
+        &router,
+        auth_json_req_idem("POST", "/posts", &api_key, idem_key, body.clone()),
+    )
+    .await;
+    assert_eq!(status1, StatusCode::CREATED, "{body1}");
+    let location1 = headers1
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+
+    let (status2, body2, headers2) = send(
+        &router,
+        auth_json_req_idem("POST", "/posts", &api_key, idem_key, body),
+    )
+    .await;
+    assert_eq!(status2, StatusCode::CREATED, "{body2}");
+    assert_eq!(
+        body1, body2,
+        "aynı Idempotency-Key ile ikinci istek birincinin gövdesini aynen dönmeli"
+    );
+    let location2 = headers2
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    assert_eq!(location1, location2, "Location header'ı da aynı olmalı");
+
+    let count: i64 = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!" FROM contents WHERE title = 'idempotent post'"#
+    )
+    .fetch_one(&raw_pool)
+    .await
+    .expect("sayım sorgulanabilmeli");
+    assert_eq!(count, 1, "ikinci istek yeni bir post oluşturmamalı");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn idempotency_farkli_actor_ayni_key_ayri_postlar_uretir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, key_a) = seed_actor(&raw_pool, "idem_actor_a").await;
+    let (_, key_b) = seed_actor(&raw_pool, "idem_actor_b").await;
+
+    // Bilerek AYNI Idempotency-Key — anahtar kapsamının actor'ü içerdiğini
+    // doğruluyoruz (bkz. `actos_core::idempotency` modül dokümantasyonu
+    // "Anahtar kapsamı" bölümü): iki farklı actor aynı değeri gönderse de
+    // birbirinin postunu geri almamalı.
+    let idem_key = "shared-key-across-actors";
+
+    let (status_a, body_a, _) = send(
+        &router,
+        auth_json_req_idem(
+            "POST",
+            "/posts",
+            &key_a,
+            idem_key,
+            json!({ "title": "A'nın postu", "body": "gövde a", "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status_a, StatusCode::CREATED, "{body_a}");
+
+    let (status_b, body_b, _) = send(
+        &router,
+        auth_json_req_idem(
+            "POST",
+            "/posts",
+            &key_b,
+            idem_key,
+            json!({ "title": "B'nin postu", "body": "gövde b", "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status_b, StatusCode::CREATED, "{body_b}");
+
+    assert_ne!(
+        body_a["id"], body_b["id"],
+        "aynı Idempotency-Key farklı actor'lerin postlarını birbirine karıştırmamalı"
+    );
+    assert_eq!(body_a["title"], "A'nın postu");
+    assert_eq!(body_b["title"], "B'nin postu");
+
+    let count: i64 = sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!" FROM contents"#)
+        .fetch_one(&raw_pool)
+        .await
+        .expect("sayım sorgulanabilmeli");
+    assert_eq!(count, 2, "iki ayrı post oluşmalı");
+}
+
+/// Aynı anahtarla eşzamanlı iki istek: `tokio::join!` iki isteği aynı anda
+/// başlatıyor, ikisi de Redis/Postgres'e giden `await` noktalarında
+/// birbirine kesişiyor — bu, `SET NX` atomikliğinin gerçekten çalıştığını
+/// (yalnızca biri yer tutucuyu koyabiliyor) doğrulayan gerçek bir yarış.
+/// Asıl doğrulanan değişmez: sonuçta **tam olarak bir** post satırı
+/// oluşuyor, iki isteğin hangisinin `Start`/`InProgress` aldığı
+/// (zamanlamaya bağlı, deterministik değil) değil.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn idempotency_eszamanli_cift_istek_tek_post_uretir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "idem_concurrent_author").await;
+
+    let idem_key = "concurrent-key-1";
+    let body = json!({ "title": "eşzamanlı post", "body": "gövde", "tags": [] });
+
+    let req1 = auth_json_req_idem("POST", "/posts", &api_key, idem_key, body.clone());
+    let req2 = auth_json_req_idem("POST", "/posts", &api_key, idem_key, body);
+
+    let (r1, r2) = tokio::join!(send(&router, req1), send(&router, req2));
+
+    for (status, body, _) in [&r1, &r2] {
+        assert!(
+            *status == StatusCode::CREATED || *status == StatusCode::CONFLICT,
+            "beklenmeyen durum kodu {status}: {body}"
+        );
+    }
+    assert!(
+        r1.0 == StatusCode::CREATED || r2.0 == StatusCode::CREATED,
+        "en az bir istek başarıyla post oluşturmalı: {:?} / {:?}",
+        r1.0,
+        r2.0
+    );
+    if r1.0 == StatusCode::CREATED && r2.0 == StatusCode::CREATED {
+        assert_eq!(r1.1, r2.1, "iki 201 aynı gövdeyi taşımalı");
+    }
+
+    let count: i64 = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!" FROM contents WHERE title = 'eşzamanlı post'"#
+    )
+    .fetch_one(&raw_pool)
+    .await
+    .expect("sayım sorgulanabilmeli");
+    assert_eq!(
+        count, 1,
+        "eşzamanlı iki istek yalnızca bir post satırı üretmeli"
+    );
+}
+
+// --- Alan seçimi (`?fields=`) ----------------------------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn get_post_fields_istenen_alanlari_donuyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "fields_author").await;
+
+    let (_, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "alan seçimi", "body": "gövde", "tags": ["rust"] }),
+        ),
+    )
+    .await;
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", &format!("/posts/{id}?fields=id,title,score")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let obj = body.as_object().expect("nesne olmalı");
+    assert_eq!(obj.len(), 3, "yalnızca istenen 3 alan olmalı: {body}");
+    assert_eq!(obj["id"], id);
+    assert_eq!(obj["title"], "alan seçimi");
+    assert_eq!(obj["score"], 0);
+    assert!(
+        !obj.contains_key("body"),
+        "istenmeyen alan sızmamalı: {body}"
+    );
+    assert!(
+        !obj.contains_key("tags"),
+        "istenmeyen alan sızmamalı: {body}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn get_post_fields_gecersiz_alan_400_doner(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "fields_invalid_author").await;
+
+    let (_, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "geçersiz alan", "body": "gövde", "tags": [] }),
+        ),
+    )
+    .await;
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", &format!("/posts/{id}?fields=id,boyle_bir_alan_yok")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED");
+}
+
+// --- GET /actors/{username}/posts (Faz 7'den devir) ------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_postlari_cursorlu_ikinci_sayfa_doner(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "list_posts_author").await;
+
+    for i in 0..3 {
+        let (status, body, _) = send(
+            &router,
+            auth_json_req(
+                "POST",
+                "/posts",
+                &api_key,
+                json!({ "title": format!("post {i}"), "body": "gövde", "tags": [] }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", "/actors/list_posts_author/posts?limit=2"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let posts = body["posts"].as_array().expect("posts dizi olmalı");
+    assert_eq!(posts.len(), 2, "{body}");
+    // En yeni önce: son eklenen "post 2" ilk sayfada olmalı.
+    assert_eq!(posts[0]["title"], "post 2", "{body}");
+    assert_eq!(posts[1]["title"], "post 1", "{body}");
+    let next_cursor = body["next_cursor"]
+        .as_str()
+        .expect("ilk sayfada sonraki cursor olmalı")
+        .to_owned();
+
+    let (status2, body2, _) = send(
+        &router,
+        empty_req(
+            "GET",
+            &format!("/actors/list_posts_author/posts?limit=2&cursor={next_cursor}"),
+        ),
+    )
+    .await;
+    assert_eq!(status2, StatusCode::OK, "{body2}");
+    let posts2 = body2["posts"].as_array().expect("posts dizi olmalı");
+    assert_eq!(posts2.len(), 1, "{body2}");
+    assert_eq!(posts2[0]["title"], "post 0", "{body2}");
+    assert!(
+        body2["next_cursor"].is_null(),
+        "ikinci sayfa son sayfa olmalı: {body2}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_postlari_silinmis_post_listede_gorunmuyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "list_deleted_author").await;
+
+    let (_, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "silinecek", "body": "gövde", "tags": [] }),
+        ),
+    )
+    .await;
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "kalacak", "body": "gövde", "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, _, _) = send(
+        &router,
+        auth_req("DELETE", &format!("/posts/{id}"), &api_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", "/actors/list_deleted_author/posts"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let posts = body["posts"].as_array().expect("posts dizi olmalı");
+    assert_eq!(posts.len(), 1, "silinmiş post listede görünmemeli: {body}");
+    assert_eq!(posts[0]["title"], "kalacak");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_postlari_silinmis_actor_410_doner(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (author_id, _) = seed_actor(&raw_pool, "list_gone_author").await;
+
+    sqlx::query!(
+        r#"UPDATE actors SET deleted_at = now() WHERE id = $1"#,
+        author_id,
+    )
+    .execute(&raw_pool)
+    .await
+    .expect("actor silinebilmeli");
+
+    let (status, body, _) = send(&router, empty_req("GET", "/actors/list_gone_author/posts")).await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_postlari_fields_listede_ogelere_uygulaniyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "list_fields_author").await;
+
+    let (status, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "alan filtreli", "body": "gövde", "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", "/actors/list_fields_author/posts?fields=id,title"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let posts = body["posts"].as_array().expect("posts dizi olmalı");
+    assert_eq!(posts.len(), 1, "{body}");
+    let obj = posts[0].as_object().expect("öğe nesne olmalı");
+    assert_eq!(obj.len(), 2, "yalnızca istenen 2 alan olmalı: {body}");
+    assert!(obj.contains_key("id"));
+    assert!(obj.contains_key("title"));
+    // Sarmalayıcı (`next_cursor`) filtreden etkilenmemeli — bkz.
+    // `crate::fields` modül dokümantasyonu "Liste yanıtlarında" bölümü.
+    assert!(
+        body.get("next_cursor").is_some(),
+        "sarmalayıcı alanı hâlâ orada olmalı: {body}"
+    );
+}
+
+// --- metadata gidiş-dönüşü --------------------------------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn metadata_yazilip_okunuyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "metadata_author").await;
+
+    let sent_metadata = json!({
+        "url": "https://example.com",
+        "preview": { "title": "örnek" },
+    });
+
+    let (status, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({
+                "title": "metadata testi",
+                "body": "gövde",
+                "tags": [],
+                "metadata": sent_metadata,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        created["metadata"], sent_metadata,
+        "POST yanıtı gönderilen metadata'yı aynen içermeli: {created}"
+    );
+
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["metadata"], sent_metadata,
+        "GET /posts/{{id}} metadata'yı geri döndürmeli: {body}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn metadata_verilmezse_bos_obje_donuyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "metadata_empty_author").await;
+
+    let (status, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "metadatasız", "body": "gövde", "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["metadata"], json!({}), "{created}");
+
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["metadata"], json!({}), "{body}");
 }

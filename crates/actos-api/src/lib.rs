@@ -10,6 +10,7 @@
 pub mod app;
 pub mod auth;
 pub mod error;
+pub mod fields;
 pub mod middleware;
 pub mod routes;
 pub mod state;

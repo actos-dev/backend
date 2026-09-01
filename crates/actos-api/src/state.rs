@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use actos_core::{Config, Storage, cursor::CursorCodec, id::IdCodec, ratelimit::RateLimiter};
+use actos_core::{
+    Config, Storage, cursor::CursorCodec, id::IdCodec, idempotency::IdempotencyStore,
+    ratelimit::RateLimiter,
+};
 use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 
@@ -28,9 +31,21 @@ struct Inner {
     // görevlere (`tokio::spawn`) taşımak için ayrıca sahipli bir `Arc`
     // klonuna ihtiyaç duyuyor (bkz. `Self::rate_limiter_handle`).
     rate_limiter: Arc<RateLimiter>,
+    // Aynı gerekçeyle `Arc`: `IdempotencyStore` de klonlanabilir olmak
+    // zorunda değil, tek örneği `AppState` içinde paylaşılıyor.
+    idempotency: Arc<IdempotencyStore>,
 }
 
 impl AppState {
+    // `AppState::new` bu uygulamanın **tüm** paylaşılan bağımlılıklarını
+    // bir araya getiren tek yer — parametre sayısının kendisi bir kod
+    // kokusu değil, bu fonksiyonun görevinin doğal sonucu (bkz. `main.rs`
+    // ve `tests/*.rs`'teki tek çağıran taraflar: hepsi zaten adlandırılmış
+    // yerel değişkenlerden çağırıyor, pozisyonel argüman karışıklığı riski
+    // yok). Bunları ayrı bir "builder" ya da ara struct'a bölmek burada
+    // gerçek bir okunabilirlik kazancı sağlamadan bir dolaylama katmanı
+    // eklerdi.
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         config: Config,
@@ -40,6 +55,7 @@ impl AppState {
         id_codec: IdCodec,
         cursor_codec: CursorCodec,
         rate_limiter: RateLimiter,
+        idempotency: IdempotencyStore,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -50,6 +66,7 @@ impl AppState {
                 id_codec,
                 cursor_codec,
                 rate_limiter: Arc::new(rate_limiter),
+                idempotency: Arc::new(idempotency),
             }),
         }
     }
@@ -95,5 +112,10 @@ impl AppState {
     #[must_use]
     pub fn rate_limiter_handle(&self) -> Arc<RateLimiter> {
         Arc::clone(&self.inner.rate_limiter)
+    }
+
+    #[must_use]
+    pub fn idempotency(&self) -> &IdempotencyStore {
+        &self.inner.idempotency
     }
 }
