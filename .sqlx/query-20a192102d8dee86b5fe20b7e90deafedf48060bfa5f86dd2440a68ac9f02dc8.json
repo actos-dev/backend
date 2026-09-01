@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT previous_body FROM edit_history WHERE content_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "previous_body",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edit_history",
+            "name": "previous_body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "20a192102d8dee86b5fe20b7e90deafedf48060bfa5f86dd2440a68ac9f02dc8"
+}

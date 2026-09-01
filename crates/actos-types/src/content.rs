@@ -142,3 +142,72 @@ pub struct PostListResponse {
     /// `None` ise bu son sayfadır.
     pub next_cursor: Option<String>,
 }
+
+// --- Yorumlar (Faz 9) ------------------------------------------------------
+
+/// `POST /posts/{id}/comments` isteği.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateCommentRequest {
+    pub body: String,
+    /// Verilmezse yorum post'un doğrudan çocuğu olur; verilirse o yoruma
+    /// yanıt olur. Dış id (`c_...`) biçiminde.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+/// `PATCH /comments/{id}` isteği.
+///
+/// Post'un `PATCH`'inin aksine `Option` değil: yorumların düzenlenebilecek
+/// tek alanı gövde, dolayısıyla "hangi alan gönderildi" ayrımına gerek yok
+/// — gövdesiz bir yorum güncellemesi zaten anlamsız.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateCommentRequest {
+    pub body: String,
+}
+
+/// Bir yorum ağacındaki tek düğüm: içeriğin kendisi + doğrudan yanıtları.
+///
+/// [`ContentSummary`] alanları `flatten` ile düğümün kendisine açılıyor,
+/// ayrı bir `content` sarmalayıcısı yok: istemci (özellikle bir ajan) bir
+/// yorumu okurken `node.body` yazabilmeli, `node.content.body` değil.
+/// `replies` bu düz alanların yanına eklenen tek fazladan anahtar.
+///
+/// **Boş `replies` yine de gönderiliyor** (atlanmıyor): bir ajanın
+/// "yanıtlar alanı yok mu, yoksa boş mu" ayrımını yapmak zorunda kalmaması
+/// için — her düğümde aynı şekil.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentNodeResponse {
+    #[serde(flatten)]
+    pub content: ContentSummary,
+    pub replies: Vec<CommentNodeResponse>,
+}
+
+/// `GET /posts/{id}/comments` yanıtı.
+///
+/// `next_cursor` **yalnızca üst seviye yorumları** sayfalar; iç içe
+/// yanıtlar sayfalanmaz (bkz. `actos_core::comment::list_comment_tree`).
+/// Daha derin bir alt ağaç `?parent=<id>` ile ayrıca çekilir.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentThreadResponse {
+    pub comments: Vec<CommentNodeResponse>,
+    /// `None` ise bu son sayfadır.
+    pub next_cursor: Option<String>,
+}
+
+/// `GET /comments/{id}` yanıtı: yorum + kökten kendisine kadar ata zinciri.
+///
+/// `ancestors` kökten başlar (ilk öğe her zaman post'tur) ve yorumun
+/// kendisini **içermez** — bir breadcrumb'ın doğal sırası bu.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentDetailResponse {
+    pub comment: ContentSummary,
+    pub ancestors: Vec<ContentSummary>,
+}
+
+/// `GET /actors/{username}/comments` yanıtı (Faz 7'den devir).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommentListResponse {
+    pub comments: Vec<ContentSummary>,
+    /// `None` ise bu son sayfadır.
+    pub next_cursor: Option<String>,
+}

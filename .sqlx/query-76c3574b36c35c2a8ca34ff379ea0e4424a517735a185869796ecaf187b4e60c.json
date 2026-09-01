@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE contents\n        SET comment_count = comment_count + 1\n        WHERE id IN (\n            SELECT ata.id\n            FROM contents AS ata\n            JOIN contents AS yeni ON yeni.id = $1\n            WHERE ata.path @> yeni.path AND ata.id <> yeni.id\n            ORDER BY ata.id\n            FOR UPDATE OF ata\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "76c3574b36c35c2a8ca34ff379ea0e4424a517735a185869796ecaf187b4e60c"
+}

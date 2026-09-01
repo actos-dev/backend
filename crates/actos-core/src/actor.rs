@@ -307,16 +307,23 @@ pub struct Page<T> {
 ///
 /// `pub(crate)`: bu fonksiyon actor'e özel değil, genel bir sayfalama
 /// deseni — `crate::content::list_posts_by_actor` (Faz 7'den devredilen
-/// `GET /actors/{username}/posts`) de aynı `limit + 1` mantığını burada
-/// yeniden yazmak yerine bunu çağırıyor. Tam `pub` yapılmadı çünkü bu
-/// sadece crate-içi bir yeniden kullanım; HTTP katmanının (`actos-api`)
-/// buna doğrudan erişmesi için bir sebep yok, o zaten `Page<T>`'i
-/// `actos_core::actor`/`actos_core::content`'in dönüş tipi olarak görüyor.
+/// `GET /actors/{username}/posts`) ve `crate::comment`'in yorum listeleri
+/// de aynı `limit + 1` mantığını burada yeniden yazmak yerine bunu
+/// çağırıyor. Tam `pub` yapılmadı çünkü bu sadece crate-içi bir yeniden
+/// kullanım; HTTP katmanının (`actos-api`) buna doğrudan erişmesi için bir
+/// sebep yok, o zaten `Page<T>`'i `actos_core::actor`/`actos_core::content`'in
+/// dönüş tipi olarak görüyor.
+///
+/// **`row_sort_key` neden bir kapanış (closure):** bu modüldeki her liste
+/// `SortKey::New` kullanıyor, ama `crate::comment`'in yorum ağacı
+/// `?sort=top` ile [`SortKey::Top`] de üretebiliyor. Cursor'ın sıralama
+/// anahtarını satırdan türetmeyi çağırana bırakmak, `New`'e sabitlenmiş
+/// ikinci bir sayfalama kopyası yazmaktan iyi.
 pub(crate) fn paginate<Row, T>(
     mut rows: Vec<Row>,
     limit: i64,
     row_id: impl Fn(&Row) -> i64,
-    row_sort_value: impl Fn(&Row) -> DateTime<Utc>,
+    row_sort_key: impl Fn(&Row) -> SortKey,
     into_item: impl Fn(Row) -> T,
 ) -> Page<T> {
     let has_more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
@@ -326,9 +333,7 @@ pub(crate) fn paginate<Row, T>(
 
     let next_cursor = if has_more {
         rows.last().map(|row| Cursor {
-            sort: SortKey::New {
-                created_at: row_sort_value(row),
-            },
+            sort: row_sort_key(row),
             id: row_id(row),
         })
     } else {
@@ -486,7 +491,9 @@ pub async fn list_followers(
         rows,
         limit,
         |row| row.id,
-        |row| row.followed_at,
+        |row| SortKey::New {
+            created_at: row.followed_at,
+        },
         FollowRow::into_entry,
     ))
 }
@@ -539,7 +546,9 @@ pub async fn list_following(
         rows,
         limit,
         |row| row.id,
-        |row| row.followed_at,
+        |row| SortKey::New {
+            created_at: row.followed_at,
+        },
         FollowRow::into_entry,
     ))
 }
@@ -603,7 +612,9 @@ pub async fn list_directory(
         rows,
         limit,
         |row| row.id,
-        |row| row.created_at,
+        |row| SortKey::New {
+            created_at: row.created_at,
+        },
         |row| ActorRecord {
             id: row.id,
             username: row.username,

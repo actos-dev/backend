@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT comment_count AS \"comment_count!\" FROM contents WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "comment_count!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "comment_count"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8e2fd9a09f850ee9cbdcd35651902834180b055aecc9bc397592c6890f3bf5eb"
+}

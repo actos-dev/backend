@@ -61,8 +61,16 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
         return Some(Scope::Post);
     }
 
-    // Faz 9+ geldiğinde buraya benzer eşlemeler eklenecek, ör.:
-    //   if *method == Method::POST && path.ends_with("/comments") { return Some(Scope::Comment); }
+    // `POST /posts/{id}/comments`. `ends_with` yeterli ve bilinçli: bu
+    // yolun `/comments` ile biten tek POST'u bu — `PATCH`/`DELETE
+    // /comments/{id}` farklı metotlar, `GET /posts/{id}/comments` ise
+    // okuma. Yol segmentlerini ayrıştırmak burada karşılığı olmayan bir
+    // karmaşıklık olurdu.
+    if *method == Method::POST && path.ends_with("/comments") {
+        return Some(Scope::Comment);
+    }
+
+    // Faz 11+ geldiğinde buraya benzer eşlemeler eklenecek, ör.:
     //   if *method == Method::POST && path.ends_with("/votes") { return Some(Scope::Vote); }
     //   if *method == Method::POST && path == "/media" { return Some(Scope::Upload); }
     // Bu satırların üstünde durmaları gerekiyor çünkü aşağıdaki genel

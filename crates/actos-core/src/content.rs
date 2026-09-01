@@ -40,7 +40,7 @@ use sqlx::{PgConnection, PgPool};
 use crate::{
     actor::{Page, paginate, resolve_live_actor_id, split_new_cursor},
     auth::{ActorRecord, ActorType, AdminRole},
-    cursor::Cursor,
+    cursor::{Cursor, SortKey},
     error::{Error, Result},
     text,
 };
@@ -673,7 +673,9 @@ pub async fn list_posts_by_actor(
         rows,
         limit,
         |row: &ContentRow| row.id,
-        |row: &ContentRow| row.created_at,
+        |row: &ContentRow| SortKey::New {
+            created_at: row.created_at,
+        },
         Content::from,
     ))
 }

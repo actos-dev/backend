@@ -5,9 +5,11 @@
 //! `actor_summary`/`encode_actor_id` gibi ortak dönüşümler burada tekrar
 //! yazılmıyor, `crate::routes::auth`'tan (`pub(crate)`) alınıyor.
 //!
-//! **Yorumlar burada yok** — `POST /posts/{id}/comments`, `GET
-//! /posts/{id}/comments` vb. Faz 9'un konusu (bkz. `actos_core::content`
-//! modül dokümantasyonu).
+//! **Yorum uçları burada değil**, `crate::routes::comments`'ta — yolları
+//! `/posts/{id}/comments` ile başlasa da (bkz. o modülün dokümantasyonu).
+//! Bu dosyanın `content_summary`/`decode_content_id` yardımcıları oradan
+//! `pub(crate)` olarak paylaşılıyor: aynı `ContentSummary` dönüşümünün iki
+//! kopyası olmamalı.
 
 use actos_core::{
     Error,
@@ -140,7 +142,7 @@ fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<Actor
 /// bir öğeyi listede satır içinde `[silindi]` göstermek isteyen bir
 /// çağıran bu fonksiyonu doğrudan kullanabilsin diye (bkz.
 /// `actos_types::content` modül dokümantasyonu).
-fn content_summary(
+pub(crate) fn content_summary(
     content: &core_content::Content,
     id_codec: &IdCodec,
 ) -> Result<ContentSummary, Error> {
@@ -197,10 +199,14 @@ fn content_summary(
 /// dönülür, [`Error::Validation`] değil — `crate::routes::auth::revoke_key`
 /// dokümanındaki gerekçeyle aynı: "bu biçim geçerli ama böyle bir kayıt yok"
 /// ile "biçim bozuk" ayrımı saldırgana bilgi verirdi.
-fn decode_content_id(raw: &str, id_codec: &IdCodec) -> Result<i64, Error> {
+pub(crate) fn decode_content_id(
+    raw: &str,
+    id_codec: &IdCodec,
+    kind: &'static str,
+) -> Result<i64, Error> {
     id_codec
         .decode::<ContentIdKind>(raw)
-        .map_err(|_| Error::NotFound("post"))
+        .map_err(|_| Error::NotFound(kind))
 }
 
 // --- Handler'lar -----------------------------------------------------------
@@ -314,7 +320,7 @@ async fn get_post(
     Query(query): Query<PostFieldsQuery>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let content_id = decode_content_id(&id, state.id_codec())
+    let content_id = decode_content_id(&id, state.id_codec(), "post")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let content = core_content::get_post(state.db(), content_id)
@@ -339,7 +345,7 @@ async fn update_post(
     headers: HeaderMap,
     Json(req): Json<UpdatePostRequest>,
 ) -> Result<Json<ContentSummary>, ApiError> {
-    let content_id = decode_content_id(&id, state.id_codec())
+    let content_id = decode_content_id(&id, state.id_codec(), "post")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let content = core_content::update_post(
@@ -366,7 +372,7 @@ async fn delete_post(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let content_id = decode_content_id(&id, state.id_codec())
+    let content_id = decode_content_id(&id, state.id_codec(), "post")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     core_content::delete_post(state.db(), content_id, current.actor.id, &current.roles)

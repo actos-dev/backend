@@ -7,6 +7,7 @@
 pub mod actor;
 pub mod auth;
 pub mod cache;
+pub mod comment;
 pub mod config;
 pub mod content;
 pub mod cursor;

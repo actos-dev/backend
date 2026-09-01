@@ -2,6 +2,7 @@
 
 pub mod actors;
 pub mod auth;
+pub mod comments;
 pub mod health;
 pub mod meta;
 pub mod posts;
@@ -19,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .merge(auth::router())
         .merge(actors::router())
         .merge(posts::router())
+        .merge(comments::router())
         .fallback(not_found)
 }
 

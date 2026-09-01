@@ -102,10 +102,27 @@ pub(crate) fn decode_cursor(
     raw: Option<&str>,
     headers: &HeaderMap,
 ) -> Result<Option<Cursor>, ApiError> {
+    decode_cursor_with(codec, raw, SortKind::New, headers)
+}
+
+/// [`decode_cursor`]'ın sıralamayı çağırana bırakan hâli.
+///
+/// `crate::routes::comments`'ın yorum ağacı `?sort=top` ile
+/// [`SortKind::Top`] cursor'ı da üretebiliyor; bir cursor'ın hangi
+/// sıralamaya ait olduğu imzasının parçası (bkz. `actos_core::cursor`),
+/// dolayısıyla çözerken beklenen sıralamayı vermek zorunludur — yanlış
+/// sıralamayla çözülen bir cursor sessizce kabul edilseydi istemci
+/// sayfaların ortasında sıçrayan bir liste görürdü.
+pub(crate) fn decode_cursor_with(
+    codec: &CursorCodec,
+    raw: Option<&str>,
+    kind: SortKind,
+    headers: &HeaderMap,
+) -> Result<Option<Cursor>, ApiError> {
     match raw {
         None | Some("") => Ok(None),
         Some(s) => codec
-            .decode(s, SortKind::New)
+            .decode(s, kind)
             .map(Some)
             .map_err(|e| ApiError::new(Error::from(e)).with_request_id(headers)),
     }
