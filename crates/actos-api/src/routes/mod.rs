@@ -1,5 +1,6 @@
 //! HTTP rotaları.
 
+pub mod actors;
 pub mod auth;
 pub mod health;
 pub mod meta;
@@ -15,6 +16,7 @@ pub fn router() -> Router<AppState> {
         .route("/health/ready", get(health::ready))
         .route("/version", get(meta::version))
         .merge(auth::router())
+        .merge(actors::router())
         .fallback(not_found)
 }
 

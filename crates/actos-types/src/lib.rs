@@ -5,6 +5,9 @@
 //! değiştiğinde hepsi derleme zamanında kırılır, senkronizasyonu elle takip
 //! etmeye gerek kalmaz.
 
+/// Actor profilleri ve dizin/keşif uçlarının istek/yanıt tipleri.
+pub mod actor;
+
 /// Kimlik doğrulama uçlarının istek/yanıt tipleri.
 pub mod auth;
 

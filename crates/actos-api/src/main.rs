@@ -3,7 +3,9 @@
 use std::process::ExitCode;
 
 use actos_api::{app, state};
-use actos_core::{Config, Storage, cache, db, id::IdCodec, ratelimit::RateLimiter};
+use actos_core::{
+    Config, Storage, cache, cursor::CursorCodec, db, id::IdCodec, ratelimit::RateLimiter,
+};
 use tower::Layer as _;
 use tower_http::normalize_path::NormalizePathLayer;
 
@@ -39,11 +41,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // olması demek (bkz. `crates/actos-core/src/id.rs`).
     let id_codec = IdCodec::new(&config.security.id_obfuscation_key)?;
 
+    // `CursorCodec::new` başarısızlıkla dönmez (bkz. `cursor.rs`) — anahtar
+    // uzunluğu zaten `Config::validate` içinde denetlendi.
+    let cursor_codec = CursorCodec::new(&config.security.cursor_signing_key);
+
     // `redis.clone()` ucuz: `deadpool_redis::Pool` zaten `Arc` tabanlı.
     let rate_limiter = RateLimiter::new(redis.clone(), config.rate_limits);
 
     let addr = config.server.addr;
-    let state = state::AppState::new(config, db, redis, storage, id_codec, rate_limiter);
+    let state = state::AppState::new(
+        config,
+        db,
+        redis,
+        storage,
+        id_codec,
+        cursor_codec,
+        rate_limiter,
+    );
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın
     // dışında kalıyor: `/posts/` ile `/posts` aynı rotaya düşsün.

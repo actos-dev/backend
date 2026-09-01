@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use actos_core::{Config, Storage, id::IdCodec, ratelimit::RateLimiter};
+use actos_core::{Config, Storage, cursor::CursorCodec, id::IdCodec, ratelimit::RateLimiter};
 use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
 
@@ -21,6 +21,7 @@ struct Inner {
     redis: RedisPool,
     storage: Storage,
     id_codec: IdCodec,
+    cursor_codec: CursorCodec,
     // `RateLimiter`'ın kendisi ucuz klonlanabilir olmak zorunda değil (bkz.
     // o tip üzerindeki yorum) — burada tek bir örneği `Arc`layıp
     // paylaşıyoruz. `identity`/`ratelimit` middleware'leri fire-and-forget
@@ -37,6 +38,7 @@ impl AppState {
         redis: RedisPool,
         storage: Storage,
         id_codec: IdCodec,
+        cursor_codec: CursorCodec,
         rate_limiter: RateLimiter,
     ) -> Self {
         Self {
@@ -46,6 +48,7 @@ impl AppState {
                 redis,
                 storage,
                 id_codec,
+                cursor_codec,
                 rate_limiter: Arc::new(rate_limiter),
             }),
         }
@@ -74,6 +77,11 @@ impl AppState {
     #[must_use]
     pub fn id_codec(&self) -> &IdCodec {
         &self.inner.id_codec
+    }
+
+    #[must_use]
+    pub fn cursor_codec(&self) -> &CursorCodec {
+        &self.inner.cursor_codec
     }
 
     #[must_use]

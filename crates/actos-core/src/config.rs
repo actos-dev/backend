@@ -88,6 +88,12 @@ pub struct StorageConfig {
 pub struct SecurityConfig {
     /// Dış ID'lerin ardışık görünmemesi için kullanılan permütasyon anahtarı.
     pub id_obfuscation_key: String,
+    /// Keyset sayfalama cursor'larını imzalamak için kullanılan HMAC anahtarı
+    /// (bkz. `crate::cursor::CursorCodec`). `id_obfuscation_key`'den **ayrı**
+    /// bir anahtar: ikisi aynı anahtarı paylaşsaydı, biri sızarsa (ya da
+    /// rotasyona ihtiyaç duyulursa) diğer mekanizma da gereksiz yere
+    /// etkilenirdi — alan ayrımı burada da geçerli.
+    pub cursor_signing_key: String,
 }
 
 // Sırlar hata mesajlarında veya loglarda görünmesin diye elle Debug.
@@ -152,6 +158,7 @@ impl Config {
             },
             security: SecurityConfig {
                 id_obfuscation_key: required("ID_OBFUSCATION_KEY")?,
+                cursor_signing_key: required("CURSOR_SIGNING_KEY")?,
             },
             rate_limits: LimitTable::from_env()?,
         };
@@ -166,6 +173,12 @@ impl Config {
         if self.security.id_obfuscation_key.len() < 32 {
             return Err(ConfigError::Invalid {
                 name: "ID_OBFUSCATION_KEY",
+                detail: "en az 32 karakter olmalı (openssl rand -hex 32)".to_owned(),
+            });
+        }
+        if self.security.cursor_signing_key.len() < 32 {
+            return Err(ConfigError::Invalid {
+                name: "CURSOR_SIGNING_KEY",
                 detail: "en az 32 karakter olmalı (openssl rand -hex 32)".to_owned(),
             });
         }

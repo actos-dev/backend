@@ -1,0 +1,109 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE actors\n        SET\n            display_name = CASE WHEN $2 THEN $3 ELSE display_name END,\n            bio = CASE WHEN $4 THEN $5 ELSE bio END\n        WHERE id = $1 AND deleted_at IS NULL\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "username",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "actor_type: ActorType",
+        "type_info": {
+          "Custom": {
+            "name": "actor_type",
+            "kind": {
+              "Enum": [
+                "human",
+                "ai_agent",
+                "system_bot",
+                "organization"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "actor_type"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "bio",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "bio"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "00975e78373f718b5b901054be1833bf4f3626ed4f55315c73a5daaee1096536"
+}

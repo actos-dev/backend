@@ -47,7 +47,7 @@ pub fn router() -> Router<AppState> {
 /// `actos-types::RegisterRequest::actor_type` bilerek `String` (bkz.
 /// `actos-types/src/auth.rs`'in kök yorumu — o crate `actos-core`'a bağımlı
 /// olamıyor), burada domain tipine çevrilir.
-fn parse_actor_type(raw: &str) -> Result<ActorType, Error> {
+pub(crate) fn parse_actor_type(raw: &str) -> Result<ActorType, Error> {
     match raw {
         "human" => Ok(ActorType::Human),
         "ai_agent" => Ok(ActorType::AiAgent),
@@ -59,7 +59,7 @@ fn parse_actor_type(raw: &str) -> Result<ActorType, Error> {
     }
 }
 
-const fn actor_type_str(t: ActorType) -> &'static str {
+pub(crate) const fn actor_type_str(t: ActorType) -> &'static str {
     match t {
         ActorType::Human => "human",
         ActorType::AiAgent => "ai_agent",
@@ -82,13 +82,16 @@ const fn admin_role_str(r: AdminRole) -> &'static str {
 /// `Error::Internal` ile karşılanır: bu, çağıranın değil sunucunun bir
 /// tutarsızlığı olurdu (`Error::Validation` yanlış olur, kullanıcı burada
 /// hiçbir şey yanlış yapmadı).
-fn encode_actor_id(id_codec: &IdCodec, internal: i64) -> Result<String, Error> {
+pub(crate) fn encode_actor_id(id_codec: &IdCodec, internal: i64) -> Result<String, Error> {
     id_codec
         .encode::<ActorIdKind>(internal)
         .map_err(|e| Error::Internal(format!("actor id kodlanamadı: {e}")))
 }
 
-fn actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<ActorSummary, Error> {
+pub(crate) fn actor_summary(
+    actor: &ActorRecord,
+    id_codec: &IdCodec,
+) -> Result<ActorSummary, Error> {
     Ok(ActorSummary {
         id: encode_actor_id(id_codec, actor.id)?,
         username: actor.username.clone(),

@@ -26,5 +26,12 @@ deadpool-redis = { workspace = true }
 dotenvy = { workspace = true }
 uuid = { workspace = true }
 
+[dev-dependencies]
+# Yalnızca entegrasyon testlerinde (`tests/actors_api.rs`) sayfalama
+# sırasını deterministik kılmak için `created_at`/`follows.created_at`'i
+# elle set ediyoruz — çalışma zamanı kodu chrono'yu doğrudan görmüyor
+# (RFC 3339 string'ler `actos-types` sınırında).
+chrono = { workspace = true }
+
 [lints]
 workspace = true

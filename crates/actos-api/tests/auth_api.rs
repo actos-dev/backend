@@ -97,6 +97,7 @@ fn test_config() -> Config {
         },
         security: SecurityConfig {
             id_obfuscation_key: "test-id-obfuscation-key-en-az-otuz-iki-karakter".to_owned(),
+            cursor_signing_key: "test-cursor-signing-key-en-az-otuz-iki-karakter".to_owned(),
         },
         // Ortam değişkeni yokken `from_env` plandaki varsayılan tabloyu
         // üretiyor. Hız sınırlama davranışını doğrudan sınayan testler bile
@@ -130,6 +131,7 @@ fn build_router(pool: PgPool) -> Router {
 #[allow(clippy::expect_used)]
 fn build_router_with_config(config: Config, pool: PgPool) -> Router {
     let id_codec = IdCodec::new(&config.security.id_obfuscation_key).expect("geçerli anahtar");
+    let cursor_codec = actos_core::cursor::CursorCodec::new(&config.security.cursor_signing_key);
     let redis = deadpool_redis::Config::from_url(config.redis.url.clone())
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .expect("redis pool yapılandırması kurulabilmeli (ağ bağlantısı açmaz)");
@@ -146,7 +148,15 @@ fn build_router_with_config(config: Config, pool: PgPool) -> Router {
         format!("test:{}:", uuid::Uuid::new_v4()),
     );
 
-    let state = AppState::new(config, pool, redis, storage, id_codec, rate_limiter);
+    let state = AppState::new(
+        config,
+        pool,
+        redis,
+        storage,
+        id_codec,
+        cursor_codec,
+        rate_limiter,
+    );
     app::build(state)
 }
 
@@ -220,19 +230,66 @@ const API_KEY_PREFIX: &str = "actos_";
 /// `XXXX-XXXX-XXXX` biçimindeki (Crockford base32) bir kurtarma kodu
 /// deseninin `haystack` içinde geçip geçmediğini denetler. `regex` crate'ine
 /// bağımlılık eklemeden, sabit uzunluklu bir pencere kaydırarak bakıyoruz.
+///
+/// **Sınır denetimi neden var:** pencerenin hemen öncesi/sonrası da kod
+/// karakteriyse (harf, rakam veya tire) eşleşme daha uzun bir jetonun
+/// ortasına denk gelmiş demektir, gerçek bir kurtarma kodu değil. Bu olmadan
+/// yanıtlardaki `request_id` UUID'si testi rastgele düşürüyordu: UUID'nin
+/// tireleri 8/13/18/23. indekslerde, yani aradaki mesafe tam da bu desenin
+/// beklediği 5 — `...-7340-8871-0161ea...` gibi iki grubun tamamı rakam
+/// olduğunda (Crockford alfabesi rakamları da içerdiği için) pencere
+/// eşleşiyordu. UUID her istekte değiştiğinden hata koşudan koşuya
+/// görünüp kayboluyordu.
 fn contains_recovery_code_pattern(haystack: &str) -> bool {
     const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let is_code_char = |b: u8| b.is_ascii_alphanumeric() || b == b'-';
+
     let bytes = haystack.as_bytes();
     if bytes.len() < 14 {
         return false;
     }
-    bytes.windows(14).any(|w| {
-        w[4] == b'-'
+    bytes.windows(14).enumerate().any(|(start, w)| {
+        let onceki_bitisik = start > 0 && is_code_char(bytes[start - 1]);
+        let sonraki_bitisik = bytes.get(start + 14).is_some_and(|&b| is_code_char(b));
+
+        !onceki_bitisik
+            && !sonraki_bitisik
+            && w[4] == b'-'
             && w[9] == b'-'
             && [0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13]
                 .iter()
                 .all(|&i| ALPHABET.contains(&w[i]))
     })
+}
+
+/// [`contains_recovery_code_pattern`]'in kendisi test ediliyor: sızıntı
+/// denetçisini yanlış pozitife karşı gevşetirken gerçek bir kodu kaçırır
+/// hâle getirmediğimizden emin olmak için. Denetçi körleşirse bu dosyadaki
+/// bütün sızıntı iddiaları sessizce anlamsızlaşır.
+#[test]
+fn sizinti_denetcisi_gercek_kodu_yakalar_uuid_ile_yanilmaz() {
+    // Gerçek bir kurtarma kodu, JSON'da göründüğü gibi tırnak içinde.
+    assert!(contains_recovery_code_pattern(
+        r#"{"code":"H8K2-9WQ4-MN3P"}"#
+    ));
+    // Tek başına, sınırsız.
+    assert!(contains_recovery_code_pattern("H8K2-9WQ4-MN3P"));
+    // Bir dizinin ortasında.
+    assert!(contains_recovery_code_pattern(
+        r#"["ABCD-1234-EFGH","JKMN-5678-PQRS"]"#
+    ));
+
+    // Yanlış pozitifin asıl kaynağı: request_id UUID'si. Üçüncü ve dördüncü
+    // grubu tamamen rakam olan bir UUID, sınır denetimi olmadan eşleşiyordu.
+    assert!(!contains_recovery_code_pattern(
+        r#"{"request_id":"01a05de1-880e-7340-8871-0161ea68fb51"}"#
+    ));
+    // Aynı UUID çıplak hâliyle de eşleşmemeli.
+    assert!(!contains_recovery_code_pattern(
+        "01a05de1-880e-7340-8871-0161ea68fb51"
+    ));
+    // Küçük harf Crockford alfabesinde değil, zaten eşleşmemeli.
+    assert!(!contains_recovery_code_pattern("h8k2-9wq4-mn3p"));
 }
 
 fn assert_no_secret_leak(context: &str, body: &Value, headers: &axum::http::HeaderMap) {
@@ -743,7 +800,10 @@ async fn kayit_limiti_asilinca_429_rate_limited_ve_retry_after_donuyor(pool: PgP
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
         .expect("Retry-After header'ı sayısal olmalı");
-    assert!(retry_after > 0, "retry_after 0'dan büyük olmalı: {retry_after}");
+    assert!(
+        retry_after > 0,
+        "retry_after 0'dan büyük olmalı: {retry_after}"
+    );
 
     // `apply_headers` her yanıta eklenir — sadece izinli olanlara değil,
     // reddedilen istekte de `X-RateLimit-Remaining: 0` görülmeli.

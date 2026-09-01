@@ -687,6 +687,76 @@ pub async fn recover(pool: &PgPool, username: &str, code: &str) -> Result<(Strin
     Ok((generated.plaintext, remaining))
 }
 
+/// `code`'un `actor_id`'ye ait geçerli, kullanılmamış bir kurtarma kodu
+/// olup olmadığını, [`verify_fixed_slots`] ile aynı zamanlama-güvenli
+/// mekanizmayla doğrular. Eşleşirse `recovery_codes.id`'sini döner ama
+/// **tüketmez** (`used_at` işaretlemez) — tüketme ayrı bir adım
+/// ([`consume_recovery_code`]).
+///
+/// **Neden ikiye ayrıldı — [`recover`]'daki aynı desen:** buradaki iş
+/// (Argon2 doğrulaması) pahalı bir CPU işi; bunu bir veritabanı
+/// transaction'ı açıkken yapmak istemiyoruz (satır kilitlerini gereksiz
+/// uzatır). Çağıran (`crate::actor::delete_account`) önce bunu
+/// transaction'sız çağırıp kodu doğrular, eşleşme varsa ancak o zaman bir
+/// transaction açıp [`consume_recovery_code`]'u ve diğer yazmaları
+/// (hesabı işaretleme, key'leri iptal etme) o transaction içinde yapar.
+///
+/// **Ban kontrolü burada YOK:** [`recover`]'ın aksine bu fonksiyonun
+/// çağıranı ([`crate::actor::delete_account`]) her zaman zaten kimliği
+/// doğrulanmış (`authenticate()`'ten geçmiş) bir actor için çalışır —
+/// `authenticate()` banlı actor'leri zaten reddediyor, burada tekrar
+/// kontrol etmenin bir anlamı yok.
+///
+/// # Errors
+/// Kod yanlış veya tükenmişse [`Error::InvalidKey`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn verify_recovery_code_for_actor(
+    pool: &PgPool,
+    actor_id: i64,
+    code: &str,
+) -> Result<i64> {
+    let unused_codes: Vec<UnusedRecoveryCode> = sqlx::query_as!(
+        UnusedRecoveryCode,
+        r#"SELECT id, code_hash FROM recovery_codes WHERE actor_id = $1 AND used_at IS NULL"#,
+        actor_id,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    verify_fixed_slots(code, &unused_codes).ok_or(Error::InvalidKey)
+}
+
+/// [`verify_recovery_code_for_actor`] ile bulunan bir kodu, çağıranın kendi
+/// transaction'ı içinde tüketir (`used_at = now()`).
+///
+/// `used_at IS NULL` koşulu, aynı kodun eşzamanlı iki istekte tüketilmeye
+/// çalışılmasına karşı korur (bkz. [`recover`]'daki aynı gerekçe) — bu
+/// arada başka bir istek kodu zaten tükettiyse burada `0` satır güncellenir
+/// ve [`Error::InvalidKey`] dönülür.
+///
+/// # Errors
+/// Kod bu arada başka bir istekte tüketildiyse [`Error::InvalidKey`];
+/// veritabanı hatası [`Error::Database`].
+pub async fn consume_recovery_code(tx: &mut sqlx::PgConnection, code_row_id: i64) -> Result<()> {
+    let consumed = sqlx::query!(
+        r#"
+        UPDATE recovery_codes
+        SET used_at = now()
+        WHERE id = $1 AND used_at IS NULL
+        RETURNING id
+        "#,
+        code_row_id,
+    )
+    .fetch_optional(tx)
+    .await?;
+
+    if consumed.is_none() {
+        return Err(Error::InvalidKey);
+    }
+
+    Ok(())
+}
+
 /// Bir actor'ün tüm kullanılmamış kurtarma kodlarını geçersiz kılıp
 /// [`RECOVERY_CODE_COUNT`] yenisini üretir. Tek transaction.
 ///
