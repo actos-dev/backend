@@ -18,6 +18,7 @@ pub mod idempotency;
 pub mod ratelimit;
 pub mod secret;
 pub mod storage;
+pub mod tag;
 pub mod text;
 
 pub use config::Config;

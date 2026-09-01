@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(SELECT 1 FROM tags WHERE name = $1) AS \"var!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "var!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c9066986014ddf7b6f1bd57601be7e802a2000725a811d63db7386c483810b35"
+}

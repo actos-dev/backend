@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            tags.id,\n            tags.name::text AS \"name!\",\n            COUNT(contents.id) FILTER (\n                WHERE contents.deleted_at IS NULL\n                  AND contents.content_type = 'post'::content_type\n            )::int AS \"post_count!\",\n            tags.created_at\n        FROM tags\n        JOIN content_tags ON content_tags.tag_id = tags.id\n        JOIN contents ON contents.id = content_tags.content_id\n        GROUP BY tags.id\n        HAVING COUNT(contents.id) FILTER (\n                   WHERE contents.deleted_at IS NULL\n                     AND contents.content_type = 'post'::content_type\n               ) > 0\n           AND (\n               $1::int IS NULL\n               OR (\n                   COUNT(contents.id) FILTER (\n                       WHERE contents.deleted_at IS NULL\n                         AND contents.content_type = 'post'::content_type\n                   )::int,\n                   tags.id\n               ) < ($1::int, $2::bigint)\n           )\n        ORDER BY \"post_count!\" DESC, tags.id DESC\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "tags",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "post_count!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "tags",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "7d135876ee36fe9b6824c686a7714e5f7a7bc043468ef165411e8ad2afc522f8"
+}

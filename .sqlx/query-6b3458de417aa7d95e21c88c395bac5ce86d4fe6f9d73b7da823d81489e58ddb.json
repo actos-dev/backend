@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM tags\n        WHERE NOT EXISTS (\n            SELECT 1 FROM content_tags WHERE content_tags.tag_id = tags.id\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "6b3458de417aa7d95e21c88c395bac5ce86d4fe6f9d73b7da823d81489e58ddb"
+}

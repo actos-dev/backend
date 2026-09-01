@@ -6,6 +6,7 @@ pub mod comments;
 pub mod health;
 pub mod meta;
 pub mod posts;
+pub mod tags;
 
 use axum::{Router, http::HeaderMap, routing::get};
 
@@ -21,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .merge(actors::router())
         .merge(posts::router())
         .merge(comments::router())
+        .merge(tags::router())
         .fallback(not_found)
 }
 

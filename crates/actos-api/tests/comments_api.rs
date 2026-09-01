@@ -41,6 +41,10 @@ fn test_config() -> Config {
             max_concurrent_requests: 512,
             max_body_bytes: 1024 * 1024,
             trusted_proxy_hops: 0,
+            // Testler router'ı doğrudan çağırıyor, periyodik iş hiç
+            // başlatılmıyor; alan yalnızca `Config`'in parçası olduğu
+            // için dolduruluyor.
+            tag_cleanup_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tags (name) VALUES ('yetim')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "47ac78a60cb62703a6e86d595dedfc14dc0d5e45ff41c30ddb006348d51ec6c0"
+}

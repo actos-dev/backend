@@ -67,6 +67,10 @@ fn test_config() -> Config {
             max_body_bytes: 1024 * 1024,
             // Bu testler `X-Forwarded-For` göndermiyor, değeri önemsiz.
             trusted_proxy_hops: 0,
+            // Testler router'ı doğrudan çağırıyor, periyodik iş hiç
+            // başlatılmıyor; alan yalnızca `Config`'in parçası olduğu
+            // için dolduruluyor.
+            tag_cleanup_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             // Gerçek bağlantı `#[sqlx::test]`'in verdiği `PgPool` ile zaten

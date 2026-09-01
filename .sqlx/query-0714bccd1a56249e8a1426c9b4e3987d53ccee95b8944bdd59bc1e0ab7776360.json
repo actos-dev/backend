@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            ata.id,\n            ata.content_type AS \"content_type: ContentType\",\n            ata.title,\n            ata.body,\n            ata.body_format AS \"body_format: BodyFormat\",\n            ata.metadata,\n            ata.score,\n            ata.upvotes,\n            ata.downvotes,\n            ata.comment_count,\n            ata.created_at,\n            ata.edited_at,\n            ata.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at\n        FROM contents AS ata\n        JOIN contents AS hedef ON hedef.id = $1\n        JOIN actors ON actors.id = ata.actor_id\n        WHERE ata.path @> hedef.path AND ata.id <> hedef.id\n        ORDER BY ata.depth\n        ",
+  "query": "\n                SELECT\n                    contents.id,\n                    contents.parent_content_id,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.metadata,\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at\n                FROM contents\n                JOIN actors ON actors.id = contents.actor_id\n                WHERE contents.path <@ ANY(\n                          ARRAY(SELECT ust.path FROM contents AS ust WHERE ust.id = ANY($1::bigint[]))\n                      )\n                  AND contents.id <> ALL($1::bigint[])\n                  AND contents.depth <= $2\n                ORDER BY contents.created_at DESC, contents.id DESC\n                ",
   "describe": {
     "columns": [
       {
@@ -16,38 +16,17 @@
       },
       {
         "ordinal": 1,
-        "name": "content_type: ContentType",
-        "type_info": {
-          "Custom": {
-            "name": "content_type",
-            "kind": {
-              "Enum": [
-                "post",
-                "comment"
-              ]
-            }
-          }
-        },
+        "name": "parent_content_id",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "contents",
-            "name": "content_type"
+            "name": "parent_content_id"
           }
         }
       },
       {
         "ordinal": 2,
-        "name": "title",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "contents",
-            "name": "title"
-          }
-        }
-      },
-      {
-        "ordinal": 3,
         "name": "body",
         "type_info": "Text",
         "origin": {
@@ -58,7 +37,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 3,
         "name": "body_format: BodyFormat",
         "type_info": {
           "Custom": {
@@ -79,7 +58,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "metadata",
         "type_info": "Jsonb",
         "origin": {
@@ -90,7 +69,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "score",
         "type_info": "Int4",
         "origin": {
@@ -101,7 +80,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 6,
         "name": "upvotes",
         "type_info": "Int4",
         "origin": {
@@ -112,7 +91,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "downvotes",
         "type_info": "Int4",
         "origin": {
@@ -123,13 +102,24 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 8,
         "name": "comment_count",
         "type_info": "Int4",
         "origin": {
           "Table": {
             "table": "contents",
             "name": "comment_count"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "hot_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "hot_score"
           }
         }
       },
@@ -263,13 +253,14 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8Array",
+        "Int4"
       ]
     },
     "nullable": [
       false,
-      false,
       true,
+      false,
       false,
       false,
       false,
@@ -289,5 +280,5 @@
       true
     ]
   },
-  "hash": "7af6b447062e4da883c7ff637e7a67ba83253701238369e0360f97d3a1bce683"
+  "hash": "0714bccd1a56249e8a1426c9b4e3987d53ccee95b8944bdd59bc1e0ab7776360"
 }

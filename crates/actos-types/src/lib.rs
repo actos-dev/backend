@@ -20,4 +20,7 @@ pub mod content;
 /// mesajdan daha önemli: mesaj metni değişebilir, bu kodlar değişmez.
 pub mod error;
 
+/// Etiket uçlarının yanıt tipleri.
+pub mod tag;
+
 pub use error::ErrorCode;

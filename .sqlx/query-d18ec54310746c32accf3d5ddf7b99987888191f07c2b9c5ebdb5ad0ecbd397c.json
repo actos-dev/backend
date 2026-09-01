@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO contents (actor_id, content_type, title, body, body_format, metadata)\n        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4)\n        RETURNING id, created_at, score, upvotes, downvotes, comment_count\n        ",
+  "query": "\n        INSERT INTO contents (actor_id, content_type, title, body, body_format, metadata)\n        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4)\n        RETURNING id, created_at, score, upvotes, downvotes, comment_count, hot_score\n        ",
   "describe": {
     "columns": [
       {
@@ -68,6 +68,17 @@
             "name": "comment_count"
           }
         }
+      },
+      {
+        "ordinal": 6,
+        "name": "hot_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "hot_score"
+          }
+        }
       }
     ],
     "parameters": {
@@ -84,8 +95,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "c7f70335046983e3a747be19f77ee22b8768e7f1f96c9cc9cafbebe4d430facb"
+  "hash": "d18ec54310746c32accf3d5ddf7b99987888191f07c2b9c5ebdb5ad0ecbd397c"
 }

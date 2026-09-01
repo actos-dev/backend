@@ -42,6 +42,11 @@ pub struct ServerConfig {
     pub max_concurrent_requests: usize,
     /// İstek gövdesi üst sınırı (dosya yükleme kendi daha yüksek limitini kullanır).
     pub max_body_bytes: usize,
+    /// Kullanılmayan etiketleri toplayan periyodik işin çalışma aralığı
+    /// (bkz. `crate::tag::cleanup_unused`). Sıfır verilirse iş hiç
+    /// başlatılmaz — tek seferlik bir kurulumda ya da temizliği dışarıdan
+    /// (cron) yürütmek isteyen bir dağıtımda kapatılabilsin diye.
+    pub tag_cleanup_interval: Duration,
     /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
     /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
     /// güvenilebileceğini belirler.
@@ -136,6 +141,13 @@ impl Config {
                 max_concurrent_requests: optional("MAX_CONCURRENT_REQUESTS")?.unwrap_or(512),
                 max_body_bytes: optional("MAX_BODY_BYTES")?.unwrap_or(1024 * 1024),
                 trusted_proxy_hops: optional("TRUSTED_PROXY_HOPS")?.unwrap_or(0),
+                // Varsayılan 6 saat: etiket çöpü birikmesi yavaş bir olgu
+                // (yalnızca bir post'un son etiketi kalktığında oluşur),
+                // sık koşmak advisory lock çekişmesinden başka bir şey
+                // üretmez.
+                tag_cleanup_interval: Duration::from_secs(
+                    optional("TAG_CLEANUP_INTERVAL_SECS")?.unwrap_or(6 * 60 * 60),
+                ),
             },
             database: DatabaseConfig {
                 url: required("DATABASE_URL")?,

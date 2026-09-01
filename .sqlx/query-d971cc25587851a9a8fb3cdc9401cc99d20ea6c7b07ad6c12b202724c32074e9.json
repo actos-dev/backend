@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            contents.id,\n            contents.content_type AS \"content_type: ContentType\",\n            contents.title,\n            contents.body,\n            contents.body_format AS \"body_format: BodyFormat\",\n            contents.metadata,\n            contents.score,\n            contents.upvotes,\n            contents.downvotes,\n            contents.comment_count,\n            contents.created_at,\n            contents.edited_at,\n            contents.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at,\n            COALESCE(\n                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                '{}'\n            ) AS \"tags!: Vec<String>\"\n        FROM contents\n        JOIN actors ON actors.id = contents.actor_id\n        LEFT JOIN content_tags ON content_tags.content_id = contents.id\n        LEFT JOIN tags ON tags.id = content_tags.tag_id\n        WHERE contents.id = $1 AND contents.content_type = 'post'::content_type\n        GROUP BY contents.id, actors.id\n        ",
+  "query": "\n        SELECT\n            ata.id,\n            ata.content_type AS \"content_type: ContentType\",\n            ata.title,\n            ata.body,\n            ata.body_format AS \"body_format: BodyFormat\",\n            ata.metadata,\n            ata.score,\n            ata.upvotes,\n            ata.downvotes,\n            ata.comment_count,\n            ata.hot_score,\n            ata.created_at,\n            ata.edited_at,\n            ata.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at\n        FROM contents AS ata\n        JOIN contents AS hedef ON hedef.id = $1\n        JOIN actors ON actors.id = ata.actor_id\n        WHERE ata.path @> hedef.path AND ata.id <> hedef.id\n        ORDER BY ata.depth\n        ",
   "describe": {
     "columns": [
       {
@@ -135,6 +135,17 @@
       },
       {
         "ordinal": 10,
+        "name": "hot_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "hot_score"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -145,7 +156,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "edited_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -156,7 +167,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -167,7 +178,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -178,7 +189,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "author_username",
         "type_info": {
           "Custom": {
@@ -194,7 +205,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "author_actor_type: ActorType",
         "type_info": {
           "Custom": {
@@ -217,7 +228,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "author_display_name",
         "type_info": "Text",
         "origin": {
@@ -228,7 +239,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "author_bio",
         "type_info": "Text",
         "origin": {
@@ -239,7 +250,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "author_created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -250,7 +261,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -259,12 +270,6 @@
             "name": "deleted_at"
           }
         }
-      },
-      {
-        "ordinal": 20,
-        "name": "tags!: Vec<String>",
-        "type_info": "TextArray",
-        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -284,17 +289,17 @@
       false,
       false,
       false,
-      true,
-      true,
-      false,
-      false,
       false,
       true,
       true,
       false,
+      false,
+      false,
       true,
-      null
+      true,
+      false,
+      true
     ]
   },
-  "hash": "9cc93be3dba8c8cd327a3f8fbb6a2fe2b0c71b93731fc78f63bd3b8fa145b984"
+  "hash": "d971cc25587851a9a8fb3cdc9401cc99d20ea6c7b07ad6c12b202724c32074e9"
 }

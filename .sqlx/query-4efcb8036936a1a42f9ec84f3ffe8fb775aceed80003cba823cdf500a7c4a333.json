@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    contents.id,\n                    contents.parent_content_id,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.metadata,\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at\n                FROM contents\n                JOIN actors ON actors.id = contents.actor_id\n                WHERE contents.parent_content_id = $1\n                  AND contents.content_type = 'comment'::content_type\n                  AND (\n                      $2::int IS NULL\n                      OR (contents.score, contents.id) < ($2::int, $3::bigint)\n                  )\n                ORDER BY contents.score DESC, contents.id DESC\n                LIMIT $4\n                ",
+  "query": "\n                SELECT\n                    contents.id,\n                    contents.parent_content_id,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.metadata,\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at\n                FROM contents\n                JOIN actors ON actors.id = contents.actor_id\n                WHERE contents.parent_content_id = $1\n                  AND contents.content_type = 'comment'::content_type\n                  AND (\n                      $2::int IS NULL\n                      OR (contents.score, contents.id) < ($2::int, $3::bigint)\n                  )\n                ORDER BY contents.score DESC, contents.id DESC\n                LIMIT $4\n                ",
   "describe": {
     "columns": [
       {
@@ -114,6 +114,17 @@
       },
       {
         "ordinal": 9,
+        "name": "hot_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "hot_score"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -124,7 +135,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "edited_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -135,7 +146,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -146,7 +157,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -157,7 +168,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "author_username",
         "type_info": {
           "Custom": {
@@ -173,7 +184,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "author_actor_type: ActorType",
         "type_info": {
           "Custom": {
@@ -196,7 +207,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "author_display_name",
         "type_info": "Text",
         "origin": {
@@ -207,7 +218,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "author_bio",
         "type_info": "Text",
         "origin": {
@@ -218,7 +229,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "author_created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -229,7 +240,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -259,6 +270,7 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       false,
@@ -270,5 +282,5 @@
       true
     ]
   },
-  "hash": "d6d72fb3296c80018b48ecea779f79cb9b1b8ad9751be7d12ad064809daefdd4"
+  "hash": "4efcb8036936a1a42f9ec84f3ffe8fb775aceed80003cba823cdf500a7c4a333"
 }

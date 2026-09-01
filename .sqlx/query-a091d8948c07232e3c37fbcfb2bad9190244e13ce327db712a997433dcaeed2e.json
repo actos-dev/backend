@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tags (name) VALUES ('yetim-bir'), ('yetim-iki')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "a091d8948c07232e3c37fbcfb2bad9190244e13ce327db712a997433dcaeed2e"
+}

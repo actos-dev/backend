@@ -102,6 +102,10 @@ pub struct Content {
     pub upvotes: i32,
     pub downvotes: i32,
     pub comment_count: i32,
+    /// Faz 12'de periyodik olarak hesaplanacak "sıcaklık" değeri; o zamana
+    /// kadar şema varsayılanı olan `0`. `PostSort::Hot` sıralamasının ve
+    /// onun cursor'ının dayandığı alan (bkz. [`PostSort::Hot`]).
+    pub hot_score: f64,
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
     /// `Some` ise bu içerik soft-delete edilmiş. HTTP katmanı `get_post`
@@ -125,6 +129,7 @@ struct ContentRow {
     upvotes: i32,
     downvotes: i32,
     comment_count: i32,
+    hot_score: f64,
     created_at: DateTime<Utc>,
     edited_at: Option<DateTime<Utc>>,
     deleted_at: Option<DateTime<Utc>>,
@@ -161,6 +166,7 @@ impl From<ContentRow> for Content {
             upvotes: row.upvotes,
             downvotes: row.downvotes,
             comment_count: row.comment_count,
+            hot_score: row.hot_score,
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
@@ -308,7 +314,7 @@ pub async fn create_post(
         r#"
         INSERT INTO contents (actor_id, content_type, title, body, body_format, metadata)
         VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4)
-        RETURNING id, created_at, score, upvotes, downvotes, comment_count
+        RETURNING id, created_at, score, upvotes, downvotes, comment_count, hot_score
         "#,
         author.id,
         title,
@@ -340,6 +346,7 @@ pub async fn create_post(
         upvotes: row.upvotes,
         downvotes: row.downvotes,
         comment_count: row.comment_count,
+        hot_score: row.hot_score,
         created_at: row.created_at,
         edited_at: None,
         deleted_at: None,
@@ -386,6 +393,7 @@ pub async fn get_post(pool: &PgPool, id: i64) -> Result<Content> {
             contents.upvotes,
             contents.downvotes,
             contents.comment_count,
+            contents.hot_score,
             contents.created_at,
             contents.edited_at,
             contents.deleted_at,
@@ -632,6 +640,7 @@ pub async fn list_posts_by_actor(
             contents.upvotes,
             contents.downvotes,
             contents.comment_count,
+            contents.hot_score,
             contents.created_at,
             contents.edited_at,
             contents.deleted_at,
@@ -676,6 +685,323 @@ pub async fn list_posts_by_actor(
         |row: &ContentRow| SortKey::New {
             created_at: row.created_at,
         },
+        Content::from,
+    ))
+}
+
+// --- Etikete göre post listesi (Faz 10) ------------------------------------
+
+/// Post listelerinin sıralaması (`?sort=`).
+///
+/// `crate::comment::CommentSort`'un post karşılığı; ayrı bir tip çünkü
+/// post'larda [`Self::Hot`] de anlamlı (yorumlarda bir "sıcaklık" kavramı
+/// yok, `hot_score` yalnızca post'lar için hesaplanacak — bkz. PLAN.md
+/// Faz 12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostSort {
+    /// En yeni önce (`created_at DESC, id DESC`).
+    New,
+    /// En yüksek skor önce (`score DESC, id DESC`).
+    Top,
+    /// En "sıcak" önce (`hot_score DESC, id DESC`).
+    ///
+    /// **Faz 12'ye kadar `hot_score` her satırda `0`** (şema varsayılanı),
+    /// yani bu sıralama şimdilik pratikte `id DESC`'e düşüyor. Uç bugünden
+    /// çalışıyor ve sözleşmesi doğru; sıralamayı anlamlı kılacak olan
+    /// periyodik `hot_score` hesabı Faz 12'nin işi.
+    Hot,
+}
+
+impl PostSort {
+    /// `?sort=` query parametresini ayrıştırır. Verilmemişse [`Self::New`].
+    ///
+    /// # Errors
+    /// Tanınmayan bir değer [`Error::Validation`] üretir — sessizce
+    /// varsayılana düşmek, yazım hatası yapan bir istemciye yanlış sıralı
+    /// veriyi doğruymuş gibi verirdi.
+    pub fn parse(raw: Option<&str>) -> Result<Self> {
+        match raw {
+            None | Some("new") => Ok(Self::New),
+            Some("top") => Ok(Self::Top),
+            Some("hot") => Ok(Self::Hot),
+            Some(other) => Err(Error::Validation(format!(
+                "geçersiz sort değeri: \"{other}\" (beklenen: new, top, hot)"
+            ))),
+        }
+    }
+
+    /// Bu sıralamanın cursor türü.
+    #[must_use]
+    pub const fn sort_kind(self) -> crate::cursor::SortKind {
+        match self {
+            Self::New => crate::cursor::SortKind::New,
+            Self::Top => crate::cursor::SortKind::Top,
+            Self::Hot => crate::cursor::SortKind::Hot,
+        }
+    }
+}
+
+/// Bir [`ContentRow`]'dan bu sıralamanın cursor anahtarını türetir.
+fn post_sort_key(sort: PostSort, row: &ContentRow) -> SortKey {
+    match sort {
+        PostSort::New => SortKey::New {
+            created_at: row.created_at,
+        },
+        PostSort::Top => SortKey::Top { score: row.score },
+        PostSort::Hot => SortKey::Hot {
+            hot_score: row.hot_score,
+        },
+    }
+}
+
+/// Cursor'ı sıralamaya göre bindable üçlüye ayırır: `(created_at, score,
+/// hot_score, id)`. Yalnızca ilgili alan dolu olur, diğerleri `None`.
+///
+/// Tek bir sorgu metniyle üç sıralamayı ifade edemediğimiz için (bkz.
+/// [`list_posts_by_tag`]) her dal kendi parametrelerini bağlıyor; bu
+/// fonksiyon o dalların ortak ayrıştırma mantığını tek yerde tutuyor.
+///
+/// # Errors
+/// Cursor listenin sıralamasına ait değilse [`Error::InvalidCursor`].
+#[allow(clippy::type_complexity)]
+fn split_post_cursor(
+    sort: PostSort,
+    cursor: Option<Cursor>,
+) -> Result<(Option<DateTime<Utc>>, Option<i32>, Option<f64>, Option<i64>)> {
+    match (sort, cursor) {
+        (_, None) => Ok((None, None, None, None)),
+        (
+            PostSort::New,
+            Some(Cursor {
+                sort: SortKey::New { created_at },
+                id,
+            }),
+        ) => Ok((Some(created_at), None, None, Some(id))),
+        (
+            PostSort::Top,
+            Some(Cursor {
+                sort: SortKey::Top { score },
+                id,
+            }),
+        ) => Ok((None, Some(score), None, Some(id))),
+        (
+            PostSort::Hot,
+            Some(Cursor {
+                sort: SortKey::Hot { hot_score },
+                id,
+            }),
+        ) => Ok((None, None, Some(hot_score), Some(id))),
+        _ => Err(Error::InvalidCursor),
+    }
+}
+
+/// `GET /tags/{name}/posts`: bir etiketteki post'lar (amac.txt'teki
+/// `GET posts/nvidia` senaryosu).
+///
+/// Etiket adı [`text::validate_tag_name`]'den geçiriliyor; **hiç var
+/// olmayan bir etiket `404`**, var olup hiç canlı post'u kalmamış bir
+/// etiket ise boş liste döner. Ayrım bilinçli: "böyle bir etiket yok" ile
+/// "bu etikette şu an içerik yok" istemci için farklı bilgiler.
+///
+/// Silinmiş post'lar listede görünmez ([`list_posts_by_actor`] ile aynı
+/// karar).
+///
+/// **Üç ayrı `query_as!` çağrısı** var çünkü `sqlx` derleme zamanı
+/// doğrulaması için sorgunun string **literal** olmasını şart koşuyor;
+/// `ORDER BY` ve cursor koşulu sıralamaya göre değiştiğinden tek metinle
+/// ifade edilemiyor. Dinamik string birleştirme bu doğrulamayı ve
+/// `sqlx prepare` önbelleğini bozardı.
+///
+/// # Errors
+/// Etiket adı geçersizse ya da böyle bir etiket yoksa [`Error::NotFound`];
+/// cursor sıralamaya ait değilse [`Error::InvalidCursor`]; veritabanı
+/// hatası [`Error::Database`].
+pub async fn list_posts_by_tag(
+    pool: &PgPool,
+    tag_name: &str,
+    sort: PostSort,
+    cursor: Option<Cursor>,
+    limit: i64,
+) -> Result<Page<Content>> {
+    let name = text::validate_tag_name(tag_name).map_err(|_| Error::NotFound("tag"))?;
+
+    let tag_id = sqlx::query_scalar!(r#"SELECT id FROM tags WHERE name = $1"#, name)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(Error::NotFound("tag"))?;
+
+    let (cursor_created_at, cursor_score, cursor_hot, cursor_id) = split_post_cursor(sort, cursor)?;
+
+    let rows = match sort {
+        PostSort::New => {
+            sqlx::query_as!(
+                ContentRow,
+                r#"
+                SELECT
+                    contents.id,
+                    contents.content_type AS "content_type: ContentType",
+                    contents.title,
+                    contents.body,
+                    contents.body_format AS "body_format: BodyFormat",
+                    contents.metadata,
+                    contents.score,
+                    contents.upvotes,
+                    contents.downvotes,
+                    contents.comment_count,
+                    contents.hot_score,
+                    contents.created_at,
+                    contents.edited_at,
+                    contents.deleted_at,
+                    actors.id AS author_id,
+                    actors.username AS author_username,
+                    actors.actor_type AS "author_actor_type: ActorType",
+                    actors.display_name AS author_display_name,
+                    actors.bio AS author_bio,
+                    actors.created_at AS author_created_at,
+                    actors.deleted_at AS author_deleted_at,
+                    COALESCE(
+                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
+                        '{}'
+                    ) AS "tags!: Vec<String>"
+                FROM contents
+                JOIN actors ON actors.id = contents.actor_id
+                JOIN content_tags AS filtre ON filtre.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN tags ON tags.id = content_tags.tag_id
+                WHERE filtre.tag_id = $1
+                  AND contents.content_type = 'post'::content_type
+                  AND contents.deleted_at IS NULL
+                  AND (
+                      $2::timestamptz IS NULL
+                      OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
+                  )
+                GROUP BY contents.id, actors.id
+                ORDER BY contents.created_at DESC, contents.id DESC
+                LIMIT $4
+                "#,
+                tag_id,
+                cursor_created_at,
+                cursor_id,
+                limit + 1,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        PostSort::Top => {
+            sqlx::query_as!(
+                ContentRow,
+                r#"
+                SELECT
+                    contents.id,
+                    contents.content_type AS "content_type: ContentType",
+                    contents.title,
+                    contents.body,
+                    contents.body_format AS "body_format: BodyFormat",
+                    contents.metadata,
+                    contents.score,
+                    contents.upvotes,
+                    contents.downvotes,
+                    contents.comment_count,
+                    contents.hot_score,
+                    contents.created_at,
+                    contents.edited_at,
+                    contents.deleted_at,
+                    actors.id AS author_id,
+                    actors.username AS author_username,
+                    actors.actor_type AS "author_actor_type: ActorType",
+                    actors.display_name AS author_display_name,
+                    actors.bio AS author_bio,
+                    actors.created_at AS author_created_at,
+                    actors.deleted_at AS author_deleted_at,
+                    COALESCE(
+                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
+                        '{}'
+                    ) AS "tags!: Vec<String>"
+                FROM contents
+                JOIN actors ON actors.id = contents.actor_id
+                JOIN content_tags AS filtre ON filtre.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN tags ON tags.id = content_tags.tag_id
+                WHERE filtre.tag_id = $1
+                  AND contents.content_type = 'post'::content_type
+                  AND contents.deleted_at IS NULL
+                  AND (
+                      $2::int IS NULL
+                      OR (contents.score, contents.id) < ($2::int, $3::bigint)
+                  )
+                GROUP BY contents.id, actors.id
+                ORDER BY contents.score DESC, contents.id DESC
+                LIMIT $4
+                "#,
+                tag_id,
+                cursor_score,
+                cursor_id,
+                limit + 1,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        PostSort::Hot => {
+            sqlx::query_as!(
+                ContentRow,
+                r#"
+                SELECT
+                    contents.id,
+                    contents.content_type AS "content_type: ContentType",
+                    contents.title,
+                    contents.body,
+                    contents.body_format AS "body_format: BodyFormat",
+                    contents.metadata,
+                    contents.score,
+                    contents.upvotes,
+                    contents.downvotes,
+                    contents.comment_count,
+                    contents.hot_score,
+                    contents.created_at,
+                    contents.edited_at,
+                    contents.deleted_at,
+                    actors.id AS author_id,
+                    actors.username AS author_username,
+                    actors.actor_type AS "author_actor_type: ActorType",
+                    actors.display_name AS author_display_name,
+                    actors.bio AS author_bio,
+                    actors.created_at AS author_created_at,
+                    actors.deleted_at AS author_deleted_at,
+                    COALESCE(
+                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
+                        '{}'
+                    ) AS "tags!: Vec<String>"
+                FROM contents
+                JOIN actors ON actors.id = contents.actor_id
+                JOIN content_tags AS filtre ON filtre.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN tags ON tags.id = content_tags.tag_id
+                WHERE filtre.tag_id = $1
+                  AND contents.content_type = 'post'::content_type
+                  AND contents.deleted_at IS NULL
+                  AND (
+                      $2::double precision IS NULL
+                      OR (contents.hot_score, contents.id) < ($2::double precision, $3::bigint)
+                  )
+                GROUP BY contents.id, actors.id
+                ORDER BY contents.hot_score DESC, contents.id DESC
+                LIMIT $4
+                "#,
+                tag_id,
+                cursor_hot,
+                cursor_id,
+                limit + 1,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    Ok(paginate(
+        rows,
+        limit,
+        |row: &ContentRow| row.id,
+        |row: &ContentRow| post_sort_key(sort, row),
         Content::from,
     ))
 }
