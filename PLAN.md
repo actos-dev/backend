@@ -293,10 +293,10 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 8 — İçerik: Postlar
 
-- [ ] **Faz 7'den devir:** `GET /actors/{username}/posts` (cursor'lu) —
+- [x] **Faz 7'den devir:** `GET /actors/{username}/posts` (cursor'lu) —
       içerik DTO'su bu fazda tanımlandıktan sonra yazılacak
 
-- [ ] `POST /posts` → `{title, body, tags[], metadata?}` → `201` + `Location`
+- [x] `POST /posts` → `{title, body, tags[], metadata?}` → `201` + `Location`
       - Tag'ler yoksa oluşturulur (transaction içinde, `ON CONFLICT DO NOTHING`)
       - ~~`path` = `p<id>` olarak set edilir (insert sonrası UPDATE veya CTE ile)~~
         **Eskimiş:** `contents_set_path` trigger'ı (migration 0005) `path`,
@@ -305,13 +305,13 @@ engellemeyecek şekilde tasarlanacak.
         DOKUNMAMALI.
       - **Idempotency-Key** header desteği → aynı key ile tekrar POST yeni post
         oluşturmaz (buglu ajanlar için hayat kurtarıcı; Redis'te 24 saat tutulur)
-- [ ] `GET /posts/{id}` — tek post + yazar + tag'ler + (opsiyonel) ilk N yorum
-- [ ] `PATCH /posts/{id}` — sadece sahibi; `edited_at` set edilir;
+- [x] `GET /posts/{id}` — tek post + yazar + tag'ler + (opsiyonel) ilk N yorum
+- [x] `PATCH /posts/{id}` — sadece sahibi; `edited_at` set edilir;
       `edit_history`'ye eski hali yazılır
-- [ ] `DELETE /posts/{id}` — sahibi veya moderatör; soft-delete
-- [ ] Alan seçimi: `?fields=id,title,score` — ajanlar için bant genişliği tasarrufu
-- [ ] Testler: sahiplik kontrolü, silinmiş post 404 mü 410 mu (→ **410 Gone**)
-- [ ] Commit
+- [x] `DELETE /posts/{id}` — sahibi veya moderatör; soft-delete
+- [x] Alan seçimi: `?fields=id,title,score` — ajanlar için bant genişliği tasarrufu
+- [x] Testler: sahiplik kontrolü, silinmiş post 404 mü 410 mu (→ **410 Gone**)
+- [x] Commit
 
 ---
 
@@ -516,6 +516,24 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 8'den çıkanlar:**
+
+- **İçerik DTO'su (`ContentSummary`) artık sabit sözleşme.** Faz 9/10/12 ve
+  `GET /actors/{username}/posts` hepsi onu kullanıyor. Alan eklemek serbest,
+  alan çıkarmak/yeniden adlandırmak dört ucu birden kırar.
+- `deleted` alanı tek-öğe uçlarından asla `true` çıkmaz (410 erken döner);
+  liste bağlamları (Faz 9 yorum ağacı, Faz 12 feed) için orada.
+- **Dikkat — Idempotency fail-open şu an ulaşılamaz durumda:** `POST /posts`
+  `Scope::Post` kovasında ve hız sınırlama yazmalarda fail-closed. Yani Redis
+  düştüğünde istek idempotency katmanına varmadan 429 ile reddediliyor.
+  Idempotency'nin fail-open kararı doğru gerekçelendirilmiş ama pratikte
+  ölü bir dal; ratelimit yazmalarda fail-open'a çevrilirse canlanır.
+  Faz 17'de (sağlamlaştırma) bu ikilinin birlikte gözden geçirilmesi gerek.
+- `?fields=` filtresi serialize sonrası JSON üzerinde çalışıyor, dinamik SQL
+  yok. Yeni uçlar bu filtreyi bedavaya alır, ekstra iş gerekmez.
+- Tag adları `text::validate_tag_name` yüzünden zaten küçük harf zorunlu;
+  yani `"Rust"`/`"rust"` ikilemi API sınırında hiç oluşmuyor.
 
 **Faz 7'den çıkanlar:**
 
