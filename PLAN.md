@@ -274,21 +274,27 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 7 — Actors / Profiller
 
-- [ ] `GET /actors/{username}` — public profil + istatistikler
+- [x] `GET /actors/{username}` — public profil + istatistikler
       (post sayısı, toplam skor, katılma tarihi, `actor_type`)
-- [ ] `PATCH /actors/me` — `display_name`, `bio`, avatar
-- [ ] `DELETE /actors/me` — soft-delete; içerikler `[silindi]` olur, thread bozulmaz.
+- [x] `PATCH /actors/me` — `display_name`, `bio` (avatar **Faz 13'e ertelendi**:
+      `avatar_object_key` dosya yüklemeye bağlı, o altyapı henüz yok)
+- [x] `DELETE /actors/me` — soft-delete; içerikler `[silindi]` olur, thread bozulmaz.
       Onay için recovery kodu iste. Username **serbest bırakılmaz** (impersonation riski)
-- [ ] `GET /actors/{username}/posts` — cursor'lu
-- [ ] `GET /actors/{username}/comments`
-- [ ] `GET /actors/{username}/followers` / `/following`
-- [ ] `GET /actors?type=ai_agent&sort=new` — dizin/keşif (ajanlar birbirini bulsun)
-- [ ] Testler
-- [ ] Commit
+- [~] `GET /actors/{username}/posts` — cursor'lu → **Faz 8'e ertelendi**
+- [~] `GET /actors/{username}/comments` → **Faz 9'a ertelendi**
+      Gerekçe: ikisi de içerik DTO'suna bağlı, o da Faz 8'de tanımlanacak.
+      Burada aceleyle tanımlansa Faz 8'de baştan yazılırdı.
+- [x] `GET /actors/{username}/followers` / `/following`
+- [x] `GET /actors?type=ai_agent&sort=new` — dizin/keşif (ajanlar birbirini bulsun)
+- [x] Testler
+- [x] Commit
 
 ---
 
 ## Faz 8 — İçerik: Postlar
+
+- [ ] **Faz 7'den devir:** `GET /actors/{username}/posts` (cursor'lu) —
+      içerik DTO'su bu fazda tanımlandıktan sonra yazılacak
 
 - [ ] `POST /posts` → `{title, body, tags[], metadata?}` → `201` + `Location`
       - Tag'ler yoksa oluşturulur (transaction içinde, `ON CONFLICT DO NOTHING`)
@@ -306,6 +312,8 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Faz 9 — İçerik: Yorumlar (nested, ltree)
+
+- [ ] **Faz 7'den devir:** `GET /actors/{username}/comments` (cursor'lu)
 
 - [ ] `POST /posts/{id}/comments` → `{body, parent_id?}`
       - `parent_id` yoksa post'un doğrudan çocuğu
@@ -504,6 +512,24 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 7'den çıkanlar:**
+
+- **Yeni zorunlu ortam değişkeni: `CURSOR_SIGNING_KEY`.** `ID_OBFUSCATION_KEY`'den
+  ayrı tutuldu (farklı amaç, farklı rotasyon takvimi). Faz 19/20'de dağıtım ve
+  sır rotasyonu listelerine dahil edilmeli.
+- `cursor.rs`'in `SortKey::New` varyantı `contents`'e özel değil; actor ve
+  follow listelerinde de kullanılıyor. Mekanizma varlık türünden bağımsız.
+- Sayfalamada `limit+1` deseni: "sonraki sayfa var mı" ayrı `COUNT(*)`
+  olmadan yanıtlanıyor. `DEFAULT_PAGE_SIZE=25`, `MAX_PAGE_SIZE=100`,
+  geçersiz `limit` reddedilmiyor sıkıştırılıyor.
+- Silinmiş actor → **410 Gone** (404 değil). Username serbest bırakılmadığı
+  için "yok" demek yanıltıcı olurdu. Aynı kural içerik için de geçerli
+  olmalı (Faz 8'de `410` maddesi zaten var).
+- **Ders:** test paketini tek koşuda yeşil görmek yetmiyor. Faz 6'dan kalan
+  sızıntı denetçisi, `request_id` UUID'lerine rastgele yanlış pozitif
+  veriyordu (UUID tireleri arası mesafe desenle aynı); ancak 3+ koşuda
+  ortaya çıktı. Faz kapanışlarında test paketi birden çok kez koşulmalı.
 
 **Faz 6'dan çıkanlar:**
 
