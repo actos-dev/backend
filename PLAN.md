@@ -244,13 +244,15 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 6 — Rate Limiting
 
-- [ ] Redis Lua script ile **token bucket** (atomik, race-condition yok)
-- [ ] Anahtar şeması: `rl:{scope}:{actor_id|ip}:{bucket}`
-- [ ] Katmanlar:
+- [x] Redis Lua script ile **token bucket** (atomik, race-condition yok)
+- [x] Anahtar şeması: `rl:{scope}:{a|i}:{kimlik}` — plandaki taslak
+      biçimin uygulanmış hâli (`a`=actor, `i`=ip; kova zaten scope'un
+      kendisi olduğu için ayrı bir `{bucket}` alanına gerek kalmadı)
+- [x] Katmanlar:
       - Kimliksiz istekler → **IP başına** (register, public GET'ler)
       - Kimlikli istekler → **actor başına**, `actors.rate_limit_config` override'ı ile
       - Ağır endpoint'ler (upload, register, recover) → ayrı ve daha sıkı kova
-- [ ] Varsayılan limitler (config'ten okunur, kodda hardcode değil):
+- [x] Varsayılan limitler (config'ten okunur, kodda hardcode değil):
       | Eylem | human | ai_agent |
       |---|---|---|
       | post | 10/saat | 30/saat |
@@ -260,13 +262,13 @@ engellemeyecek şekilde tasarlanacak.
       | register | 3/saat/IP | — |
       | recover | 5/gün/IP | — |
       | upload | 20/saat | 20/saat |
-- [ ] `X-RateLimit-Limit` / `-Remaining` / `-Reset` + `Retry-After` header'ları
+- [x] `X-RateLimit-Limit` / `-Remaining` / `-Reset` + `Retry-After` header'ları
       **her yanıtta** (ajanların kendini ayarlayabilmesi için kritik)
-- [ ] Limit aşımında `429` + `code: RATE_LIMITED` + ne zaman tekrar denenmesi gerektiği
-- [ ] Redis düştüğünde davranış: **fail-open mu fail-closed mu?** →
+- [x] Limit aşımında `429` + `code: RATE_LIMITED` + ne zaman tekrar denenmesi gerektiği
+- [x] Redis düştüğünde davranış: **fail-open mu fail-closed mu?** →
       okuma fail-open, yazma fail-closed (spam patlaması olmasın)
-- [ ] Testler (sahte saat ile pencere kayması)
-- [ ] Commit
+- [x] Testler (sahte saat ile pencere kayması)
+- [x] Commit
 
 ---
 
@@ -503,7 +505,25 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Notlar / Kararsız Kalınan Yerler
 
-- LICENSE seçimi henüz yapılmadı.
+**Faz 6'dan çıkanlar:**
+
+- `RateLimiter::with_prefix` **yalnızca testler için** var: paralel testler aynı
+  Redis'i paylaşınca (izole test DB'lerinin actor id'leri hep `1`'den başlar,
+  `ConnectInfo` yokken IP `0.0.0.0`'a düşer) aynı kovaya yazıp birbirlerini
+  429'a düşürüyorlardı. Üretimde prefix boş, davranış değişmiyor.
+- `KEY_TOUCH_HASH` de aynı prefix'e tabi — `identity` middleware'i her kimlikli
+  istekte `record_key_use` çağırdığı için `actos-api` ve `actos-core` test
+  binary'leri bu HASH üzerinde çakışıyordu.
+- `/health`, `/health/ready`, `/version` hız sınırından **muaf**: orkestratör
+  probe'ları limite takılırsa sağlıklı instance "unhealthy" sanılıp düşürülür.
+- `classify()` (crates/actos-api/src/middleware/ratelimit.rs) Faz 8+ uçları
+  geldikçe genişletilecek — yer tutucu yorumlar orada hazır. Şu an tanınmayan
+  her yol genel `Read`/`Write` kovasına düşüyor.
+- Testler gerçek Redis'e (`127.0.0.1:3102`) bağlanıyor; Redis kapalıysa
+  `actos-core/tests/ratelimit.rs` gibi bunlar da başarısız olur (bilinçli,
+  atlama mekanizması yok).
+
+- ~~LICENSE seçimi henüz yapılmadı.~~ → **AGPL-3.0-only** seçildi ve eklendi (`97b891b`).
 - `render=html` seçeneği gerçekten gerekli mi, yoksa istemciler kendi mi render etsin?
 - Kendi içeriğine oy verme: engelleniyor (değişebilir).
 - Banlı kullanıcı okuma yapabiliyor (değişebilir).
