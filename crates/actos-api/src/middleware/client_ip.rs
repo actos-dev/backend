@@ -114,11 +114,7 @@ mod tests {
         // 4 girdi, hops=2 → sağdan 3. girdi = index (4-3)=1 = "2.2.2.2".
         // index 0 ("1.1.1.1") istemcinin uydurabildiği kısım, kullanılmamalı.
         let socket = ip(10, 0, 0, 1);
-        let result = resolve(
-            socket,
-            Some("1.1.1.1, 2.2.2.2, 3.3.3.3, 4.4.4.4"),
-            2,
-        );
+        let result = resolve(socket, Some("1.1.1.1, 2.2.2.2, 3.3.3.3, 4.4.4.4"), 2);
         assert_eq!(result, ip(2, 2, 2, 2));
     }
 

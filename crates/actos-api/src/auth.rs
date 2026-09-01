@@ -47,10 +47,10 @@ impl FromRequestParts<AppState> for CurrentActor {
             // de savunmacı: middleware bir şekilde atlanırsa (ör. yanlış
             // kurulmuş bir test router'ı) sessizce "kimliksiz" davranmak
             // yerine aynı, doğru hatayı üretmek daha güvenli.
-            Some(ResolvedIdentity::Anonymous) | None => Err(ApiError::new(
-                actos_core::Error::MissingCredentials,
-            )
-            .with_request_id(&parts.headers)),
+            Some(ResolvedIdentity::Anonymous) | None => {
+                Err(ApiError::new(actos_core::Error::MissingCredentials)
+                    .with_request_id(&parts.headers))
+            }
         }
     }
 }

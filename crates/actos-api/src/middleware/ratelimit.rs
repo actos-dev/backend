@@ -24,7 +24,9 @@ use sqlx::PgPool;
 
 use actos_core::ratelimit::{RateLimitConfig, RateLimitDecision, Scope, Subject, config_from_json};
 
-use crate::{error::ApiError, middleware::client_ip, middleware::identity::ResolvedIdentity, state::AppState};
+use crate::{
+    error::ApiError, middleware::client_ip, middleware::identity::ResolvedIdentity, state::AppState,
+};
 
 /// İstenen `Scope`'u yol + metottan çıkarır.
 ///
@@ -191,7 +193,10 @@ pub async fn enforce(State(state): State<AppState>, req: Request, next: Next) ->
         // Anonim VE doğrulaması başarısız olmuş (401 dönecek) istekler
         // aynı şekilde IP başına sınırlanır — bir istemci geçersiz key'ler
         // deneyerek hız sınırını atlatamamalı.
-        _ => Subject::Ip(resolve_client_ip(&req, state.config().server.trusted_proxy_hops)),
+        _ => Subject::Ip(resolve_client_ip(
+            &req,
+            state.config().server.trusted_proxy_hops,
+        )),
     };
 
     let override_cfg = match &identity {
