@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contents SET created_at = now() - interval '30 days' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "68ec1060d67a7e08b97bc5cb9dc65cfa9fd219a0b49aa9303a28e531c1f2d9c2"
+}

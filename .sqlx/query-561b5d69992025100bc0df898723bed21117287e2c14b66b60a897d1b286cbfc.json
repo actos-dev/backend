@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT score, upvotes, downvotes FROM contents WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "score",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "score"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "upvotes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "upvotes"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "downvotes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "downvotes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "561b5d69992025100bc0df898723bed21117287e2c14b66b60a897d1b286cbfc"
+}

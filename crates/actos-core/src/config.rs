@@ -47,6 +47,9 @@ pub struct ServerConfig {
     /// başlatılmaz — tek seferlik bir kurulumda ya da temizliği dışarıdan
     /// (cron) yürütmek isteyen bir dağıtımda kapatılabilsin diye.
     pub tag_cleanup_interval: Duration,
+    /// `hot_score` tazeleme işinin çalışma aralığı (bkz.
+    /// `crate::feed::recompute_hot_scores`). Sıfır = iş hiç başlatılmaz.
+    pub hot_score_interval: Duration,
     /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
     /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
     /// güvenilebileceğini belirler.
@@ -147,6 +150,12 @@ impl Config {
                 // üretmez.
                 tag_cleanup_interval: Duration::from_secs(
                     optional("TAG_CLEANUP_INTERVAL_SECS")?.unwrap_or(6 * 60 * 60),
+                ),
+                // Varsayılan 15 dakika. `hot_score` her oyla zaten anında
+                // güncelleniyor; bu iş yalnızca zaman terimi kaydıkça
+                // değerleri tazeliyor, sık koşmasının bir karşılığı yok.
+                hot_score_interval: Duration::from_secs(
+                    optional("HOT_SCORE_INTERVAL_SECS")?.unwrap_or(15 * 60),
                 ),
             },
             database: DatabaseConfig {

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM saves WHERE actor_id = $1 AND content_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f4b271bee4ef7c2771848066dc80e1ca5786928c769293773fe75082857b94b"
+}

@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use actos_api::{app, state};
+use actos_api::{app, jobs, state};
 use actos_core::{
     Config, Storage, cache, cursor::CursorCodec, db, id::IdCodec, idempotency::IdempotencyStore,
     ratelimit::RateLimiter,
@@ -52,6 +52,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = config.server.addr;
     let tag_cleanup_interval = config.server.tag_cleanup_interval;
+    let hot_score_interval = config.server.hot_score_interval;
     let state = state::AppState::new(
         config,
         db,
@@ -63,35 +64,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         idempotency,
     );
 
-    // Kullanılmayan etiketleri toplayan periyodik iş (Faz 10). İş
-    // `pg_try_advisory_lock` ile korunuyor, yani birden fazla instance
-    // çalışsa bile aynı anda yalnızca birinde koşar — bu spawn'ın
-    // instance başına olması sorun değil.
-    //
-    // `state.db()` klonlanıyor: `PgPool` zaten `Arc` tabanlı, ucuz.
-    // Görev `axum::serve`in graceful shutdown'ına bağlanmıyor; tek
-    // yaptığı iş kısa bir `DELETE` ve süreç kapanırken tokio runtime'ı
-    // ile birlikte düşüyor, yarım kalmış bir transaction bırakmıyor.
-    if tag_cleanup_interval.is_zero() {
-        tracing::info!("etiket temizliği devre dışı (TAG_CLEANUP_INTERVAL_SECS=0)");
-    } else {
-        let cleanup_pool = state.db().clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(tag_cleanup_interval);
-            // İlk tick hemen ateşlenir; açılışta bir kez koşmak istiyoruz
-            // zaten (uzun süre kapalı kalmış bir dağıtımda birikmiş çöp
-            // ilk turda temizlensin).
-            loop {
-                ticker.tick().await;
-                if let Err(err) = actos_core::tag::cleanup_unused(&cleanup_pool).await {
-                    // Temizlik başarısız olursa sunucu çalışmaya devam
-                    // etmeli: bu bir bakım işi, isteklerin doğruluğunu
-                    // etkilemiyor.
-                    tracing::warn!(error = %err, "etiket temizliği başarısız oldu");
-                }
-            }
-        });
-    }
+    // Periyodik bakım işleri (Faz 10 ve 12). İkisi de kendi advisory
+    // lock'ını kendi içinde alıyor, bu yüzden birden fazla instance
+    // çalışsa bile aynı anda yalnızca birinde iş yapılıyor — bkz.
+    // `crate::jobs` modül dokümantasyonu.
+    jobs::spawn_periodic(
+        "etiket temizliği",
+        state.db().clone(),
+        tag_cleanup_interval,
+        |pool| async move { actos_core::tag::cleanup_unused(&pool).await },
+    );
+    jobs::spawn_periodic(
+        "hot score tazeleme",
+        state.db().clone(),
+        hot_score_interval,
+        |pool| async move { actos_core::feed::recompute_hot_scores(&pool).await },
+    );
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın
     // dışında kalıyor: `/posts/` ile `/posts` aynı rotaya düşsün.

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE contents\n        SET hot_score = (\n            sign(score) * log(greatest(abs(score), 1)::numeric)\n            + extract(epoch FROM created_at) / 45000.0\n        )::double precision\n        WHERE content_type = 'post'::content_type\n          AND deleted_at IS NULL\n          AND created_at >= $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9222c3f47471954cbea85e186e6e915ba3ec37acb0b3f52024046bdc70a93e19"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT value FROM votes WHERE actor_id = $1 AND content_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "votes",
+            "name": "value"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f22b227db050fc1be0c841b6aaaf3987aff805ddc533233b9971ac7817269699"
+}

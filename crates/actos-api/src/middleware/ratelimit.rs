@@ -70,8 +70,16 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
         return Some(Scope::Comment);
     }
 
-    // Faz 11+ geldiğinde buraya benzer eşlemeler eklenecek, ör.:
-    //   if *method == Method::POST && path.ends_with("/votes") { return Some(Scope::Vote); }
+    // `PUT /contents/{id}/vote`. Oy `POST` değil `PUT` (idempotent, bkz.
+    // `actos_core::interaction`), o yüzden metot kontrolü `PUT`.
+    // Kaydetme (`/save`) ve takip (`/follow`) bilerek `Scope::Vote`'a
+    // girmiyor: onlar sıralamayı etkilemeyen kişisel işaretler, oy kadar
+    // sıkı bir kovayı hak etmiyorlar — genel `Write` kovasına düşüyorlar.
+    if *method == Method::PUT && path.ends_with("/vote") {
+        return Some(Scope::Vote);
+    }
+
+    // Faz 13 geldiğinde buraya eklenecek:
     //   if *method == Method::POST && path == "/media" { return Some(Scope::Upload); }
     // Bu satırların üstünde durmaları gerekiyor çünkü aşağıdaki genel
     // GET/diğer ayrımı her şeyi yakalar. `GET /posts/{id}` özel bir eşleme

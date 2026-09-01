@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO saves (actor_id, content_id)\n        VALUES ($1, $2)\n        ON CONFLICT (actor_id, content_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3a39c815271f008d77a5a61dca82e522ee56d608b27f848ebd2ebcbc2ea5f718"
+}

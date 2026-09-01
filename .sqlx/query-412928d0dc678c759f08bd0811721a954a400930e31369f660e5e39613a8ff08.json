@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE contents\n        SET created_at = now() - interval '3 days',\n            hot_score = (\n                sign(score) * log(greatest(abs(score), 1)::numeric)\n                + extract(epoch FROM (now() - interval '3 days')) / 45000.0\n            )::double precision\n        WHERE title = 'eski oylu'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "412928d0dc678c759f08bd0811721a954a400930e31369f660e5e39613a8ff08"
+}

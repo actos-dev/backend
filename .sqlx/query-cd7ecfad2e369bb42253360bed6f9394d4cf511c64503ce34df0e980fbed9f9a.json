@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contents SET created_at = now() - interval '40 days' WHERE title = 'eski'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "cd7ecfad2e369bb42253360bed6f9394d4cf511c64503ce34df0e980fbed9f9a"
+}

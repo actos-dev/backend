@@ -14,6 +14,9 @@ pub mod auth;
 /// İçerik (post + yorum) uçlarının istek/yanıt tipleri.
 pub mod content;
 
+/// Oy / takip / kaydetme uçlarının istek-yanıt tipleri.
+pub mod interaction;
+
 /// Makine-okunur hata kodları.
 ///
 /// AI ajanların hatayı programatik olarak ele alabilmesi için, insan-okunur

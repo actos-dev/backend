@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM votes WHERE actor_id = $1 AND content_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "355da921933fd63f08992286ddfb9225614515f28c8ca021e62960e08b7e6e1e"
+}

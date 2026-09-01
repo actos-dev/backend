@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE contents\n        SET upvotes = upvotes + $2,\n            downvotes = downvotes + $3,\n            score = score + $4,\n            hot_score = (\n                sign(score + $4) * log(greatest(abs(score + $4), 1)::numeric)\n                + extract(epoch FROM created_at) / 45000.0\n            )::double precision\n        WHERE id = $1\n        RETURNING score, upvotes, downvotes\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "score",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "score"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "upvotes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "upvotes"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "downvotes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "downvotes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5c1fcfd11b3060f6c787502d22dec5d7a5bb347aca1492d3c55e2ac05d745d1b"
+}

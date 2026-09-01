@@ -3,7 +3,9 @@
 pub mod actors;
 pub mod auth;
 pub mod comments;
+pub mod feed;
 pub mod health;
+pub mod interactions;
 pub mod meta;
 pub mod posts;
 pub mod tags;
@@ -23,6 +25,8 @@ pub fn router() -> Router<AppState> {
         .merge(posts::router())
         .merge(comments::router())
         .merge(tags::router())
+        .merge(interactions::router())
+        .merge(feed::router())
         .fallback(not_found)
 }
 
