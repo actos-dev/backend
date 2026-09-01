@@ -338,13 +338,13 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 10 — Etiketler
 
-- [ ] `GET /tags` — popülerliğe göre, cursor'lu
-- [ ] `GET /tags/{name}/posts?sort=new|top|hot&cursor=...`
+- [x] `GET /tags` — popülerliğe göre, cursor'lu
+- [x] `GET /tags/{name}/posts?sort=new|top|hot&cursor=...`
       (amac.txt'teki `GET posts/nvidia` senaryosu)
-- [ ] `GET /tags/search?q=nv` — `pg_trgm` ile otomatik tamamlama
-- [ ] Tag normalizasyonu: lowercase, trim, `[a-z0-9-]{1,32}`, eşanlamlı yok (v1)
-- [ ] Kullanılmayan tag'leri temizleyen periyodik job
-- [ ] Commit
+- [x] `GET /tags/search?q=nv` — `pg_trgm` ile otomatik tamamlama
+- [x] Tag normalizasyonu: lowercase, trim, `[a-z0-9-]{1,32}`, eşanlamlı yok (v1)
+- [x] Kullanılmayan tag'leri temizleyen periyodik job
+- [x] Commit
 
 ---
 
@@ -516,6 +516,30 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 10'dan çıkanlar:**
+
+- **`pg_trgm` tek başına otomatik tamamlama için yetmiyor.** Canlı
+  veritabanında ölçüldü: `similarity('nvidia','nv')` = 0.25, `pg_trgm`
+  eşiği 0.3 — yani planın kendi `?q=nv` örneği saf trigram ile boş dönerdi.
+  `GET /tags/search` önek eşleşmesi + trigram'ı birlikte kullanıyor.
+  **Faz 15 (arama) aynı tuzağa düşmemeli:** kısa sorgular için trigram
+  benzerliği tek başına yeterli bir eşleşme ölçütü değil.
+- **Etiket popülerliği sorgu anında sayılıyor**, sayaç sütunu yok. Faz 17'de
+  ölçülüp gerekirse materialized view'a taşınabilir; dışa dönük sözleşme
+  değişmez.
+- **`PostSort` (new|top|hot) eklendi** ve `sort=hot` bugünden çalışıyor,
+  ama `hot_score` her satırda `0` olduğu için sıralama `id DESC`'e düşüyor.
+  Faz 12 yalnızca `hot_score`'u doldurmakla yükümlü — uç, cursor ve
+  sözleşme hazır.
+- `Content` artık `hot_score` taşıyor ama `ContentSummary` DTO'sunda yok.
+  Faz 12 isterse DTO'ya ekleyebilir (alan eklemek güvenli, bkz. Faz 8 notu).
+- **Advisory lock'lar PostgreSQL'de veritabanı kapsamlı** (`pg_locks.database`
+  ile doğrulandı). Faz 12'nin periyodik `hot_score` işi de aynı deseni
+  kullanabilir; `sqlx::test` her teste ayrı veritabanı verdiği için testler
+  çekişmiyor.
+- Yeni ortam değişkeni: `TAG_CLEANUP_INTERVAL_SECS` (varsayılan 6 saat,
+  `0` = iş hiç başlatılmaz). Faz 19/20 dağıtım listesine girmeli.
 
 **Faz 9'dan çıkanlar:**
 
