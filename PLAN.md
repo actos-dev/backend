@@ -391,42 +391,42 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 13 — Dosya Yükleme (MinIO)
 
-- [ ] `POST /uploads` — multipart; limit **8 MB** (config'ten)
-- [ ] Doğrulama sırası: boyut → **magic byte** (`infer` crate) → allowlist
+- [x] `POST /uploads` — multipart; limit **8 MB** (config'ten)
+- [x] Doğrulama sırası: boyut → **magic byte** (`infer` crate) → allowlist
       (`image/jpeg`, `image/png`, `image/webp`, `image/gif`)
       — uzantıya veya `Content-Type` header'ına **asla** güvenme
-- [ ] `image` crate ile: decode → EXIF/metadata sıfırla → WebP'ye normalize et →
+- [x] `image` crate ile: decode → EXIF/metadata sıfırla → WebP'ye normalize et →
       max boyut (2048px) küpçüle → thumbnail üret
-- [ ] **Decompression bomb koruması:** decode öncesi boyut sınırı kontrolü
-- [ ] `object_key` = `<actor_id_b62>/<uuidv7>.webp` — kullanıcı girdisi yolun
+- [x] **Decompression bomb koruması:** decode öncesi boyut sınırı kontrolü
+- [x] `object_key` = `<actor_id_b62>/<uuidv7>.webp` — kullanıcı girdisi yolun
       parçası olmaz (path traversal yok)
-- [ ] MinIO'ya `aws-sdk-s3` ile yükle; checksum sakla
-- [ ] Post/yorum oluştururken `attachment_ids[]` ile bağla; bağlanmamış
+- [x] MinIO'ya `aws-sdk-s3` ile yükle; checksum sakla
+- [x] Post/yorum oluştururken `attachment_ids[]` ile bağla; bağlanmamış
       yüklemeleri 24 saat sonra silen temizlik job'u
-- [ ] Servis: bucket public-read → doğrudan URL. (İleride private + presigned URL)
-- [ ] `DELETE /uploads/{id}` — sahibi; MinIO'dan da sil
-- [ ] Testler: sahte uzantı, bozuk dosya, çok büyük dosya, zip bomb
-- [ ] Commit
+- [x] Servis: bucket public-read → doğrudan URL. (İleride private + presigned URL)
+- [x] `DELETE /uploads/{id}` — sahibi; MinIO'dan da sil
+- [x] Testler: sahte uzantı, bozuk dosya, çok büyük dosya, zip bomb
+- [x] Commit
 
 ---
 
 ## Faz 14 — Moderasyon ve Admin
 
-- [ ] `POST /reports` → `{target_type, target_id, reason}`
+- [x] `POST /reports` → `{target_type, target_id, reason}`
       — UNIQUE constraint sayesinde aynı hedefe ikinci rapor `409`
-- [ ] `GET /admin/reports?status=pending&cursor=...` (admin/moderator)
-- [ ] `PATCH /admin/reports/{id}` → `{status, notes?}`
-- [ ] `DELETE /admin/contents/{id}` → soft-delete + `reason`
-- [ ] `POST /admin/bans` → `{username, reason, expires_at?}`
-- [ ] `DELETE /admin/bans/{username}` — ban kaldır
-- [ ] `POST /admin/roles` → rol ver/al (sadece `admin`)
-- [ ] `GET /admin/actions?cursor=...` — audit log görüntüleme
-- [ ] **Her admin eylemi otomatik `admin_actions_log`'a** — middleware/helper ile,
+- [x] `GET /admin/reports?status=pending&cursor=...` (admin/moderator)
+- [x] `PATCH /admin/reports/{id}` → `{status, notes?}`
+- [x] `DELETE /admin/contents/{id}` → soft-delete + `reason`
+- [x] `POST /admin/bans` → `{username, reason, expires_at?}`
+- [x] `DELETE /admin/bans/{username}` — ban kaldır
+- [x] `POST /admin/roles` → rol ver/al (sadece `admin`)
+- [x] `GET /admin/actions?cursor=...` — audit log görüntüleme
+- [x] **Her admin eylemi otomatik `admin_actions_log`'a** — middleware/helper ile,
       elle yazmaya bırakılmaz (unutulur)
-- [ ] Yetki katmanı: `require_role(Role::Moderator)` extractor
-- [ ] Banlı actor: yazma `403`, okuma serbest (ya da tamamen kapalı? → **yazma kapalı**)
-- [ ] Testler: yetkisiz erişim her admin endpoint'inde `403` mü
-- [ ] Commit
+- [x] Yetki katmanı: `require_role(Role::Moderator)` extractor
+- [x] Banlı actor: yazma `403`, okuma serbest (ya da tamamen kapalı? → **yazma kapalı**)
+- [x] Testler: yetkisiz erişim her admin endpoint'inde `403` mü
+- [x] Commit
 
 ---
 
@@ -524,6 +524,34 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 13 ve 14'ten çıkanlar:**
+
+- **Ban semantiği değişti:** `authenticate` artık ban'de hata döndürmüyor,
+  `AuthenticatedActor.banned` bayrağını işaretliyor; yazma engelini
+  `CurrentActor` extractor'ı güvenli olmayan HTTP metotlarında uyguluyor.
+  **Yeni bir yazma ucu eklerken ekstra bir şey yapmaya gerek yok** — kural
+  extractor'da, tek yerde.
+- **Yetki extractor'ları hazır:** `ModeratorActor` / `AdminActor`. Faz 16+
+  yeni bir admin ucu eklerse rol kontrolünü handler'a yazmamalı, imzaya
+  koymalı.
+- **Denetim izi domain fonksiyonlarının içinde**, HTTP katmanında değil.
+  Yeni bir admin eylemi eklenirse `moderation::log_action`'ı kendi
+  transaction'ında çağırmalı; iz append-only olduğu için sonradan
+  düzeltilemez.
+- **EXIF ayrıca silinmiyor**, yeniden kodlama düşürüyor. Faz 16'da API
+  dokümantasyonu yazılırken bu davranış belgelenmeli (yükleyen kişi
+  konum verisinin saklanmadığını bilmeli).
+- **`ContentSummary.attachments` `Option`:** `null` = bu görünümde
+  yüklenmedi, `[]` = ek yok. Liste uçları doldurmuyor. Faz 16'da OpenAPI
+  şeması bu ayrımı korumalı; bir liste ucunun ekleri de göstermesi
+  isteniyorsa toplu yükleme (tek sorgu) gerekir, öğe başına sorgu değil.
+- **`sqlx::query!` `CASE WHEN ... THEN NULL` dallarında tip çıkaramıyor** —
+  açık cast şart (`$n::bigint`). Benzer bir sorgu yazan sonraki faz aynı
+  duvara toslamasın.
+- Yeni ortam değişkenleri: `MAX_UPLOAD_BYTES` (8 MB),
+  `ORPHAN_CLEANUP_INTERVAL_SECS` (1 saat). Faz 19/20 dağıtım listesine.
+- Yeni dış id türleri: `f_` (attachment), `r_` (report).
 
 **Faz 11 ve 12'den çıkanlar:**
 
