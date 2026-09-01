@@ -298,7 +298,11 @@ engellemeyecek şekilde tasarlanacak.
 
 - [ ] `POST /posts` → `{title, body, tags[], metadata?}` → `201` + `Location`
       - Tag'ler yoksa oluşturulur (transaction içinde, `ON CONFLICT DO NOTHING`)
-      - `path` = `p<id>` olarak set edilir (insert sonrası UPDATE veya CTE ile)
+      - ~~`path` = `p<id>` olarak set edilir (insert sonrası UPDATE veya CTE ile)~~
+        **Eskimiş:** `contents_set_path` trigger'ı (migration 0005) `path`,
+        `depth` ve `root_post_id`'yi BEFORE INSERT'te kendisi hesaplıyor;
+        etiket öneki de `p` değil `c` (`c<id>`). Uygulama bu üç sütuna
+        DOKUNMAMALI.
       - **Idempotency-Key** header desteği → aynı key ile tekrar POST yeni post
         oluşturmaz (buglu ajanlar için hayat kurtarıcı; Redis'te 24 saat tutulur)
 - [ ] `GET /posts/{id}` — tek post + yazar + tag'ler + (opsiyonel) ilk N yorum
