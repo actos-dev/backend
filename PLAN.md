@@ -370,7 +370,15 @@ engellemeyecek şekilde tasarlanacak.
       (amac.txt'teki `GET posts/mainpage`)
 - [ ] `GET /feed/following` — takip edilenlerin postları (auth gerekli)
 - [ ] **Hot score formülü** (Reddit tarzı):
-      `log10(max(|score|,1)) + sign(score) * (epoch_seconds / 45000)`
+      `sign(score) * log10(max(|score|,1)) + epoch_seconds / 45000`
+      - ~~`log10(max(|score|,1)) + sign(score) * (epoch_seconds / 45000)`~~
+        **Düzeltildi:** `sign` çarpanı yanlış terimdeydi. O hâliyle
+        `sign(0) = 0` zaman terimini tamamen siliyor ve **oy almamış her
+        post `hot_score = 0` alıp dibe düşüyordu** (veritabanında ölçüldü:
+        yeni ve oysuz bir post 0, bir haftalık tek oylu bir post 39728).
+        Postların çoğunun 0 oyda olduğu yeni bir platformda "hot" feed
+        çalışmaz hâle gelirdi. Doğru sıralamada `sign` log terimini
+        çarpar, zaman terimi koşulsuz eklenir.
       - Her post için `hot_score` kolonunda saklanır
       - Oy geldiğinde anında güncellenir + periyodik job son 7 günü yeniden hesaplar
 - [ ] Periyodik job altyapısı — `tokio` task + `tokio-cron-scheduler`,
