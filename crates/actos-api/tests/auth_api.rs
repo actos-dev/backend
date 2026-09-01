@@ -642,7 +642,7 @@ async fn gecerli_kurtarma_kodu_yeni_key_uretir_tekrar_kullanilamaz(pool: PgPool)
 // --- Ban -----------------------------------------------------------------
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn banli_actor_403_banned_doner(pool: PgPool) {
+async fn banli_actor_yazamaz_ama_okuyabilir(pool: PgPool) {
     // Ham SQL için ayrı bir tutamaç: `pool` altta `build_router`'a taşınacak
     // (`PgPool` klonlanabilir, iç havuz paylaşımlı — aynı veritabanına gider).
     let raw_pool = pool.clone();
@@ -683,13 +683,33 @@ async fn banli_actor_403_banned_doner(pool: PgPool) {
     .await
     .expect("ban eklenebilmeli");
 
+    // **Okuma serbest** (Faz 14'te değişen davranış): ban yazmaya
+    // yöneliktir, banlı bir actor kendi profilini bile göremeseydi ceza
+    // amacını aşardı. Kimlik doğrulama artık ban'de düşmüyor, yalnızca
+    // `AuthenticatedActor::banned` bayrağını işaretliyor.
     let (status, body, _) = send(&router, auth_req("GET", "/auth/whoami", &victim_key)).await;
+    assert_eq!(status, StatusCode::OK, "banlı actor okuyabilmeli: {body}");
+    assert_eq!(body["actor"]["username"], "ban_victim", "{body}");
+
+    // **Yazma kapalı.** Kural `CurrentActor` extractor'ında, güvenli
+    // olmayan HTTP metotlarında uygulanıyor (bkz. `actos-api/src/auth.rs`).
+    let (status, body, _) = send(
+        &router,
+        Request::builder()
+            .method("POST")
+            .uri("/auth/keys")
+            .header(header::AUTHORIZATION, format!("Bearer {victim_key}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json!({ "label": "yeni key" }).to_string()))
+            .expect("istek kurulabilmeli"),
+    )
+    .await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
-        "banlı actor engellenmedi: {body}"
+        "banlı actor yazamamalı: {body}"
     );
-    assert_eq!(body["code"], "BANNED");
+    assert_eq!(body["code"], "BANNED", "{body}");
 }
 
 // --- Sır sızıntısı ----------------------------------------------------

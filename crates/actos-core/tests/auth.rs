@@ -171,7 +171,7 @@ async fn silinmiş_actorün_key_i_invalid_key_veriyor(
 // --- authenticate: ban ------------------------------------------------------
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn banlı_actor_authenticate_edemiyor(
+async fn banlı_actor_doğrulanıyor_ama_işaretleniyor(
     pool: PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let admin = auth::register(&pool, "modadmin", ActorType::Human, None).await?;
@@ -188,10 +188,14 @@ async fn banlı_actor_authenticate_edemiyor(
     .execute(&pool)
     .await?;
 
-    assert!(matches!(
-        auth::authenticate(&pool, &victim.api_key).await,
-        Err(Error::Banned)
-    ));
+    // **Faz 14'te değişen davranış:** ban artık kimlik doğrulamayı
+    // düşürmüyor, yalnızca `banned` bayrağını işaretliyor. Yazma engelini
+    // HTTP katmanı (`actos-api`'deki `CurrentActor` extractor'ı) güvenli
+    // olmayan metotlarda uyguluyor; okuma serbest kalıyor. Gerekçe
+    // `AuthenticatedActor::banned` üzerinde.
+    let kimlik = auth::authenticate(&pool, &victim.api_key).await?;
+    assert!(kimlik.banned, "banlı actor işaretlenmeli");
+    assert_eq!(kimlik.actor.username, "banneduser");
 
     Ok(())
 }
@@ -216,6 +220,10 @@ async fn süresi_dolmuş_ban_authenticate_i_engellemiyor(
 
     let authed = auth::authenticate(&pool, &victim.api_key).await?;
     assert_eq!(authed.actor.id, victim.actor.id);
+    assert!(
+        !authed.banned,
+        "süresi dolmuş ban `banned` bayrağını da kaldırmalı"
+    );
 
     Ok(())
 }

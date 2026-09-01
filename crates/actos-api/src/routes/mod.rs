@@ -1,6 +1,7 @@
 //! HTTP rotaları.
 
 pub mod actors;
+pub mod admin;
 pub mod auth;
 pub mod comments;
 pub mod feed;
@@ -29,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .merge(interactions::router())
         .merge(feed::router())
         .merge(uploads::router())
+        .merge(admin::router())
         .fallback(not_found)
 }
 

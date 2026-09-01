@@ -1,0 +1,170 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO reports (reporter_actor_id, target_type, target_id, reason)\n        VALUES ($1, $2, $3, $4)\n        RETURNING id, reporter_actor_id,\n                  target_type AS \"target_type: ReportTargetType\",\n                  target_id, reason,\n                  status AS \"status: ReportStatus\",\n                  notes, created_at, resolved_by, resolved_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "reporter_actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "reporter_actor_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "target_type: ReportTargetType",
+        "type_info": {
+          "Custom": {
+            "name": "report_target_type",
+            "kind": {
+              "Enum": [
+                "post",
+                "comment"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "target_type"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "target_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "target_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "status: ReportStatus",
+        "type_info": {
+          "Custom": {
+            "name": "report_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "resolved",
+                "dismissed"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "notes",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "notes"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "resolved_by",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "resolved_by"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "resolved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "reports",
+            "name": "resolved_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "report_target_type",
+            "kind": {
+              "Enum": [
+                "post",
+                "comment"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "9e96d8a256a55f6619f8c77d1adf741e08d2dbfb3000900ba3f49f640ed5abf5"
+}

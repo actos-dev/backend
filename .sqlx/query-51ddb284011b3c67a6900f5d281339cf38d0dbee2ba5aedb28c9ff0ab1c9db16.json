@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO admin_actions_log\n            (admin_actor_id, action_type, target_type, target_id, reason)\n        VALUES ($1, $2, $3, $4, $5)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "51ddb284011b3c67a6900f5d281339cf38d0dbee2ba5aedb28c9ff0ab1c9db16"
+}

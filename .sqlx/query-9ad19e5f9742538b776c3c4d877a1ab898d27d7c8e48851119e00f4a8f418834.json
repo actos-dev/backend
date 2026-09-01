@@ -1,0 +1,109 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT log.id, log.admin_actor_id,\n               actors.username::text AS \"admin_username!\",\n               log.action_type, log.target_type, log.target_id,\n               log.reason, log.created_at\n        FROM admin_actions_log AS log\n        JOIN actors ON actors.id = log.admin_actor_id\n        WHERE (\n            $1::timestamptz IS NULL\n            OR (log.created_at, log.id) < ($1::timestamptz, $2::bigint)\n        )\n        ORDER BY log.created_at DESC, log.id DESC\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "admin_actions_log",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "admin_actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "admin_actions_log",
+            "name": "admin_actor_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "admin_username!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "action_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "admin_actions_log",
+            "name": "action_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "target_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "admin_actions_log",
+            "name": "target_type"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "target_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "admin_actions_log",
+            "name": "target_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "admin_actions_log",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "admin_actions_log",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "9ad19e5f9742538b776c3c4d877a1ab898d27d7c8e48851119e00f4a8f418834"
+}

@@ -19,6 +19,7 @@ pub mod id;
 pub mod idempotency;
 pub mod interaction;
 pub mod media;
+pub mod moderation;
 pub mod ratelimit;
 pub mod secret;
 pub mod storage;

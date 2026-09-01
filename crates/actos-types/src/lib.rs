@@ -17,6 +17,9 @@ pub mod content;
 /// Oy / takip / kaydetme uçlarının istek-yanıt tipleri.
 pub mod interaction;
 
+/// Şikayet ve admin uçlarının istek-yanıt tipleri.
+pub mod moderation;
+
 /// Dosya yükleme uçlarının yanıt tipleri.
 pub mod upload;
 

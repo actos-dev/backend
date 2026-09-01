@@ -11,6 +11,7 @@
 
 use axum::{extract::FromRequestParts, http::request::Parts};
 
+use actos_core::auth::AdminRole;
 pub use actos_core::auth::AuthenticatedActor;
 
 use crate::{error::ApiError, middleware::identity::ResolvedIdentity, state::AppState};
@@ -38,7 +39,19 @@ impl FromRequestParts<AppState> for CurrentActor {
         _state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         match parts.extensions.get::<ResolvedIdentity>() {
-            Some(ResolvedIdentity::Authenticated(actor)) => Ok(Self(actor.clone())),
+            Some(ResolvedIdentity::Authenticated(actor)) => {
+                // **Banlı actor yazamaz ama okuyabilir** (PLAN.md Faz 14).
+                // Kural burada, tek yerde uygulanıyor: her yazma
+                // handler'ına elle `if banned` yazmak, yeni bir uç
+                // eklendiğinde unutulacak bir adım olurdu. Güvenli metotlar
+                // (GET/HEAD/OPTIONS) geçiyor.
+                if actor.banned && !parts.method.is_safe() {
+                    return Err(
+                        ApiError::new(actos_core::Error::Banned).with_request_id(&parts.headers)
+                    );
+                }
+                Ok(Self(actor.clone()))
+            }
             Some(ResolvedIdentity::Failed(err)) => {
                 Err(ApiError::from_arc(err.clone()).with_request_id(&parts.headers))
             }
@@ -80,6 +93,74 @@ impl FromRequestParts<AppState> for OptionalActor {
                 Err(ApiError::from_arc(err.clone()).with_request_id(&parts.headers))
             }
             Some(ResolvedIdentity::Anonymous) | None => Ok(Self(None)),
+        }
+    }
+}
+
+/// Moderatör **veya** admin gerektiren uçlar için extractor.
+///
+/// PLAN.md Faz 14'ün `require_role(Role::Moderator)` maddesi. Yetkiyi
+/// extractor'a taşımak, handler gövdesinde rol kontrolü yapmaya göre iki
+/// şey kazandırıyor: kontrol **unutulamaz** (tip imzasının parçası) ve
+/// yetkisiz istek handler'ın hiçbir satırını çalıştırmadan reddediliyor.
+#[derive(Debug, Clone)]
+pub struct ModeratorActor(pub AuthenticatedActor);
+
+impl std::ops::Deref for ModeratorActor {
+    type Target = AuthenticatedActor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromRequestParts<AppState> for ModeratorActor {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let current = CurrentActor::from_request_parts(parts, state).await?;
+        if current
+            .roles
+            .iter()
+            .any(|r| matches!(r, AdminRole::Admin | AdminRole::Moderator))
+        {
+            Ok(Self(current.0))
+        } else {
+            Err(ApiError::new(actos_core::Error::Forbidden).with_request_id(&parts.headers))
+        }
+    }
+}
+
+/// Yalnızca `admin` gerektiren uçlar için extractor.
+///
+/// Rol yönetimi (`POST /admin/roles`) buna bağlı: bir moderatörün kendine
+/// admin verebilmesi yetki sınırını anlamsız kılardı.
+#[derive(Debug, Clone)]
+pub struct AdminActor(pub AuthenticatedActor);
+
+impl std::ops::Deref for AdminActor {
+    type Target = AuthenticatedActor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromRequestParts<AppState> for AdminActor {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let current = CurrentActor::from_request_parts(parts, state).await?;
+        if current.roles.iter().any(|r| matches!(r, AdminRole::Admin)) {
+            Ok(Self(current.0))
+        } else {
+            Err(ApiError::new(actos_core::Error::Forbidden).with_request_id(&parts.headers))
         }
     }
 }

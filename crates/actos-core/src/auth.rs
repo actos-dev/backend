@@ -77,6 +77,18 @@ pub struct AuthenticatedActor {
     pub actor: ActorRecord,
     pub key_id: Uuid,
     pub roles: Vec<AdminRole>,
+    /// Actor'ün aktif bir ban'i var mı.
+    ///
+    /// **Ban kimlik doğrulamayı düşürmüyor**, yalnızca işaretleniyor:
+    /// PLAN.md Faz 14'ün kararı "banlı actor yazamaz ama okuyabilir".
+    /// Doğrulamayı burada reddetseydik banlı bir kullanıcı kendi
+    /// kayıtlarını (`GET /me/saves`) ya da profilini bile göremezdi —
+    /// ceza yazmaya yönelik, okumaya değil.
+    ///
+    /// Yazma engelini uygulayan yer `actos-api`'deki `CurrentActor`
+    /// extractor'ı: güvenli olmayan HTTP metotlarında bu bayrağa bakıp
+    /// `403` döndürüyor, böylece kural handler başına elle yazılmıyor.
+    pub banned: bool,
 }
 
 /// [`register`] çağrısının sonucu. `api_key` ve `recovery_codes` **ham**
@@ -272,9 +284,8 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
         return Err(Error::InvalidKey);
     }
 
-    if row.is_banned {
-        return Err(Error::Banned);
-    }
+    // Ban burada hata üretmiyor, aşağıda `banned` alanına taşınıyor —
+    // gerekçe `AuthenticatedActor::banned` üzerinde.
 
     let roles = sqlx::query_scalar!(
         r#"SELECT role AS "role: AdminRole" FROM admin_roles WHERE actor_id = $1"#,
@@ -294,6 +305,7 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
         },
         key_id: parsed.key_id,
         roles,
+        banned: row.is_banned,
     })
 }
 

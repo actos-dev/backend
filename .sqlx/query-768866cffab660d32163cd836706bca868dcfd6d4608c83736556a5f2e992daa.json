@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM admin_actions_log",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "768866cffab660d32163cd836706bca868dcfd6d4608c83736556a5f2e992daa"
+}
