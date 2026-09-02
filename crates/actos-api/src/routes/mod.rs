@@ -37,6 +37,21 @@
 //! (`utoipa_scalar::Scalar::to_html`, `$spec` yer tutucusu) — yani sayfa
 //! açıldığında `/openapi.json`'a ayrı bir istek atmıyor, ikisi birbirinden
 //! bağımsız.
+//!
+//! ## `GET /docs/agent` (Faz 16, ikinci yarı)
+//!
+//! Yukarıdaki ikisinin **aksine** `/docs/agent` normal bir uç gibi
+//! `routes!(meta::agent_docs)` ile kaydediliyor — yani spec'in kendisinde
+//! görünüyor (`GET /openapi.json`'da `/docs/agent` bir yol olarak var,
+//! `/openapi.json`/`/docs` yok). Sebebi görevin kendisi: bu uç bir ajanın
+//! *okuyacağı* bir dokümantasyon olmanın yanında, kendisi de spec'in
+//! parçası olan sıradan bir kaynak — `/openapi.json`/`/docs` ise spec'in
+//! **sunum biçimleri**, spec'in bir "yolu" değil.
+//!
+//! İçeriği (metin gövdesi) bu fonksiyonun **sonunda**, `split_for_parts()`
+//! ile elde edilen nihai `openapi` değerinden üretilip önbelleğe alınıyor
+//! (bkz. `meta::cache_endpoint_reference`) — hız sınırından/kimlikten muaf
+//! olması ise yukarıdakiyle birebir aynı gerekçe: `crate::middleware::ratelimit::classify`.
 
 pub mod actors;
 pub mod admin;
@@ -66,6 +81,7 @@ pub fn router() -> Router<AppState> {
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(meta::version))
+        .routes(routes!(meta::agent_docs))
         .merge(auth::router())
         .merge(actors::router())
         .merge(posts::router())
@@ -77,6 +93,14 @@ pub fn router() -> Router<AppState> {
         .merge(uploads::router())
         .merge(admin::router())
         .split_for_parts();
+
+    // `GET /docs/agent`'ın metnini bu nihai (tüm `.merge(...)`lardan sonraki)
+    // `openapi` değerinden **bir kez** üretip önbelleğe alıyoruz — bkz.
+    // `meta::cache_endpoint_reference` dokümanı. `meta::agent_docs` handler'ı
+    // yukarıda `routes!(meta::agent_docs)` ile zaten kaydedildiği (dolayısıyla
+    // spec'in kendisinde de göründüğü) için burada yalnızca *içeriğini*
+    // dolduruyoruz — routing burada değişmiyor.
+    meta::cache_endpoint_reference(&openapi);
 
     // `/openapi.json` bu üretilmiş `openapi` değerinden serveden ham bir
     // handler — `Arc` ile sarmalanıyor ki her istek tüm spec'i yeniden

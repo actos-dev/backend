@@ -1,18 +1,22 @@
-//! `GET /openapi.json` ve `GET /docs` entegrasyon testleri (Faz 16).
+//! `GET /openapi.json`, `GET /docs` ve `GET /docs/agent` entegrasyon
+//! testleri (Faz 16 — ikinci yarı `/docs/agent`'ı ekledi).
 //!
 //! Kurulum yardımcıları `tests/tags_api.rs` ile aynı desen — ayrı bir
 //! entegrasyon test binary'si olduğu için (Rust her `tests/*.rs` dosyasını
 //! bağımsız derler) paylaşılan bir modül olmadan tekrar tanımlanıyor.
 //!
-//! **Neden 41 yolu burada elle listeliyoruz:** `crate::routes::mod`
+//! **Neden 42 yolu burada elle listeliyoruz:** `crate::routes::mod`
 //! dokümantasyonundaki garanti ("bir uç axum'da yaşıyorsa spec'te de yaşar")
 //! yalnızca *kayıtlı* uçlar için geçerli — yeni bir uç eklenip
 //! `OpenApiRouter::routes(routes!(...))`'a hiç eklenmemesi (ya da
 //! `#[utoipa::path]` anotasyonu unutulması) derleme zamanında yakalanmaz,
 //! çünkü axum bunu normal bir `Router::route` çağrısıyla da kabul eder. Bu
 //! test o boşluğu kapatıyor: PLAN.md'nin "spec kodla senkron kalsın" sözü
-//! olarak, listedeki 41 yoldan biri kaybolursa (ya da beklenmedik bir tane
-//! eklenip test edilmemişse) burada kırılır.
+//! olarak, listedeki 42 yoldan biri kaybolursa (ya da beklenmedik bir tane
+//! eklenip test edilmemişse) burada kırılır. (`/openapi.json` ve `/docs`'un
+//! kendisi bu listede **yok** — ikisi spec'in sunum biçimleri, spec'in bir
+//! "yolu" değil; bkz. `crate::routes` modül dokümanındaki `/docs/agent`
+//! bölümü, tam tersi sebeple *listede*.)
 
 use actos_api::{app, state::AppState};
 use actos_core::{
@@ -126,7 +130,7 @@ fn empty_req(method: &str, uri: &str) -> Request<Body> {
         .expect("istek kurulabilmeli")
 }
 
-/// Spec'te bulunması **zorunlu** 41 yol. `crate::routes::mod`'daki her
+/// Spec'te bulunması **zorunlu** 42 yol. `crate::routes::mod`'daki her
 /// `router()` merge'ünden bir tane — bkz. dosya başındaki modül dokümanı.
 ///
 /// Sıra, `crates/actos-api/src/routes/mod.rs`'teki `merge` sırasıyla aynı:
@@ -137,6 +141,7 @@ const EXPECTED_PATHS: &[&str] = &[
     "/health",
     "/health/ready",
     "/version",
+    "/docs/agent",
     // auth
     "/auth/register",
     "/auth/whoami",
@@ -205,7 +210,7 @@ async fn openapi_json_200_ve_gecerli_json(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn openapi_json_41_yolun_hepsini_iceriyor(pool: PgPool) {
+async fn openapi_json_42_yolun_hepsini_iceriyor(pool: PgPool) {
     let router = build_router(pool);
     let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
     assert_eq!(status, StatusCode::OK);
@@ -338,4 +343,72 @@ async fn openapi_ve_docs_kimlik_gerektirmiyor(pool: PgPool) {
 
     let (status, _, _) = send(&router, empty_req("GET", "/docs")).await;
     assert_ne!(status, StatusCode::UNAUTHORIZED);
+}
+
+// --- `GET /docs/agent` testleri (Faz 16, ikinci yarı) -----------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn docs_agent_200_ve_duz_metin(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, headers) = send(&router, empty_req("GET", "/docs/agent")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        content_type.starts_with("text/plain"),
+        "content-type text/plain olmalı, bulunan: {content_type}"
+    );
+    assert!(!body.is_empty(), "gövde boş olmamalı");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn docs_agent_kimlik_gerektirmiyor(pool: PgPool) {
+    // `Authorization` header'ı göndermeden 200 dönmeli — bu ucun tüm amacı
+    // bir ajanın *henüz hiçbir key'i yokken* onu okuyabilmesi (bkz.
+    // `crate::middleware::ratelimit::classify` ve `crate::routes` modül
+    // dokümanındaki `/docs/agent` bölümü).
+    let router = build_router(pool);
+    let (status, _, _) = send(&router, empty_req("GET", "/docs/agent")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn docs_agent_42_yolun_hepsini_iceriyor(pool: PgPool) {
+    // Bu test [`EXPECTED_PATHS`]'ın (`/docs/agent`'ın kendisi dahil) her
+    // birinin **üretilen metinde de** göründüğünü doğruluyor —
+    // `openapi_json_42_yolun_hepsini_iceriyor` bunu `/openapi.json` için
+    // zaten garanti ediyor, ama `/docs/agent`'ın kendi üretim mantığı
+    // (`crate::routes::meta::render_endpoint_reference`, JSON'u ikinci kez
+    // gezip metne döken ayrı bir kod yolu) spec'i doğru okumazsa bir yolu
+    // sessizce atlayabilir — bu test o boşluğu kapatıyor.
+    let router = build_router(pool);
+    let (status, body, _) = send(&router, empty_req("GET", "/docs/agent")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let text = String::from_utf8(body).expect("gövde UTF-8 olmalı");
+    for path in EXPECTED_PATHS {
+        assert!(text.contains(*path), "ajan referansında eksik yol: {path}");
+    }
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn docs_agent_onsoz_temel_kavramlari_iceriyor(pool: PgPool) {
+    // Önsöz elle yazıldığı için spec'ten doğrulanamıyor — bu test en azından
+    // görevin listelediği temel kavramların (ID biçimi, idempotency, cursor,
+    // hız sınırı header'ları) belgeden düşmediğini garanti ediyor.
+    let router = build_router(pool);
+    let (status, body, _) = send(&router, empty_req("GET", "/docs/agent")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let text = String::from_utf8(body).expect("gövde UTF-8 olmalı");
+    for kavram in ["actos_", "Idempotency-Key", "cursor", "X-RateLimit"] {
+        assert!(
+            text.contains(kavram),
+            "ajan referansı önsözünde temel bir kavram eksik: {kavram}"
+        );
+    }
 }

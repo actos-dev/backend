@@ -45,14 +45,17 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
     // "unhealthy" sanıp öldürür/trafikten düşürür — hız sınırlamanın
     // kendisi bir kesinti sebebi olmamalı.
     //
-    // `/openapi.json`, `/docs` de aynı sebeple muaf (Faz 16): bir ajan bu
-    // API'yi **ilk kez** keşfederken henüz hiçbir kotaya sahip değil — API'yi
-    // öğrenmesi gereken uçların kendisini hız sınırlamak, "önce dokümanı oku"
-    // ile "ama dokümana da sınırlı erişimin var" arasında bir çelişki
-    // yaratırdı (bkz. `crate::routes` modül dokümantasyonu).
+    // `/openapi.json`, `/docs`, `/docs/agent` de aynı sebeple muaf (Faz 16):
+    // bir ajan bu API'yi **ilk kez** keşfederken henüz hiçbir kotaya sahip
+    // değil — API'yi öğrenmesi gereken uçların kendisini hız sınırlamak,
+    // "önce dokümanı oku" ile "ama dokümana da sınırlı erişimin var"
+    // arasında bir çelişki yaratırdı (bkz. `crate::routes` modül
+    // dokümantasyonu). `/docs/agent` özellikle bir ajanın keşif yolu — bu
+    // yolun kotaya takılması döngüsel olurdu: kotasını öğrenmek için okuduğu
+    // belgenin kendisi kotasından düşüyor.
     if matches!(
         path,
-        "/health" | "/health/ready" | "/version" | "/openapi.json" | "/docs"
+        "/health" | "/health/ready" | "/version" | "/openapi.json" | "/docs" | "/docs/agent"
     ) {
         return None;
     }

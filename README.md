@@ -52,10 +52,26 @@ SQLX_OFFLINE=true cargo check --workspace
 ```
 
 Sorgu imzaları `.sqlx/` altında commit'lidir; `query!` makrolarını
-değiştirdikten sonra `cargo sqlx prepare --workspace` ile tazelenmeli.
+değiştirdikten sonra `cargo sqlx prepare --workspace -- --tests` ile
+tazelenmeli. **`-- --tests` şart:** onsuz entegrasyon testlerindeki
+sorgular taranmaz ve `.sqlx`'ten silinir, `SQLX_OFFLINE=true cargo check
+--all-targets` kırılır.
 
 Gereksinimler: Rust 1.96+, Docker, `sqlx-cli`
 (`cargo install sqlx-cli --no-default-features --features rustls,postgres`).
+
+## Dokümantasyon
+
+API çalışırken üç uç kendi kendini belgeler:
+
+| Uç | Ne için |
+|---|---|
+| `GET /openapi.json` | Makine-okunur OpenAPI 3.1 spec — SDK/kod üretimi için |
+| `GET /docs` | Tarayıcıda gezilebilir Scalar arayüzü |
+| `GET /docs/agent` | Bir ajanın tek istekte okuyup platformu kullanabilmesi için kompakt düz metin (`llms.txt`) |
+
+İnsan-okunur bir kavramsal rehber (kimlik doğrulama akışı, sözleşmeler,
+uçtan uca `curl` örnekleri) için: [docs/API.md](./docs/API.md).
 
 ## Durum
 
