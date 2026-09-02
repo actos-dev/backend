@@ -14,32 +14,33 @@ use actos_core::{
     id::{Content as ContentIdKind, IdCodec},
     interaction as core_interaction,
 };
-use actos_types::interaction::{VoteMapResponse, VoteRequest, VoteResponse};
+use actos_types::interaction::{SaveListResponse, VoteMapResponse, VoteRequest, VoteResponse};
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{get, put},
 };
 use serde::Deserialize;
 use serde_json::Value;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::CurrentActor,
     error::ApiError,
     fields,
+    openapi::{Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor, parse_limit},
     routes::posts::{content_summary, decode_content_id},
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/contents/{id}/vote", put(set_vote))
-        .route("/contents/{id}/save", put(save).delete(unsave))
-        .route("/actors/{username}/follow", put(follow).delete(unfollow))
-        .route("/me/saves", get(list_saves))
-        .route("/me/votes", get(list_votes))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(set_vote))
+        .routes(routes!(save, unsave))
+        .routes(routes!(follow, unfollow))
+        .routes(routes!(list_saves))
+        .routes(routes!(list_votes))
 }
 
 /// `GET /me/saves?cursor=&limit=&fields=` query'si.
@@ -67,6 +68,27 @@ const MAX_VOTE_LOOKUP: usize = 100;
 
 /// `PUT /contents/{id}/vote` → `200`, `400` (geçersiz değer), `403` (kendi
 /// içeriği), `404`, `410`.
+#[utoipa::path(
+    put,
+    path = "/contents/{id}/vote",
+    tag = "interactions",
+    summary = "Bir içeriğe oy ver (ya da oyu geri çek)",
+    description = "İdempotent. `value`: `1` (yukarı), `-1` (aşağı), `0` (oyu geri çek). Kendi içeriğine oy veremezsin.",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "İçeriğin dış id'si (`c_...`, post ya da yorum)"),
+    ),
+    request_body = VoteRequest,
+    responses(
+        (status = 200, description = "İşlem sonrası içeriğin sayaçları", body = VoteResponse),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn set_vote(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -94,6 +116,24 @@ async fn set_vote(
 /// Çözülemeyen bir id **sessizce atlanıyor**, hata üretmiyor: bu bir toplu
 /// arama ucu, tek bozuk id yüzünden bütün sayfanın oy durumunu kaybetmek
 /// istemciye zarar verir. Zaten yanıtta olmayan id "oy yok" demek.
+#[utoipa::path(
+    get,
+    path = "/me/votes",
+    tag = "interactions",
+    summary = "Belirtilen içeriklerdeki kendi oylarını topluca sorgula",
+    description = "Çözülemeyen ya da oy verilmemiş bir id sessizce atlanır — yanıtta olmaması \"oy yok\" demektir.",
+    security(("api_key" = [])),
+    params(
+        ("content_ids" = Option<String>, Query,
+            description = "Virgülle ayrılmış dış içerik id'leri (azami 100, bkz. MAX_VOTE_LOOKUP)"),
+    ),
+    responses(
+        (status = 200, description = "id -> oy değeri haritası (yalnızca oy verilmiş olanlar)", body = VoteMapResponse),
+        ValidationFailed,
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn list_votes(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -147,6 +187,23 @@ fn encode_content_id(id_codec: &IdCodec, id: i64) -> Result<String, Error> {
 }
 
 /// `PUT /contents/{id}/save` → `204`, `404`, `410`. İdempotent.
+#[utoipa::path(
+    put,
+    path = "/contents/{id}/save",
+    tag = "interactions",
+    summary = "Bir içeriği kendi kaydedilenler listene ekle",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "İçeriğin dış id'si (`c_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Kaydedildi (zaten kayıtlıysa da aynı)"),
+        Unauthorized,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn save(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -165,6 +222,21 @@ async fn save(
 
 /// `DELETE /contents/{id}/save` → `204`. İdempotent; silinmiş içeriğin
 /// kaydı da kaldırılabilir (bkz. `actos_core::interaction::unsave`).
+#[utoipa::path(
+    delete,
+    path = "/contents/{id}/save",
+    tag = "interactions",
+    summary = "Bir içeriği kaydedilenler listenden çıkar",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "İçeriğin dış id'si (`c_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Kaldırıldı (zaten kayıtlı değilse de aynı)"),
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn unsave(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -183,6 +255,24 @@ async fn unsave(
 
 /// `PUT /actors/{username}/follow` → `204`, `400` (kendini takip), `404`,
 /// `410`. İdempotent.
+#[utoipa::path(
+    put,
+    path = "/actors/{username}/follow",
+    tag = "interactions",
+    summary = "Bir actor'ü takip et",
+    security(("api_key" = [])),
+    params(
+        ("username" = String, Path, description = "Takip edilecek actor'ün kullanıcı adı"),
+    ),
+    responses(
+        (status = 204, description = "Takip edildi (zaten takipteyse de aynı)"),
+        ValidationFailed,
+        Unauthorized,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn follow(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -198,6 +288,22 @@ async fn follow(
 
 /// `DELETE /actors/{username}/follow` → `204`, `404`. İdempotent; silinmiş
 /// hesap da takipten çıkarılabilir.
+#[utoipa::path(
+    delete,
+    path = "/actors/{username}/follow",
+    tag = "interactions",
+    summary = "Bir actor'ü takipten çık",
+    security(("api_key" = [])),
+    params(
+        ("username" = String, Path, description = "Takipten çıkılacak actor'ün kullanıcı adı"),
+    ),
+    responses(
+        (status = 204, description = "Takipten çıkıldı (zaten takip etmiyorsa da aynı)"),
+        Unauthorized,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn unfollow(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -217,6 +323,25 @@ async fn unfollow(
 /// `Json<Value>` olarak elle kuruluyor: `?fields=` yalnızca dizideki
 /// öğelere uygulanıyor, sarmalayıcıya değil (bkz.
 /// `crate::routes::posts::list_actor_posts`'taki aynı desen).
+#[utoipa::path(
+    get,
+    path = "/me/saves",
+    tag = "interactions",
+    summary = "Kendi kaydettiklerini listele",
+    description = "En son kaydedilen önce. Post ve yorum bir arada olabilir.",
+    security(("api_key" = [])),
+    params(
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları; her öğeye uygulanır"),
+    ),
+    responses(
+        (status = 200, description = "Kaydedilenler listesi, cursor'lu", body = SaveListResponse),
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn list_saves(
     current: CurrentActor,
     State(state): State<AppState>,

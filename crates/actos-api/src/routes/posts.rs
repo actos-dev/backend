@@ -20,22 +20,23 @@ use actos_core::{
 };
 use actos_types::{
     auth::ActorSummary,
-    content::{ContentSummary, CreatePostRequest, UpdatePostRequest},
+    content::{ContentSummary, CreatePostRequest, PostListResponse, UpdatePostRequest},
 };
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::Value;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::CurrentActor,
     error::ApiError,
     fields,
+    openapi::{Conflict, Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor, parse_limit},
     routes::auth::{actor_summary, actor_type_str, encode_actor_id},
     state::AppState,
@@ -46,20 +47,17 @@ use crate::{
 /// tutmak yalnızca yazım hatasını tek bir yere hapsetmek için.
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/posts", post(create_post))
-        .route(
-            "/posts/{id}",
-            get(get_post).patch(update_post).delete(delete_post),
-        )
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(create_post))
+        .routes(routes!(get_post, update_post, delete_post))
         // Faz 7'den devir (bkz. PLAN.md Faz 8): `actos_core::content`'in
         // fonksiyonunu çağırdığı ve `content_summary`/`fields` gibi bu
         // dosyaya özel ortak dönüşümleri paylaştığı için mantıksal olarak
         // burada — path'in `/actors/...` ile başlaması `actos-api`'de
         // dosya/router ayrımını değiştirmiyor (bkz. `crate::routes::mod`
         // dokümantasyonu, tüm alt router'lar tek bir ağaçta `merge` edilir).
-        .route("/actors/{username}/posts", get(list_actor_posts))
+        .routes(routes!(list_actor_posts))
 }
 
 // --- Query param tipleri -------------------------------------------------
@@ -290,6 +288,29 @@ fn stored_response_to_http(stored: StoredResponse) -> Response {
 /// gerekçesi burada değil orada, Redis'e dokunan katmanda). Header hiç
 /// verilmemişse davranış birinci turdakiyle birebir aynı — bu bütünüyle
 /// isteğe bağlı bir katman, zorunlu değil.
+#[utoipa::path(
+    post,
+    path = "/posts",
+    tag = "posts",
+    summary = "Yeni bir post oluştur",
+    description = "`Idempotency-Key` header'ı verilirse aynı actor + aynı key ile daha önce \
+        tamamlanmış bir istek varsa yeni bir post oluşturmadan **aynı** yanıt aynen döner.",
+    security(("api_key" = [])),
+    params(
+        ("idempotency-key" = Option<String>, Header,
+            description = "Verilirse tekrarlanan istekler aynı yanıtı üretir (bkz. üstteki açıklama)"),
+    ),
+    request_body = CreatePostRequest,
+    responses(
+        (status = 201, description = "Post oluşturuldu", body = ContentSummary,
+            headers(("location" = String, description = "Yeni post'un yolu: /posts/{id}"))),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        Conflict,
+        RateLimited,
+    )
+)]
 async fn create_post(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -376,6 +397,24 @@ async fn create_post(
 }
 
 /// `GET /posts/{id}` → `200` (canlı), `410` (silinmiş), `404` (yok/bozuk id).
+#[utoipa::path(
+    get,
+    path = "/posts/{id}",
+    tag = "posts",
+    summary = "Tekil bir post oku",
+    params(
+        ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları — yalnızca bunlar döner (bkz. `crate::fields`). \
+                Örn. `fields=id,title,score`."),
+    ),
+    responses(
+        (status = 200, description = "Post (varsayılan: tüm alanlar, `?fields=` ile daraltılabilir)", body = ContentSummary),
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn get_post(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -404,6 +443,25 @@ async fn get_post(
 
 /// `PATCH /posts/{id}` → `200`. Sahibi değilse `403`, yoksa `404`, silinmişse
 /// `410`.
+#[utoipa::path(
+    patch,
+    path = "/posts/{id}",
+    tag = "posts",
+    summary = "Bir post'u düzenle",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
+    ),
+    request_body = UpdatePostRequest,
+    responses(
+        (status = 200, description = "Güncellenmiş post", body = ContentSummary),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn update_post(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -432,6 +490,25 @@ async fn update_post(
 
 /// `DELETE /posts/{id}` → `204`. Sahibi veya moderatör/admin; yetkisiz
 /// biri için `403`, yoksa `404`, zaten silinmişse `410`.
+#[utoipa::path(
+    delete,
+    path = "/posts/{id}",
+    tag = "posts",
+    summary = "Bir post'u sil (soft-delete)",
+    description = "Sahibi ya da moderatör/admin çağırabilir.",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Silindi"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn delete_post(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -459,6 +536,26 @@ async fn delete_post(
 /// uygulanıyor, sarmalayıcıya değil (bkz. `crate::fields` modül
 /// dokümantasyonu) — bu da öğe başına ayrı bir `apply_fields` çağrısı
 /// gerektiriyor, tek bir `Json<PostListResponse>` ile ifade edilemez.
+#[utoipa::path(
+    get,
+    path = "/actors/{username}/posts",
+    tag = "posts",
+    summary = "Bir actor'ün post'larını listele",
+    description = "En yeni post önce. Silinmiş post'lar listede görünmez.",
+    params(
+        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları; her post öğesine uygulanır, sarmalayıcıya değil"),
+    ),
+    responses(
+        (status = 200, description = "Post listesi, cursor'lu", body = PostListResponse),
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn list_actor_posts(
     State(state): State<AppState>,
     Path(username): Path<String>,

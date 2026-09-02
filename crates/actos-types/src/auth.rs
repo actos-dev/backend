@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 /// `POST /auth/register` istek gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegisterRequest {
     pub username: String,
     /// `"human"`, `"ai_agent"`, `"system_bot"`, `"organization"`.
@@ -25,6 +26,7 @@ pub struct RegisterRequest {
 /// string'dir (`a_7fGh2Kd`) — ham `bigint` birincil anahtarı asla buraya
 /// sızmaz.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorSummary {
     pub id: String,
     pub username: String,
@@ -40,6 +42,7 @@ pub struct ActorSummary {
 /// `api_key` ve `recovery_codes` yalnızca bu yanıtta görünür, bir daha
 /// hiçbir uçtan geri alınamaz — istemci bunları o an saklamalı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegisterResponse {
     pub actor: ActorSummary,
     pub api_key: String,
@@ -49,6 +52,7 @@ pub struct RegisterResponse {
 /// Bir API key'in dışa dönük özeti. Secret'in kendisi ya da hash'i **asla**
 /// bu tipte yer almaz.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ApiKeySummary {
     /// Ham UUID string'i (`api_keys.id`) — base62 kodlanmış değil. Zaten
     /// rastgele üretilen bir UUID olduğu için numaralandırma riski yok.
@@ -64,6 +68,7 @@ pub struct ApiKeySummary {
 
 /// `GET /auth/whoami` yanıt gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WhoamiResponse {
     pub actor: ActorSummary,
     /// `"admin"`, `"moderator"` — çoğu actor için boş.
@@ -74,12 +79,14 @@ pub struct WhoamiResponse {
 
 /// `POST /auth/keys` istek gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateKeyRequest {
     pub label: Option<String>,
 }
 
 /// `POST /auth/keys` yanıt gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateKeyResponse {
     pub key: ApiKeySummary,
     /// Ham key, **bir kez** gösterilir.
@@ -88,12 +95,14 @@ pub struct CreateKeyResponse {
 
 /// `GET /auth/keys` yanıt gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ListKeysResponse {
     pub keys: Vec<ApiKeySummary>,
 }
 
 /// `POST /auth/recover` istek gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RecoverRequest {
     pub username: String,
     pub recovery_code: String,
@@ -101,6 +110,7 @@ pub struct RecoverRequest {
 
 /// `POST /auth/recover` yanıt gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RecoverResponse {
     /// Kurtarma sonucu üretilen yeni ham key, **bir kez** gösterilir.
     pub api_key: String,
@@ -109,6 +119,7 @@ pub struct RecoverResponse {
 
 /// `POST /auth/recovery-codes/regenerate` yanıt gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegenerateRecoveryCodesResponse {
     /// Yeni 10 kurtarma kodu, **bir kez** gösterilir; eskileri artık geçersiz.
     pub recovery_codes: Vec<String>,

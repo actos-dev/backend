@@ -19,39 +19,35 @@ use actos_core::{
     cursor::SortKind,
 };
 use actos_types::content::{
-    CommentDetailResponse, CommentNodeResponse, CreateCommentRequest, UpdateCommentRequest,
+    CommentDetailResponse, CommentListResponse, CommentNodeResponse, CommentThreadResponse,
+    ContentSummary, CreateCommentRequest, UpdateCommentRequest,
 };
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::Value;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::CurrentActor,
     error::ApiError,
     fields,
+    openapi::{Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor, decode_cursor_with, parse_limit},
     routes::posts::{content_summary, decode_content_id},
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/posts/{id}/comments",
-            post(create_comment).get(list_comments),
-        )
-        .route(
-            "/comments/{id}",
-            get(get_comment).patch(update_comment).delete(delete_comment),
-        )
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(create_comment, list_comments))
+        .routes(routes!(get_comment, update_comment, delete_comment))
         // Faz 7'den devir (bkz. PLAN.md Faz 9).
-        .route("/actors/{username}/comments", get(list_actor_comments))
+        .routes(routes!(list_actor_comments))
 }
 
 // --- Query param tipleri ---------------------------------------------------
@@ -124,6 +120,28 @@ fn comment_node(
 /// post tekrarınınkinden düşük ve yorumlar çok daha sık yazılıyor — her
 /// yorum için Redis'e fazladan iki tur atmak, karşılığında kazanılandan
 /// pahalı olurdu.
+#[utoipa::path(
+    post,
+    path = "/posts/{id}/comments",
+    tag = "comments",
+    summary = "Bir post'a (ya da başka bir yoruma) yorum ekle",
+    description = "`parent_id` verilmezse yorum post'un doğrudan çocuğu olur; verilirse o yoruma yanıt olur.",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
+    ),
+    request_body = CreateCommentRequest,
+    responses(
+        (status = 201, description = "Yorum oluşturuldu", body = ContentSummary,
+            headers(("location" = String, description = "Yeni yorumun yolu: /comments/{id}"))),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn create_comment(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -188,6 +206,28 @@ async fn create_comment(
 /// eleyip ağacı düzleştirebilirdi. Ağaç uçlarında alan seçimi ayrı bir
 /// tasarım kararı gerektiriyor; şimdilik bilinçli olarak kapsam dışı
 /// (bkz. PLAN.md Faz 9 notları).
+#[utoipa::path(
+    get,
+    path = "/posts/{id}/comments",
+    tag = "comments",
+    summary = "Bir post'un yorum ağacını listele",
+    description = "`?fields=` bu uçta **desteklenmiyor** (ağacın `replies` alanını bozardı).",
+    params(
+        ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
+        ("sort" = Option<String>, Query, description = "`new` ya da `top`"),
+        ("depth" = Option<String>, Query, description = "Ağacın kaç seviye derine ineceği (varsayılan: `DEFAULT_TREE_DEPTH`)"),
+        ("parent" = Option<String>, Query, description = "Verilirse yalnızca bu yorumun alt ağacı döner"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı (yalnızca üst seviyeyi sayfalar)"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına üst seviye yorum sayısı"),
+    ),
+    responses(
+        (status = 200, description = "İç içe yorum ağacı, cursor'lu", body = CommentThreadResponse),
+        ValidationFailed,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn list_comments(
     State(state): State<AppState>,
     Path(post_id): Path<String>,
@@ -250,6 +290,22 @@ async fn list_comments(
 /// `actos_core::comment::get_comment` dokümanında: silinen yorumun
 /// çocukları yaşamaya devam ediyor, dolayısıyla düğümün kendisi de
 /// erişilebilir kalmalı ki bir yanıtın breadcrumb'ı ortadan kopmasın.
+#[utoipa::path(
+    get,
+    path = "/comments/{id}",
+    tag = "comments",
+    summary = "Tekil bir yorumu, ata zinciriyle birlikte oku",
+    description = "Silinmiş bir yorum `410` DÖNMEZ, `deleted: true` ve `[silindi]` gövdesiyle `200` döner — \
+        çocukları yaşamaya devam ettiği için düğümün kendisi erişilebilir kalmalı.",
+    params(
+        ("id" = String, Path, description = "Yorumun dış id'si (`c_...`)"),
+    ),
+    responses(
+        (status = 200, description = "Yorum + kökten kendisine kadar ata zinciri", body = CommentDetailResponse),
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn get_comment(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -287,6 +343,25 @@ async fn get_comment(
 }
 
 /// `PATCH /comments/{id}` → `200`, `403` (sahibi değil), `404`, `410`.
+#[utoipa::path(
+    patch,
+    path = "/comments/{id}",
+    tag = "comments",
+    summary = "Bir yorumu düzenle",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "Yorumun dış id'si (`c_...`)"),
+    ),
+    request_body = UpdateCommentRequest,
+    responses(
+        (status = 200, description = "Güncellenmiş yorum", body = ContentSummary),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn update_comment(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -310,6 +385,25 @@ async fn update_comment(
 /// `DELETE /comments/{id}` → `204`, `403`, `404`, `410`.
 ///
 /// Soft-delete: düğüm ağaçta kalır, çocukları yaşamaya devam eder.
+#[utoipa::path(
+    delete,
+    path = "/comments/{id}",
+    tag = "comments",
+    summary = "Bir yorumu sil (soft-delete)",
+    description = "Sahibi ya da moderatör/admin çağırabilir. Düğüm ağaçta kalır, çocukları yaşamaya devam eder.",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "Yorumun dış id'si (`c_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Silindi"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn delete_comment(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -331,6 +425,26 @@ async fn delete_comment(
 ///
 /// Burada `?fields=` **destekleniyor** (ağaç ucunun aksine): bu düz bir
 /// liste, `replies` anahtarı yok, filtrenin bozacağı bir yapı da yok.
+#[utoipa::path(
+    get,
+    path = "/actors/{username}/comments",
+    tag = "comments",
+    summary = "Bir actor'ün yorumlarını listele",
+    description = "En yeni önce, düz liste (ağaç değil).",
+    params(
+        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları; her yorum öğesine uygulanır"),
+    ),
+    responses(
+        (status = 200, description = "Yorum listesi, cursor'lu", body = CommentListResponse),
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn list_actor_comments(
     State(state): State<AppState>,
     Path(username): Path<String>,

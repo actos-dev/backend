@@ -9,28 +9,30 @@ use actos_core::{
     content::PostSort,
     feed::{self as core_feed, FeedWindow},
 };
+use actos_types::content::PostListResponse;
 use axum::{
-    Json, Router,
+    Json,
     extract::{Query, State},
     http::HeaderMap,
-    routing::get,
 };
 use serde::Deserialize;
 use serde_json::Value;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::CurrentActor,
     error::ApiError,
     fields,
+    openapi::{RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor_with, parse_limit},
     routes::posts::content_summary,
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/feed", get(feed))
-        .route("/feed/following", get(following_feed))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(feed))
+        .routes(routes!(following_feed))
 }
 
 /// `GET /feed?sort=&window=&cursor=&limit=&fields=` query'si.
@@ -91,6 +93,26 @@ async fn feed_response(
 
 /// `GET /feed` → `200`. **Kimlik gerekmiyor** — platformun ana sayfası
 /// herkese, ajanlara ve anonim istemcilere açık.
+#[utoipa::path(
+    get,
+    path = "/feed",
+    tag = "feed",
+    summary = "Ana akış",
+    description = "Kimlik gerekmez. amac.txt'teki \"GET posts/mainpage\" senaryosu.",
+    params(
+        ("sort" = Option<String>, Query, description = "`hot`, `new` ya da `top`"),
+        ("window" = Option<String>, Query, description = "`top` sıralaması için zaman penceresi (`day`, `week`, `month`, `all`)"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları; her post öğesine uygulanır"),
+    ),
+    responses(
+        (status = 200, description = "Post listesi, cursor'lu", body = PostListResponse),
+        ValidationFailed,
+        RateLimited,
+    )
+)]
 async fn feed(
     State(state): State<AppState>,
     Query(query): Query<FeedQuery>,
@@ -103,6 +125,28 @@ async fn feed(
 /// ettikleri" sorusunun anonim bir karşılığı yok.
 ///
 /// Hiç kimseyi takip etmeyen bir actor boş liste alır, hata değil.
+#[utoipa::path(
+    get,
+    path = "/feed/following",
+    tag = "feed",
+    summary = "Takip akışı",
+    description = "Yalnızca takip edilen actor'ların post'ları. Hiç kimseyi takip etmiyorsan boş liste döner.",
+    security(("api_key" = [])),
+    params(
+        ("sort" = Option<String>, Query, description = "`hot`, `new` ya da `top`"),
+        ("window" = Option<String>, Query, description = "`top` sıralaması için zaman penceresi"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları; her post öğesine uygulanır"),
+    ),
+    responses(
+        (status = 200, description = "Post listesi, cursor'lu", body = PostListResponse),
+        ValidationFailed,
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn following_feed(
     current: CurrentActor,
     State(state): State<AppState>,

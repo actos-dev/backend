@@ -76,8 +76,13 @@ impl From<sqlx::Error> for ApiError {
 }
 
 /// RFC 9457 "problem details" gövdesi.
-#[derive(Debug, Serialize)]
-struct ProblemDetails {
+///
+/// `pub(crate)` (özel değil): Faz 16'nın OpenAPI şeması bu tipi tek bir
+/// bileşen (`components.schemas.ProblemDetails`) olarak her hata yanıtında
+/// referans veriyor (bkz. `crate::openapi` modülü) — bunun için diğer
+/// `routes/*.rs` dosyalarından görünür olması gerekiyor.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct ProblemDetails {
     /// Hata tipini tanımlayan URI (dokümantasyona işaret eder).
     #[serde(rename = "type")]
     type_uri: String,

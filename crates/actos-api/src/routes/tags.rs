@@ -14,32 +14,34 @@ use actos_core::{
     content::{self as core_content, PostSort},
     tag as core_tag,
 };
+use actos_types::content::PostListResponse;
 use actos_types::tag::{TagListResponse, TagMatch, TagSearchResponse, TagSummary};
 use axum::http::HeaderMap;
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
-    routing::get,
 };
 use serde::Deserialize;
 use serde_json::Value;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     error::ApiError,
     fields,
+    openapi::{NotFound, RateLimited, ValidationFailed},
     routes::actors::{decode_cursor_with, parse_limit},
     routes::posts::content_summary,
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
         // `/tags/search` ile `/tags/{name}/posts` çakışmıyor: biri iki,
         // diğeri üç segment. Yine de `search` üstte duruyor ki ileride
         // `/tags/{name}` eklenirse sıralama şimdiden doğru olsun.
-        .route("/tags/search", get(search_tags))
-        .route("/tags", get(list_tags))
-        .route("/tags/{name}/posts", get(list_tag_posts))
+        .routes(routes!(search_tags))
+        .routes(routes!(list_tags))
+        .routes(routes!(list_tag_posts))
 }
 
 // --- Query param tipleri ---------------------------------------------------
@@ -73,6 +75,21 @@ struct TagPostsQuery {
 /// Popülerlik cursor'ı [`actos_core::cursor::SortKey::Top`] üzerinden
 /// taşınıyor — orada "skor" olarak adlandırılan sayı burada post sayısı
 /// (bkz. `actos_core::tag::list_popular`).
+#[utoipa::path(
+    get,
+    path = "/tags",
+    tag = "tags",
+    summary = "Popülerlik sırasına göre etiketleri listele",
+    params(
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+    ),
+    responses(
+        (status = 200, description = "Etiket listesi, cursor'lu", body = TagListResponse),
+        ValidationFailed,
+        RateLimited,
+    )
+)]
 async fn list_tags(
     State(state): State<AppState>,
     Query(query): Query<TagListQuery>,
@@ -110,6 +127,20 @@ async fn list_tags(
 /// `q` verilmezse ya da hiçbir etiketle eşleşemeyecek bir değerse **boş
 /// liste** döner, hata değil (bkz. `actos_core::tag::search` — kullanıcı
 /// henüz yazarken hata göstermek yanlış olurdu).
+#[utoipa::path(
+    get,
+    path = "/tags/search",
+    tag = "tags",
+    summary = "Etiket otomatik tamamlama",
+    description = "`q` verilmezse ya da eşleşme yoksa boş liste döner, hata değil. Sayfalama yok.",
+    params(
+        ("q" = Option<String>, Query, description = "Aranan etiket ön eki"),
+    ),
+    responses(
+        (status = 200, description = "Eşleşen etiketler (üst sınır: `actos_core::tag::SEARCH_LIMIT`)", body = TagSearchResponse),
+        RateLimited,
+    )
+)]
 async fn search_tags(
     State(state): State<AppState>,
     Query(query): Query<TagSearchQuery>,
@@ -140,6 +171,27 @@ async fn search_tags(
 ///
 /// `?fields=` destekleniyor; `crate::routes::posts::list_actor_posts` ile
 /// aynı desen (filtre sarmalayıcıya değil, dizideki her öğeye uygulanıyor).
+#[utoipa::path(
+    get,
+    path = "/tags/{name}/posts",
+    tag = "tags",
+    summary = "Bir etiketin post'larını listele",
+    description = "Var olup canlı post'u kalmamış bir etiket boş liste döner, `404` değil.",
+    params(
+        ("name" = String, Path, description = "Etiket adı"),
+        ("sort" = Option<String>, Query, description = "`new`, `top` ya da `hot`"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları; her post öğesine uygulanır"),
+    ),
+    responses(
+        (status = 200, description = "Post listesi, cursor'lu", body = PostListResponse),
+        ValidationFailed,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn list_tag_posts(
     State(state): State<AppState>,
     Path(name): Path<String>,

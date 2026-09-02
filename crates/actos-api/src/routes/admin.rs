@@ -21,30 +21,31 @@ use actos_types::moderation::{
     ModerateDeleteRequest, ReportListResponse, ReportSummary, SetRoleRequest, UpdateReportRequest,
 };
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{delete, get, post},
 };
 use serde::Deserialize;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::{AdminActor, CurrentActor, ModeratorActor},
     error::ApiError,
+    openapi::{Conflict, Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor, parse_limit},
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/reports", post(create_report))
-        .route("/admin/reports", get(list_reports))
-        .route("/admin/reports/{id}", axum::routing::patch(update_report))
-        .route("/admin/contents/{id}", delete(moderate_delete_content))
-        .route("/admin/bans", post(create_ban))
-        .route("/admin/bans/{username}", delete(remove_ban))
-        .route("/admin/roles", post(set_role))
-        .route("/admin/actions", get(list_actions))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(create_report))
+        .routes(routes!(list_reports))
+        .routes(routes!(update_report))
+        .routes(routes!(moderate_delete_content))
+        .routes(routes!(create_ban))
+        .routes(routes!(remove_ban))
+        .routes(routes!(set_role))
+        .routes(routes!(list_actions))
 }
 
 /// `GET /admin/reports?status=&cursor=&limit=` query'si.
@@ -114,6 +115,24 @@ fn report_summary(
 
 /// `POST /reports` → `201`, `400`, `404`, `409` (aynı hedefi tekrar
 /// şikayet), `410`.
+#[utoipa::path(
+    post,
+    path = "/reports",
+    tag = "moderation",
+    summary = "Bir post ya da yorumu şikayet et",
+    description = "Herkese açık: kimlikli her actor şikayet edebilir.",
+    security(("api_key" = [])),
+    request_body = CreateReportRequest,
+    responses(
+        (status = 201, description = "Şikayet oluşturuldu", body = ReportSummary),
+        ValidationFailed,
+        Unauthorized,
+        NotFound,
+        Conflict,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn create_report(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -147,6 +166,26 @@ async fn create_report(
 // --- Moderasyon kuyruğu -----------------------------------------------------
 
 /// `GET /admin/reports` → `200`, `401`, `403`.
+#[utoipa::path(
+    get,
+    path = "/admin/reports",
+    tag = "admin",
+    summary = "Moderasyon kuyruğunu listele",
+    description = "Moderatör veya admin gerektirir.",
+    security(("api_key" = [])),
+    params(
+        ("status" = Option<String>, Query, description = "`pending`, `resolved` ya da `dismissed`"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+    ),
+    responses(
+        (status = 200, description = "Şikayet listesi, cursor'lu", body = ReportListResponse),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        RateLimited,
+    )
+)]
 async fn list_reports(
     _moderator: ModeratorActor,
     State(state): State<AppState>,
@@ -181,6 +220,26 @@ async fn list_reports(
 }
 
 /// `PATCH /admin/reports/{id}` → `200`, `401`, `403`, `404`.
+#[utoipa::path(
+    patch,
+    path = "/admin/reports/{id}",
+    tag = "admin",
+    summary = "Bir şikayeti çöz/reddet",
+    description = "Moderatör veya admin gerektirir.",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "Şikayetin dış id'si"),
+    ),
+    request_body = UpdateReportRequest,
+    responses(
+        (status = 200, description = "Güncellenmiş şikayet", body = ReportSummary),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn update_report(
     moderator: ModeratorActor,
     State(state): State<AppState>,
@@ -218,6 +277,27 @@ async fn update_report(
 /// alternatifler daha kötüydü: gerekçeyi query string'e koymak onu
 /// sunucu erişim loglarına düşürürdü, ayrı bir `POST` ucu ise aynı işi iki
 /// isimle yapmak olurdu.
+#[utoipa::path(
+    delete,
+    path = "/admin/contents/{id}",
+    tag = "admin",
+    summary = "Moderatör olarak bir içeriği sil",
+    description = "Moderatör veya admin gerektirir. Gerekçe gövdede zorunlu (denetim izine yazılır).",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "İçeriğin dış id'si (`c_...`)"),
+    ),
+    request_body = ModerateDeleteRequest,
+    responses(
+        (status = 204, description = "Silindi"),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn moderate_delete_content(
     moderator: ModeratorActor,
     State(state): State<AppState>,
@@ -240,6 +320,23 @@ async fn moderate_delete_content(
 // --- Ban'ler ----------------------------------------------------------------
 
 /// `POST /admin/bans` → `201`, `400`, `401`, `403`, `404`.
+#[utoipa::path(
+    post,
+    path = "/admin/bans",
+    tag = "admin",
+    summary = "Bir actor'ü banla",
+    description = "Moderatör veya admin gerektirir. `expires_at` verilmezse ban kalıcı.",
+    security(("api_key" = [])),
+    request_body = CreateBanRequest,
+    responses(
+        (status = 201, description = "Ban oluşturuldu", body = BanSummary),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn create_ban(
     moderator: ModeratorActor,
     State(state): State<AppState>,
@@ -284,6 +381,24 @@ async fn create_ban(
 
 /// `DELETE /admin/bans/{username}` → `204`, `401`, `403`, `404`.
 /// İdempotent: ban yoksa da başarı döner.
+#[utoipa::path(
+    delete,
+    path = "/admin/bans/{username}",
+    tag = "admin",
+    summary = "Bir actor'ün banını kaldır",
+    description = "Moderatör veya admin gerektirir. İdempotent: ban yoksa da başarı döner.",
+    security(("api_key" = [])),
+    params(
+        ("username" = String, Path, description = "Banı kaldırılacak actor'ün kullanıcı adı"),
+    ),
+    responses(
+        (status = 204, description = "Ban kaldırıldı (ya da zaten yoktu)"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn remove_ban(
     moderator: ModeratorActor,
     State(state): State<AppState>,
@@ -304,6 +419,23 @@ async fn remove_ban(
 /// [`AdminActor`] gerektiriyor, [`ModeratorActor`] değil: bir moderatörün
 /// kendine ya da başkasına admin verebilmesi yetki sınırını anlamsız
 /// kılardı.
+#[utoipa::path(
+    post,
+    path = "/admin/roles",
+    tag = "admin",
+    summary = "Bir actor'e rol ata (ya da rolünü kaldır)",
+    description = "Yalnızca **admin** çağırabilir (moderatör yeterli değil). `role: null` mevcut rolü kaldırır.",
+    security(("api_key" = [])),
+    request_body = SetRoleRequest,
+    responses(
+        (status = 204, description = "Rol güncellendi"),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn set_role(
     admin: AdminActor,
     State(state): State<AppState>,
@@ -338,6 +470,25 @@ async fn set_role(
 /// `migrations/0015`'te FK olmaması) ve hangi id uzayına ait olduğu
 /// `target_type`'tan anlaşılıyor. Yanlış uzayla kodlamak, var olmayan bir
 /// kaydı işaret eden bir id üretirdi.
+#[utoipa::path(
+    get,
+    path = "/admin/actions",
+    tag = "admin",
+    summary = "Denetim izini listele",
+    description = "Moderatör veya admin gerektirir. `target_id` ham `bigint` olarak döner (polimorfik hedef).",
+    security(("api_key" = [])),
+    params(
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+    ),
+    responses(
+        (status = 200, description = "Denetim izi kayıtları, cursor'lu", body = AdminActionListResponse),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        RateLimited,
+    )
+)]
 async fn list_actions(
     _moderator: ModeratorActor,
     State(state): State<AppState>,

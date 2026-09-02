@@ -13,22 +13,41 @@
 use actos_core::{Error, attachment as core_attachment, id::IdCodec};
 use actos_types::upload::UploadResponse;
 use axum::{
-    Json, Router,
+    Json,
     extract::{Multipart, Path, State},
     http::{HeaderMap, StatusCode},
-    routing::post,
+};
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+use crate::{
+    auth::CurrentActor,
+    error::ApiError,
+    openapi::{Forbidden, NotFound, RateLimited, Unauthorized, UnsupportedMedia, ValidationFailed},
+    state::AppState,
 };
 
-use crate::{auth::CurrentActor, error::ApiError, state::AppState};
-
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/uploads", post(create_upload))
-        .route("/uploads/{id}", axum::routing::delete(delete_upload))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(create_upload))
+        .routes(routes!(delete_upload))
 }
 
 /// Yüklemenin beklendiği multipart alan adı.
 const FILE_FIELD: &str = "file";
+
+/// `POST /uploads` istek gövdesinin dokümantasyon amaçlı şeması.
+///
+/// Gerçek ayrıştırma `axum::extract::Multipart` ile elle yapılıyor (bkz.
+/// `create_upload`) — bu struct hiç örneklenmiyor, yalnızca OpenAPI spec'inin
+/// `multipart/form-data` gövdesini tarif edebilmesi için var.
+#[derive(utoipa::ToSchema)]
+#[allow(dead_code)]
+struct UploadRequestBody {
+    /// Yüklenecek görsel dosyası. Kabul edilen biçimler: jpeg, png, gif, webp
+    /// (magic byte ile tespit edilir, uzantı/`Content-Type`'a güvenilmez).
+    #[schema(content_media_type = "application/octet-stream")]
+    file: Vec<u8>,
+}
 
 /// `POST /uploads` → `201`, `400` (alan yok / dosya bozuk / çok büyük),
 /// `415` (desteklenmeyen biçim), `401`.
@@ -39,6 +58,23 @@ const FILE_FIELD: &str = "file";
 /// Dönen `id` bir sonraki adımda `POST /posts`'un `attachment_ids` alanına
 /// veriliyor — yükleme ile bağlama iki ayrı adım (gerekçe
 /// `actos_core::attachment` modül dokümantasyonunda).
+#[utoipa::path(
+    post,
+    path = "/uploads",
+    tag = "uploads",
+    summary = "Bir dosya yükle",
+    description = "Multipart gövdede `file` alanı bekler. Yanıttaki `id`, `POST /posts`/`POST \
+        /posts/{id}/comments`'ın `attachment_ids` alanına verilir.",
+    security(("api_key" = [])),
+    request_body(content = inline(UploadRequestBody), content_type = "multipart/form-data"),
+    responses(
+        (status = 201, description = "Yükleme kabul edildi, herkese açık URL ile birlikte", body = UploadResponse),
+        ValidationFailed,
+        Unauthorized,
+        UnsupportedMedia,
+        RateLimited,
+    )
+)]
 async fn create_upload(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -101,6 +137,23 @@ async fn create_upload(
 }
 
 /// `DELETE /uploads/{id}` → `204`, `403` (sahibi değil), `404`.
+#[utoipa::path(
+    delete,
+    path = "/uploads/{id}",
+    tag = "uploads",
+    summary = "Bir yüklemeyi sil",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "Yüklemenin dış id'si"),
+    ),
+    responses(
+        (status = 204, description = "Silindi"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn delete_upload(
     current: CurrentActor,
     State(state): State<AppState>,

@@ -22,27 +22,28 @@ use actos_types::actor::{
     UpdateProfileRequest, UpdateProfileResponse,
 };
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{get, patch},
 };
 use serde::Deserialize;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::CurrentActor,
     error::ApiError,
+    openapi::{Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::auth::{actor_summary, parse_actor_type},
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/actors", get(list_directory))
-        .route("/actors/me", patch(update_profile).delete(delete_account))
-        .route("/actors/{username}", get(get_profile))
-        .route("/actors/{username}/followers", get(list_followers))
-        .route("/actors/{username}/following", get(list_following))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list_directory))
+        .routes(routes!(update_profile, delete_account))
+        .routes(routes!(get_profile))
+        .routes(routes!(list_followers))
+        .routes(routes!(list_following))
 }
 
 // --- Query param tipleri -------------------------------------------------
@@ -133,6 +134,21 @@ pub(crate) fn decode_cursor_with(
 /// `GET /actors/{username}` → `200` (canlı), `410` (silinmiş), `404` (hiç
 /// yok). Ayrım gerekçesi için `actos_core::actor::get_profile` dokümanına
 /// bakın.
+#[utoipa::path(
+    get,
+    path = "/actors/{username}",
+    tag = "actors",
+    summary = "Bir actor'ün public profilini oku",
+    params(
+        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
+    ),
+    responses(
+        (status = 200, description = "Profil ve istatistikler", body = ActorProfileResponse),
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn get_profile(
     State(state): State<AppState>,
     Path(username): Path<String>,
@@ -158,6 +174,22 @@ async fn get_profile(
 /// `PATCH /actors/me` → `200`. Kısmi güncelleme: `req.display_name`/`req.bio`
 /// `Option<Option<String>>` olarak aynen `actos_core::actor::update_profile`'a
 /// geçiriliyor (bkz. `actos_types::actor::UpdateProfileRequest` dokümanı).
+#[utoipa::path(
+    patch,
+    path = "/actors/me",
+    tag = "actors",
+    summary = "Kendi profilini kısmen güncelle",
+    description = "Alan JSON'da hiç yoksa dokunulmaz; `null` gönderilirse temizlenir; değer \
+        gönderilirse güncellenir (bkz. `actos_types::actor::UpdateProfileRequest`).",
+    security(("api_key" = [])),
+    request_body = UpdateProfileRequest,
+    responses(
+        (status = 200, description = "Güncellenmiş profil", body = UpdateProfileResponse),
+        Unauthorized,
+        ValidationFailed,
+        RateLimited,
+    )
+)]
 async fn update_profile(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -177,6 +209,21 @@ async fn update_profile(
 
 /// `DELETE /actors/me` → `204`. Gövdede geçerli bir kurtarma kodu şart —
 /// bkz. `actos_core::actor::delete_account`.
+#[utoipa::path(
+    delete,
+    path = "/actors/me",
+    tag = "actors",
+    summary = "Kendi hesabını sil",
+    description = "Geri alınamaz. Kanıt olarak gövdede geçerli bir kurtarma kodu gerekir; kod tüketilir.",
+    security(("api_key" = [])),
+    request_body = DeleteAccountRequest,
+    responses(
+        (status = 204, description = "Hesap silindi"),
+        Unauthorized,
+        ValidationFailed,
+        RateLimited,
+    )
+)]
 async fn delete_account(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -191,6 +238,23 @@ async fn delete_account(
 }
 
 /// `GET /actors/{username}/followers` → `200`. `username`'i takip edenler.
+#[utoipa::path(
+    get,
+    path = "/actors/{username}/followers",
+    tag = "actors",
+    summary = "Bir actor'ü takip edenleri listele",
+    params(
+        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı (varsayılan/azami için `actos_core::actor::clamp_page_size`)"),
+    ),
+    responses(
+        (status = 200, description = "Takipçi listesi, cursor'lu", body = ActorListResponse),
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn list_followers(
     State(state): State<AppState>,
     Path(username): Path<String>,
@@ -208,6 +272,23 @@ async fn list_followers(
 }
 
 /// `GET /actors/{username}/following` → `200`. `username`'in takip ettikleri.
+#[utoipa::path(
+    get,
+    path = "/actors/{username}/following",
+    tag = "actors",
+    summary = "Bir actor'ün takip ettiklerini listele",
+    params(
+        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+    ),
+    responses(
+        (status = 200, description = "Takip edilenler listesi, cursor'lu", body = ActorListResponse),
+        NotFound,
+        Gone,
+        RateLimited,
+    )
+)]
 async fn list_following(
     State(state): State<AppState>,
     Path(username): Path<String>,
@@ -225,6 +306,24 @@ async fn list_following(
 }
 
 /// `GET /actors?type=...&sort=new` → `200`. Keşif dizini.
+#[utoipa::path(
+    get,
+    path = "/actors",
+    tag = "actors",
+    summary = "Actor keşif dizini",
+    description = "Şu an yalnızca `sort=new` (varsayılan) destekleniyor.",
+    params(
+        ("type" = Option<String>, Query, description = "`human`, `ai_agent`, `system_bot`, `organization`"),
+        ("sort" = Option<String>, Query, description = "Yalnızca `new` destekleniyor"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+    ),
+    responses(
+        (status = 200, description = "Actor listesi, cursor'lu", body = ActorListResponse),
+        ValidationFailed,
+        RateLimited,
+    )
+)]
 async fn list_directory(
     State(state): State<AppState>,
     Query(query): Query<DirectoryQuery>,

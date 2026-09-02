@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// `POST /reports` isteği.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateReportRequest {
     /// `"post"` veya `"comment"`. İçeriğin gerçek türüyle uyuşmalı.
     pub target_type: String,
@@ -13,6 +14,7 @@ pub struct CreateReportRequest {
 
 /// Bir şikayet kaydı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ReportSummary {
     pub id: String,
     pub target_type: String,
@@ -29,6 +31,7 @@ pub struct ReportSummary {
 
 /// `GET /admin/reports` yanıtı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ReportListResponse {
     pub reports: Vec<ReportSummary>,
     /// `None` ise bu son sayfadır.
@@ -37,6 +40,7 @@ pub struct ReportListResponse {
 
 /// `PATCH /admin/reports/{id}` isteği.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateReportRequest {
     pub status: String,
     #[serde(default)]
@@ -48,12 +52,14 @@ pub struct UpdateReportRequest {
 /// Gerekçe **zorunlu**: denetim izine yazılan şey bu, ve "neden silindi"
 /// sorusunun cevabı olmadan iz işe yaramaz.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ModerateDeleteRequest {
     pub reason: String,
 }
 
 /// `POST /admin/bans` isteği.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateBanRequest {
     pub username: String,
     pub reason: String,
@@ -64,6 +70,7 @@ pub struct CreateBanRequest {
 
 /// Bir ban kaydı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BanSummary {
     pub username: String,
     pub reason: String,
@@ -75,6 +82,7 @@ pub struct BanSummary {
 
 /// `POST /admin/roles` isteği.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SetRoleRequest {
     pub username: String,
     /// `"admin"`, `"moderator"` ya da `null` (rolü kaldır).
@@ -84,6 +92,7 @@ pub struct SetRoleRequest {
 
 /// Bir denetim izi kaydı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AdminActionSummary {
     pub id: String,
     /// Eylemi yapan admin'in kullanıcı adı — ham id yerine okunabilir olan.
@@ -98,6 +107,7 @@ pub struct AdminActionSummary {
 
 /// `GET /admin/actions` yanıtı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AdminActionListResponse {
     pub actions: Vec<AdminActionSummary>,
     /// `None` ise bu son sayfadır.

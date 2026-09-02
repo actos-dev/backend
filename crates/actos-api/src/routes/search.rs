@@ -18,26 +18,28 @@ use actos_core::{
     content::ContentType,
     search::{self as core_search, SearchTarget},
 };
+use actos_types::search::ContentSearchResponse;
 use axum::{
-    Json, Router,
+    Json,
     extract::{Query, State},
     http::HeaderMap,
-    routing::get,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     error::ApiError,
     fields,
+    openapi::{RateLimited, ValidationFailed},
     routes::actors::{decode_cursor_with, parse_limit},
     routes::auth::actor_summary,
     routes::posts::content_summary,
     state::AppState,
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new().route("/search", get(search))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(search))
 }
 
 /// `GET /search?q=&type=&cursor=&limit=&fields=` query'si.
@@ -60,6 +62,30 @@ struct SearchQuery {
 /// listesi döner, hata değil — `crate::routes::tags::search_tags` ile aynı
 /// karar (bkz. o handler'ın dokümanı): bir arama kutusu henüz yazılırken
 /// `400` göstermemeli.
+#[utoipa::path(
+    get,
+    path = "/search",
+    tag = "search",
+    summary = "İçerik ya da actor ara",
+    description = "`type` zorunlu: `post`, `comment` ya da `actor`. `?type=post`/`?type=comment` \
+        için yanıt şekli `ContentSearchResponse` (aşağıda belgelenen), `?type=actor` için ise aynı \
+        sarmalayıcı (`{\"results\": [...], \"next_cursor\": ...}`) ama `results` içindeki öğeler \
+        `ActorSummary` — bkz. `actos_types::search::ActorSearchResponse`. `q` verilmemişse boş \
+        sonuç listesi döner, hata değil.",
+    params(
+        ("q" = Option<String>, Query, description = "Arama sorgusu"),
+        ("type" = String, Query, description = "`post`, `comment` ya da `actor` — zorunlu"),
+        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı (yalnızca aynı `q` ile anlamlı)"),
+        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("fields" = Option<String>, Query,
+            description = "Virgülle ayrılmış alan adları; her sonuç öğesine uygulanır (yalnızca `post`/`comment` için)"),
+    ),
+    responses(
+        (status = 200, description = "Arama sonuçları, cursor'lu (bkz. üstteki `?type=actor` notu)", body = ContentSearchResponse),
+        ValidationFailed,
+        RateLimited,
+    )
+)]
 async fn search(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,

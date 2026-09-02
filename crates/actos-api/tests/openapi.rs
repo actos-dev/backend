@@ -1,0 +1,341 @@
+//! `GET /openapi.json` ve `GET /docs` entegrasyon testleri (Faz 16).
+//!
+//! Kurulum yardımcıları `tests/tags_api.rs` ile aynı desen — ayrı bir
+//! entegrasyon test binary'si olduğu için (Rust her `tests/*.rs` dosyasını
+//! bağımsız derler) paylaşılan bir modül olmadan tekrar tanımlanıyor.
+//!
+//! **Neden 41 yolu burada elle listeliyoruz:** `crate::routes::mod`
+//! dokümantasyonundaki garanti ("bir uç axum'da yaşıyorsa spec'te de yaşar")
+//! yalnızca *kayıtlı* uçlar için geçerli — yeni bir uç eklenip
+//! `OpenApiRouter::routes(routes!(...))`'a hiç eklenmemesi (ya da
+//! `#[utoipa::path]` anotasyonu unutulması) derleme zamanında yakalanmaz,
+//! çünkü axum bunu normal bir `Router::route` çağrısıyla da kabul eder. Bu
+//! test o boşluğu kapatıyor: PLAN.md'nin "spec kodla senkron kalsın" sözü
+//! olarak, listedeki 41 yoldan biri kaybolursa (ya da beklenmedik bir tane
+//! eklenip test edilmemişse) burada kırılır.
+
+use actos_api::{app, state::AppState};
+use actos_core::{
+    Config, Storage,
+    config::{
+        DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
+    },
+    cursor::CursorCodec,
+    id::IdCodec,
+    idempotency::IdempotencyStore,
+    ratelimit::RateLimiter,
+};
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::{Request, StatusCode, header},
+};
+use serde_json::Value;
+use sqlx::PgPool;
+use tower::ServiceExt as _;
+
+// --- Kurulum yardımcıları (bkz. `tests/tags_api.rs` — aynı desen) ---------
+
+#[allow(clippy::expect_used)]
+fn test_config() -> Config {
+    Config {
+        server: ServerConfig {
+            addr: std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
+            request_timeout: std::time::Duration::from_secs(30),
+            max_concurrent_requests: 512,
+            max_body_bytes: 1024 * 1024,
+            max_upload_bytes: 8 * 1024 * 1024,
+            trusted_proxy_hops: 0,
+            tag_cleanup_interval: std::time::Duration::ZERO,
+            hot_score_interval: std::time::Duration::ZERO,
+            orphan_cleanup_interval: std::time::Duration::ZERO,
+        },
+        database: DatabaseConfig {
+            url: String::new(),
+            max_connections: 5,
+            acquire_timeout: std::time::Duration::from_secs(5),
+        },
+        redis: RedisConfig {
+            url: "redis://127.0.0.1:3102/0".to_owned(),
+            pool_size: 4,
+        },
+        storage: StorageConfig {
+            endpoint: "http://127.0.0.1:1".to_owned(),
+            region: "us-east-1".to_owned(),
+            bucket: "test-bucket".to_owned(),
+            access_key: "test".to_owned(),
+            secret_key: "test".to_owned(),
+            public_base_url: "http://127.0.0.1:1/test-bucket".to_owned(),
+        },
+        security: SecurityConfig {
+            id_obfuscation_key: "test-id-obfuscation-key-en-az-otuz-iki-karakter".to_owned(),
+            cursor_signing_key: "test-cursor-signing-key-en-az-otuz-iki-karakter".to_owned(),
+        },
+        rate_limits: LimitTable::from_env().expect("varsayılan limit tablosu geçerli olmalı"),
+    }
+}
+
+#[allow(clippy::expect_used)]
+fn build_router(pool: PgPool) -> Router {
+    let config = test_config();
+    let id_codec = IdCodec::new(&config.security.id_obfuscation_key).expect("geçerli anahtar");
+    let cursor_codec = CursorCodec::new(&config.security.cursor_signing_key);
+    let redis = deadpool_redis::Config::from_url(config.redis.url.clone())
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+        .expect("redis pool yapılandırması kurulabilmeli (ağ bağlantısı açmaz)");
+    let storage = Storage::new(&config.storage);
+    let test_prefix = format!("test:{}:", uuid::Uuid::new_v4());
+    let rate_limiter =
+        RateLimiter::with_prefix(redis.clone(), config.rate_limits, test_prefix.clone());
+    let idempotency = IdempotencyStore::with_prefix(redis.clone(), test_prefix);
+
+    let state = AppState::new(
+        config,
+        pool,
+        redis,
+        storage,
+        id_codec,
+        cursor_codec,
+        rate_limiter,
+        idempotency,
+    );
+    app::build(state)
+}
+
+#[allow(clippy::expect_used)]
+async fn send(router: &Router, req: Request<Body>) -> (StatusCode, Vec<u8>, axum::http::HeaderMap) {
+    let response = router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("istek işlenirken panik olmamalı");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 16 * 1024 * 1024)
+        .await
+        .expect("gövde okunabilmeli");
+    (status, bytes.to_vec(), headers)
+}
+
+#[allow(clippy::expect_used)]
+fn empty_req(method: &str, uri: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::empty())
+        .expect("istek kurulabilmeli")
+}
+
+/// Spec'te bulunması **zorunlu** 41 yol. `crate::routes::mod`'daki her
+/// `router()` merge'ünden bir tane — bkz. dosya başındaki modül dokümanı.
+///
+/// Sıra, `crates/actos-api/src/routes/mod.rs`'teki `merge` sırasıyla aynı:
+/// health/meta, auth, actors, posts, comments, tags, search, interactions,
+/// feed, uploads, admin.
+const EXPECTED_PATHS: &[&str] = &[
+    // health / meta
+    "/health",
+    "/health/ready",
+    "/version",
+    // auth
+    "/auth/register",
+    "/auth/whoami",
+    "/auth/keys",
+    "/auth/keys/{key_id}",
+    "/auth/recover",
+    "/auth/recovery-codes/regenerate",
+    // actors
+    "/actors",
+    "/actors/me",
+    "/actors/{username}",
+    "/actors/{username}/followers",
+    "/actors/{username}/following",
+    // posts
+    "/posts",
+    "/posts/{id}",
+    "/actors/{username}/posts",
+    // comments
+    "/posts/{id}/comments",
+    "/comments/{id}",
+    "/actors/{username}/comments",
+    // tags
+    "/tags/search",
+    "/tags",
+    "/tags/{name}/posts",
+    // search
+    "/search",
+    // interactions
+    "/contents/{id}/vote",
+    "/contents/{id}/save",
+    "/actors/{username}/follow",
+    "/me/saves",
+    "/me/votes",
+    // feed
+    "/feed",
+    "/feed/following",
+    // uploads
+    "/uploads",
+    "/uploads/{id}",
+    // admin (+ herkese açık /reports)
+    "/reports",
+    "/admin/reports",
+    "/admin/reports/{id}",
+    "/admin/contents/{id}",
+    "/admin/bans",
+    "/admin/bans/{username}",
+    "/admin/roles",
+    "/admin/actions",
+];
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn openapi_json_200_ve_gecerli_json(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, headers) = send(&router, empty_req("GET", "/openapi.json")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/json")
+    );
+
+    let spec: Value = serde_json::from_slice(&body).expect("geçerli JSON olmalı");
+    assert!(spec.is_object(), "spec bir JSON nesnesi olmalı");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn openapi_json_41_yolun_hepsini_iceriyor(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let spec: Value = serde_json::from_slice(&body).expect("geçerli JSON olmalı");
+    let paths = spec["paths"].as_object().expect("paths bir nesne olmalı");
+
+    assert_eq!(
+        paths.len(),
+        EXPECTED_PATHS.len(),
+        "beklenmedik yol sayısı — spec'te olup listede olmayan ya da tersi bir yol var. \
+         spec'teki yollar: {:?}",
+        paths.keys().collect::<Vec<_>>()
+    );
+
+    for path in EXPECTED_PATHS {
+        assert!(
+            paths.contains_key(*path),
+            "spec'te eksik yol: {path} — bir uç eklenip #[utoipa::path] anotasyonu \
+             ya da routes!() kaydı unutulmuş olabilir"
+        );
+    }
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn openapi_surumu_3_1(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let spec: Value = serde_json::from_slice(&body).expect("geçerli JSON olmalı");
+    let version = spec["openapi"]
+        .as_str()
+        .expect("openapi alanı string olmalı");
+    assert!(
+        version.starts_with("3.1"),
+        "openapi sürümü 3.1.x olmalı, bulunan: {version}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn guvenlik_semasi_tanimli_ve_en_az_bir_ucta_referansli(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let spec: Value = serde_json::from_slice(&body).expect("geçerli JSON olmalı");
+
+    let scheme = &spec["components"]["securitySchemes"]["api_key"];
+    assert_eq!(scheme["type"], "http", "api_key HTTP şeması olmalı");
+    assert_eq!(scheme["scheme"], "bearer", "api_key Bearer şeması olmalı");
+
+    // En az bir uç bu şemayı referans veriyor mu? `whoami` kimlik gerektiren
+    // bir uç, `security` alanında `api_key` görünmeli.
+    let whoami_security = &spec["paths"]["/auth/whoami"]["get"]["security"];
+    let referenced = whoami_security
+        .as_array()
+        .map(|reqs| {
+            reqs.iter()
+                .any(|req| req.as_object().is_some_and(|o| o.contains_key("api_key")))
+        })
+        .unwrap_or(false);
+    assert!(
+        referenced,
+        "GET /auth/whoami api_key güvenlik şemasını referans vermeli: {whoami_security}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn hata_semasi_tanimli(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let spec: Value = serde_json::from_slice(&body).expect("geçerli JSON olmalı");
+
+    let schema = &spec["components"]["schemas"]["ProblemDetails"];
+    assert!(
+        schema.is_object(),
+        "ProblemDetails şeması components.schemas altında tanımlı olmalı"
+    );
+    let properties = schema["properties"]
+        .as_object()
+        .expect("ProblemDetails alanları olmalı");
+    for field in ["type", "title", "status", "code"] {
+        assert!(
+            properties.contains_key(field),
+            "ProblemDetails alanı eksik: {field}"
+        );
+    }
+
+    // `application/problem+json` en az bir yanıtta content-type olarak
+    // kullanılıyor mu? Ham spec metninde arıyoruz — hangi yolun/hangi
+    // durumun bunu kullandığı önemli değil, RFC 9457 gövdesinin gerçekten
+    // hata yanıtlarına bağlandığını doğruluyoruz.
+    let raw = serde_json::to_string(&spec).expect("spec serialize edilebilmeli");
+    assert!(
+        raw.contains("application/problem+json"),
+        "hiçbir yanıt application/problem+json content-type'ı kullanmıyor"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn docs_200_ve_html_donuyor(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, headers) = send(&router, empty_req("GET", "/docs")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        content_type.starts_with("text/html"),
+        "content-type text/html olmalı, bulunan: {content_type}"
+    );
+
+    let html = String::from_utf8(body).expect("gövde UTF-8 olmalı");
+    assert!(html.contains("<html"), "gövde bir HTML sayfası olmalı");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn openapi_ve_docs_kimlik_gerektirmiyor(pool: PgPool) {
+    // Yukarıdaki testlerin hiçbiri `Authorization` header'ı göndermiyor
+    // zaten; bu test niyeti açık bir başlığa bağlıyor — `401` DÖNMEMELİ.
+    let router = build_router(pool);
+
+    let (status, _, _) = send(&router, empty_req("GET", "/openapi.json")).await;
+    assert_ne!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _, _) = send(&router, empty_req("GET", "/docs")).await;
+    assert_ne!(status, StatusCode::UNAUTHORIZED);
+}

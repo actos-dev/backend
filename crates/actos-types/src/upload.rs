@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Faz 13 — ileride private + presigned URL'ye geçilebilir, o zaman bu
 /// alanların anlamı değil yalnızca ömrü değişir).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UploadResponse {
     pub id: String,
     pub url: String,

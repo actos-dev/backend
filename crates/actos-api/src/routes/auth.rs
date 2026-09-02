@@ -17,27 +17,29 @@ use actos_types::auth::{
     RegisterResponse, WhoamiResponse,
 };
 use axum::{
-    Json, Router,
+    Json,
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
 };
+use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use crate::{auth::CurrentActor, error::ApiError, state::AppState};
+use crate::{
+    auth::CurrentActor,
+    error::ApiError,
+    openapi::{Conflict, NotFound, RateLimited, Unauthorized, ValidationFailed},
+    state::AppState,
+};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/auth/register", post(register))
-        .route("/auth/whoami", get(whoami))
-        .route("/auth/keys", post(create_key).get(list_keys))
-        .route("/auth/keys/{key_id}", delete(revoke_key))
-        .route("/auth/recover", post(recover))
-        .route(
-            "/auth/recovery-codes/regenerate",
-            post(regenerate_recovery_codes),
-        )
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(register))
+        .routes(routes!(whoami))
+        .routes(routes!(create_key, list_keys))
+        .routes(routes!(revoke_key))
+        .routes(routes!(recover))
+        .routes(routes!(regenerate_recovery_codes))
 }
 
 // --- Ortak dönüşümler --------------------------------------------------
@@ -115,6 +117,22 @@ fn key_summary(key: &ApiKeyRecord) -> ApiKeySummary {
 // --- Handler'lar ---------------------------------------------------------
 
 /// `POST /auth/register` → `201` + `Location: /actors/{username}`.
+#[utoipa::path(
+    post,
+    path = "/auth/register",
+    tag = "auth",
+    summary = "Yeni bir actor kaydı oluştur",
+    description = "Kimlik gerektirmez. Yanıt gövdesindeki `api_key` ve `recovery_codes` **yalnızca bu \
+        yanıtta** görünür, bir daha hiçbir uçtan geri alınamaz — istemci bunları o an saklamalı.",
+    request_body = RegisterRequest,
+    responses(
+        (status = 201, description = "Actor oluşturuldu", body = RegisterResponse,
+            headers(("location" = String, description = "Yeni profilin yolu: /actors/{username}"))),
+        ValidationFailed,
+        Conflict,
+        RateLimited,
+    )
+)]
 async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -150,6 +168,18 @@ async fn register(
 }
 
 /// `GET /auth/whoami` → `200`.
+#[utoipa::path(
+    get,
+    path = "/auth/whoami",
+    tag = "auth",
+    summary = "Kimliğini doğrula ve kendi profilini/rollerini öğren",
+    security(("api_key" = [])),
+    responses(
+        (status = 200, description = "Doğrulanan actor, rolleri ve kullanılan key'in özeti", body = WhoamiResponse),
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn whoami(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -189,6 +219,20 @@ async fn whoami(
 }
 
 /// `POST /auth/keys` → `201`.
+#[utoipa::path(
+    post,
+    path = "/auth/keys",
+    tag = "auth",
+    summary = "Yeni bir API key oluştur",
+    description = "Ham key (`api_key`) yalnızca bu yanıtta görünür — bir daha geri alınamaz.",
+    security(("api_key" = [])),
+    request_body = CreateKeyRequest,
+    responses(
+        (status = 201, description = "Key oluşturuldu", body = CreateKeyResponse),
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn create_key(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -208,6 +252,18 @@ async fn create_key(
 }
 
 /// `GET /auth/keys` → `200`. Secret hiçbir zaman listede yer almaz.
+#[utoipa::path(
+    get,
+    path = "/auth/keys",
+    tag = "auth",
+    summary = "Kendi API key'lerini listele",
+    security(("api_key" = [])),
+    responses(
+        (status = 200, description = "Secret'sız key özetleri", body = ListKeysResponse),
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn list_keys(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -229,6 +285,22 @@ async fn list_keys(
 /// [`Error::NotFound`] dönülür, [`Error::Validation`] değil: "bu biçim
 /// geçerli ama böyle bir key yok" ile "biçim bozuk" ayrımı saldırgana bilgi
 /// verirdi.
+#[utoipa::path(
+    delete,
+    path = "/auth/keys/{key_id}",
+    tag = "auth",
+    summary = "Bir API key'i iptal et",
+    security(("api_key" = [])),
+    params(
+        ("key_id" = String, Path, description = "İptal edilecek key'in ham UUID'si (`api_keys.id`)"),
+    ),
+    responses(
+        (status = 204, description = "İptal edildi"),
+        Unauthorized,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn revoke_key(
     current: CurrentActor,
     State(state): State<AppState>,
@@ -246,6 +318,20 @@ async fn revoke_key(
 }
 
 /// `POST /auth/recover` → `200`.
+#[utoipa::path(
+    post,
+    path = "/auth/recover",
+    tag = "auth",
+    summary = "Kurtarma koduyla yeni bir API key al",
+    description = "Kimlik gerektirmez — kanıt zaten kurtarma kodunun kendisi. Kullanılan kod tüketilir.",
+    request_body = RecoverRequest,
+    responses(
+        (status = 200, description = "Yeni ham key ve kalan kurtarma kodu sayısı", body = RecoverResponse),
+        ValidationFailed,
+        NotFound,
+        RateLimited,
+    )
+)]
 async fn recover(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -263,6 +349,19 @@ async fn recover(
 }
 
 /// `POST /auth/recovery-codes/regenerate` → `200`.
+#[utoipa::path(
+    post,
+    path = "/auth/recovery-codes/regenerate",
+    tag = "auth",
+    summary = "Kurtarma kodlarını yenile",
+    description = "Yeni 10 kod üretir; eskileri anında geçersiz olur. Yeni kodlar yalnızca bu yanıtta görünür.",
+    security(("api_key" = [])),
+    responses(
+        (status = 200, description = "Yeni kurtarma kodları", body = RegenerateRecoveryCodesResponse),
+        Unauthorized,
+        RateLimited,
+    )
+)]
 async fn regenerate_recovery_codes(
     current: CurrentActor,
     State(state): State<AppState>,

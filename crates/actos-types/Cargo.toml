@@ -11,6 +11,14 @@ authors.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Yalnızca `openapi` feature'ı açıkken çekilir — bkz. aşağıdaki `[features]`
+# ve crate kök dokümantasyonu ("hiçbir sunucu bağımlılığı" ilkesi).
+utoipa = { workspace = true, optional = true }
+
+[features]
+# `ToSchema` türetmesi için gerekli. CLI/SDK tüketicileri bunu asla açmaz —
+# yalnızca `actos-api` açar (bkz. `crates/actos-api/Cargo.toml`).
+openapi = ["dep:utoipa"]
 
 [lints]
 workspace = true

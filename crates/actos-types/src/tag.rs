@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// `GET /tags` listesindeki tek etiket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagSummary {
     pub name: String,
     /// Bu etiketi taşıyan **canlı** post sayısı (silinmişler sayılmaz).
@@ -17,6 +18,7 @@ pub struct TagSummary {
 
 /// `GET /tags` yanıtı: popülerliğe göre sıralı, cursor'lu.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagListResponse {
     pub tags: Vec<TagSummary>,
     /// `None` ise bu son sayfadır.
@@ -30,6 +32,7 @@ pub struct TagListResponse {
 /// hesaplanmamış bir sayıyı `0` olarak göndermek yanlış bir değeri
 /// doğruymuş gibi taşımak olurdu.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagMatch {
     pub name: String,
 }
@@ -40,6 +43,7 @@ pub struct TagMatch {
 /// bir tavana bağlı — otomatik tamamlama listesinin ikinci sayfası diye bir
 /// şey yok, kullanıcı yazmaya devam ederek daraltır.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagSearchResponse {
     pub tags: Vec<TagMatch>,
 }

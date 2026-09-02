@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Bu liste bir sözleşmedir: var olan bir kodun anlamı değiştirilmez, sadece
 /// yenisi eklenir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 // Bilerek `non_exhaustive` değil: yeni bir kod eklendiğinde onu HTTP durumuna
 // ve başlığa eşleyen `match`'lerin derlenmemesini istiyoruz. Yeni kod eklemek

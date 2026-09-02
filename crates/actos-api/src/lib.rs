@@ -13,6 +13,10 @@ pub mod error;
 pub mod fields;
 pub mod jobs;
 pub mod middleware;
+/// OpenAPI dokümantasyonunun paylaşılan iskeleti (Faz 16) — bkz. modül
+/// dokümantasyonu. `pub(crate)`: yalnızca `crate::routes` ve `routes/*.rs`
+/// bu tipleri kullanıyor, crate dışına sızacak bir API sözleşmesi değil.
+mod openapi;
 pub mod routes;
 pub mod state;
 pub mod telemetry;

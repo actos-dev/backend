@@ -23,6 +23,7 @@ use crate::{auth::ActorSummary, content::ContentSummary};
 
 /// `GET /search?type=post` / `?type=comment` yanıtı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ContentSearchResponse {
     pub results: Vec<ContentSummary>,
     /// `None` ise bu son sayfadır. **Yalnızca aynı `q` ile** sonraki
@@ -33,6 +34,7 @@ pub struct ContentSearchResponse {
 
 /// `GET /search?type=actor` yanıtı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorSearchResponse {
     pub results: Vec<ActorSummary>,
     /// `None` ise bu son sayfadır. Bkz. [`ContentSearchResponse::next_cursor`]

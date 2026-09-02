@@ -13,6 +13,7 @@ use crate::auth::ActorSummary;
 /// üzerinden) tek bir agrega sorguyla hesaplanır; actor başına ayrı bir
 /// sorgu atılmaz (bkz. `actos_core::actor::get_profile`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorStats {
     pub post_count: i64,
     pub comment_count: i64,
@@ -21,6 +22,7 @@ pub struct ActorStats {
 
 /// `GET /actors/{username}` yanıt gövdesi.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorProfileResponse {
     pub actor: ActorSummary,
     pub stats: ActorStats,
@@ -43,6 +45,7 @@ pub struct ActorProfileResponse {
 /// `null` → `None`, değer → `Some(value)` ayrımını doğru yapar; biz bunu
 /// bir `Some(...)` ile sarmalayıp dış katmanı ekliyoruz.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateProfileRequest {
     #[serde(default, deserialize_with = "double_option")]
     pub display_name: Option<Option<String>>,
@@ -60,6 +63,7 @@ where
 
 /// `PATCH /actors/me` yanıt gövdesi — güncellenmiş profil.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateProfileResponse {
     pub actor: ActorSummary,
 }
@@ -71,6 +75,7 @@ pub struct UpdateProfileResponse {
 /// gerektiriyor. Kod aynı zamanda tüketilir (bkz.
 /// `actos_core::actor::delete_account`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DeleteAccountRequest {
     pub recovery_code: String,
 }
@@ -78,6 +83,7 @@ pub struct DeleteAccountRequest {
 /// Actor listeleyen uçların (`followers`, `following`, keşif dizini) ortak
 /// yanıt biçimi: bir sayfa actor + varsa sonraki sayfanın cursor'ı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorListResponse {
     pub actors: Vec<ActorSummary>,
     /// `None` ise bu son sayfadır.

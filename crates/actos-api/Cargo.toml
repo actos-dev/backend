@@ -10,7 +10,10 @@ authors.workspace = true
 
 [dependencies]
 actos-core = { workspace = true }
-actos-types = { workspace = true }
+# `openapi` feature'ı: DTO'lara `ToSchema` türetir (bkz.
+# `crates/actos-types/Cargo.toml`). Yalnızca sunucu bu feature'ı açar — CLI/
+# SDK tüketicileri `actos-types`'ı bu feature olmadan alır.
+actos-types = { workspace = true, features = ["openapi"] }
 
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -27,6 +30,16 @@ dotenvy = { workspace = true }
 uuid = { workspace = true }
 # `POST /admin/bans`'in expires_at alanını RFC 3339'dan ayrıştırmak için.
 chrono = { workspace = true }
+
+# --- API dokümantasyonu (Faz 16) ---
+# Sürüm/uyumluluk gerekçesi kök `Cargo.toml`'da. `OpenApiRouter` +
+# `routes!()` kullanıyoruz (bkz. `crate::routes` modül dokümantasyonu) ki
+# rota kaydı ile şema kaydı derleme zamanında aynı yerde kalsın — bir uç
+# eklenip anotasyonu unutulursa derlenmesin.
+utoipa = { workspace = true }
+utoipa-axum = { workspace = true }
+# `Scalar` UI için (`GET /docs`, bkz. `crate::routes::mod` dokümantasyonu).
+utoipa-scalar = { workspace = true, features = ["axum"] }
 
 [lints]
 workspace = true

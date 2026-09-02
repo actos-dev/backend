@@ -47,6 +47,7 @@ use crate::auth::ActorSummary;
 
 /// Bir içeriğin (post ya da yorum) dışa dönük özeti.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ContentSummary {
     /// `actos_core::id::IdCodec`'le kodlanmış dış id (`c_7fGh2Kd`) — ham
     /// `bigint` asla buraya sızmaz.
@@ -110,6 +111,7 @@ pub struct ContentSummary {
 
 /// `POST /posts` istek gövdesi.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreatePostRequest {
     pub title: String,
     pub body: String,
@@ -135,6 +137,7 @@ pub struct CreatePostRequest {
 /// (`Some(v)`) ayrımı var. `actos_types::actor::UpdateProfileRequest`'in
 /// çift-`Option` kalıbı burada gereksiz.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdatePostRequest {
     pub title: Option<String>,
     pub body: Option<String>,
@@ -153,6 +156,7 @@ pub struct UpdatePostRequest {
 /// bir `serde_json::Value` üretebilir. Tip yine de burada tanımlı: SDK'lar
 /// filtresiz (tam) yanıtı bu struct'a deserialize edebilsin diye.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PostListResponse {
     pub posts: Vec<ContentSummary>,
     /// `None` ise bu son sayfadır.
@@ -163,6 +167,7 @@ pub struct PostListResponse {
 
 /// `POST /posts/{id}/comments` isteği.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateCommentRequest {
     pub body: String,
     /// `POST /uploads`'tan dönen ek id'leri. Yalnızca çağıranın kendi ve
@@ -181,6 +186,7 @@ pub struct CreateCommentRequest {
 /// tek alanı gövde, dolayısıyla "hangi alan gönderildi" ayrımına gerek yok
 /// — gövdesiz bir yorum güncellemesi zaten anlamsız.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateCommentRequest {
     pub body: String,
 }
@@ -196,9 +202,18 @@ pub struct UpdateCommentRequest {
 /// "yanıtlar alanı yok mu, yoksa boş mu" ayrımını yapmak zorunda kalmaması
 /// için — her düğümde aynı şekil.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentNodeResponse {
     #[serde(flatten)]
     pub content: ContentSummary,
+    /// `Vec<CommentNodeResponse>` — kendi tipine dönen bir döngü. utoipa'nın
+    /// `ToSchema` türetmesi bunu `no_recursion` işaretlenmeden bırakırsa
+    /// şema toplama fonksiyonu (`schemas()`) sonsuz döngüye girip **yığın
+    /// taşmasıyla çöküyor** (ölçüldü: `cargo test` bu alan işaretsizken
+    /// `has overflowed its stack` ile abort ediyordu — bkz. utoipa'nın kendi
+    /// dokümanı, `#[schema(no_recursion)]` "Pet -> Owner -> Pet" örneği).
+    /// `$ref` ile bir kere referans verip döngüyü burada kesiyoruz.
+    #[cfg_attr(feature = "openapi", schema(no_recursion))]
     pub replies: Vec<CommentNodeResponse>,
 }
 
@@ -208,6 +223,7 @@ pub struct CommentNodeResponse {
 /// yanıtlar sayfalanmaz (bkz. `actos_core::comment::list_comment_tree`).
 /// Daha derin bir alt ağaç `?parent=<id>` ile ayrıca çekilir.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentThreadResponse {
     pub comments: Vec<CommentNodeResponse>,
     /// `None` ise bu son sayfadır.
@@ -219,6 +235,7 @@ pub struct CommentThreadResponse {
 /// `ancestors` kökten başlar (ilk öğe her zaman post'tur) ve yorumun
 /// kendisini **içermez** — bir breadcrumb'ın doğal sırası bu.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentDetailResponse {
     pub comment: ContentSummary,
     pub ancestors: Vec<ContentSummary>,
@@ -226,6 +243,7 @@ pub struct CommentDetailResponse {
 
 /// `GET /actors/{username}/comments` yanıtı (Faz 7'den devir).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentListResponse {
     pub comments: Vec<ContentSummary>,
     /// `None` ise bu son sayfadır.

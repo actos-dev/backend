@@ -94,6 +94,13 @@ ammonia = "4.1.4"
 redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
 deadpool-redis = "0.23.1"
 
+# --- API dokümantasyonu (Faz 16) ---
+# `utoipa-axum`'ın 0.1 sürümü axum `^0.7`'ye bağlı — bizim axum 0.8.9 ile
+# uyumsuz, o yüzden 0.2'de kalıyoruz. Üçü de OpenAPI 3.1 üretiyor.
+utoipa = "5.5.0"
+utoipa-axum = "0.2.0"
+utoipa-scalar = "0.3.0"
+
 aws-credential-types = "1.3.0"
 # TLS sağlayıcısı bilinçli olarak **ring**: sqlx da ring kullanıyor ve tek bir
 # süreçte iki farklı rustls kripto sağlayıcısı bulunması çalışma anında

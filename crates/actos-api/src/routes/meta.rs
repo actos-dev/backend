@@ -1,9 +1,13 @@
 //! Sürüm bilgisi.
+//!
+//! **Hız sınırından ve kimlik doğrulamadan muaf** — bkz.
+//! `crate::routes::health` modül dokümantasyonundaki aynı gerekçe.
 
 use axum::{Json, response::IntoResponse};
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 struct Version {
     name: &'static str,
     version: &'static str,
@@ -12,7 +16,16 @@ struct Version {
     api_version: &'static str,
 }
 
-/// `GET /version`
+/// `GET /version` → `200`.
+#[utoipa::path(
+    get,
+    path = "/version",
+    tag = "meta",
+    summary = "Sürüm bilgisi",
+    responses(
+        (status = 200, description = "Sunucu sürümü ve konuşulan API sürümü", body = Version),
+    )
+)]
 pub async fn version() -> impl IntoResponse {
     Json(Version {
         name: env!("CARGO_PKG_NAME"),

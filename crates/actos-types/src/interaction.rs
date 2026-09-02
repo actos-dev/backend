@@ -8,6 +8,7 @@ use crate::content::ContentSummary;
 
 /// `PUT /contents/{id}/vote` isteği.
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct VoteRequest {
     /// `1` (yukarı), `-1` (aşağı) ya da `0` (oyu geri çek).
     pub value: i16,
@@ -18,6 +19,7 @@ pub struct VoteRequest {
 /// Sayaçlar yanıtta dönüyor ki istemci oy verdikten sonra yeni skoru
 /// görmek için ayrıca `GET` atmasın — ajanlar için tipik akış bu.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct VoteResponse {
     /// Çağıranın bu içerikteki güncel oyu (`0` = oy yok).
     pub value: i16,
@@ -33,6 +35,7 @@ pub struct VoteResponse {
 /// satırlar göndermek yanıtı boşuna şişirirdi ve istemcinin yapması gereken
 /// kontrol iki durumda da aynı.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct VoteMapResponse {
     pub votes: BTreeMap<String, i16>,
 }
@@ -42,6 +45,7 @@ pub struct VoteMapResponse {
 /// **En son kaydedilen önce** — içeriğin yazılma zamanına göre değil.
 /// Post ve yorum bir arada olabilir (`content_type` alanı ayırt eder).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SaveListResponse {
     pub saves: Vec<ContentSummary>,
     /// `None` ise bu son sayfadır.
