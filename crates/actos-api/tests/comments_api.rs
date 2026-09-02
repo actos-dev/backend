@@ -970,3 +970,134 @@ async fn actor_yorumlari_fields_body_html_ile_hesaplaniyor(pool: PgPool) {
         .expect("?fields=body_html ile string dönmeli");
     assert!(html.contains("<strong>kalın</strong>"), "{html}");
 }
+
+// --- GET /posts/{id}/comments `?body_html=` (ağaç ucuna opt-in) ------------
+//
+// Ağaç ucu `?fields=` desteklemiyor (bkz. `comments.rs::list_comments`
+// dokümanı), o yüzden `body_html` burada ayrı bir `?body_html=true`
+// bayrağıyla açılıyor. Aşağıdaki üç test görev tanımının istediği üç
+// iddiayı karşılıyor: (1) parametresiz varsayılan `null`, (2) `true` ile
+// ağacın her seviyesinde (en az iki seviye derinlikte) dolu, (3) silinmiş
+// bir düğümde maskeleme kuralına uyuyor.
+
+/// Parametresiz istekte ağaçtaki hiçbir düğümde `body_html` hesaplanmaz —
+/// bu ucun bugünkü (parametre eklenmeden önceki) davranışı birebir korunuyor.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn agac_body_html_parametresiz_hicbir_dugumde_hesaplanmaz(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "agac_html_kapali").await;
+    let post_id = seed_post(&router, &api_key, "Ağaç HTML kapalı").await;
+
+    let ebeveyn = seed_comment(&router, &api_key, &post_id, None, "**ebeveyn**").await;
+    seed_comment(&router, &api_key, &post_id, Some(&ebeveyn), "**çocuk**").await;
+
+    let (status, tree) = fetch_tree(&router, &post_id, "").await;
+    assert_eq!(status, StatusCode::OK, "{tree}");
+
+    let dugum = &tree["comments"][0];
+    assert!(
+        dugum["body_html"].is_null(),
+        "?body_html= olmadan kök düğümde hesaplanmamalı: {tree}"
+    );
+    assert!(
+        dugum["replies"][0]["body_html"].is_null(),
+        "?body_html= olmadan iç içe düğümde de hesaplanmamalı: {tree}"
+    );
+}
+
+/// `?body_html=true` ağaçtaki **her** düğümde `body_html`'i doldurur —
+/// yalnızca kökte değil, en az iki seviye derinlikte de (görev tanımı
+/// madde 7'nin "en az 2 seviye derinlikte doğrula" isteği).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn agac_body_html_true_ile_ic_ice_dugumlerde_de_dolar(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "agac_html_acik").await;
+    let post_id = seed_post(&router, &api_key, "Ağaç HTML açık").await;
+
+    let seviye1 = seed_comment(&router, &api_key, &post_id, None, "**bir**").await;
+    let seviye2 = seed_comment(&router, &api_key, &post_id, Some(&seviye1), "**iki**").await;
+    seed_comment(&router, &api_key, &post_id, Some(&seviye2), "**üç**").await;
+
+    let (status, tree) = fetch_tree(&router, &post_id, "body_html=true").await;
+    assert_eq!(status, StatusCode::OK, "{tree}");
+
+    let dugum1 = &tree["comments"][0];
+    let html1 = dugum1["body_html"]
+        .as_str()
+        .expect("seviye 1'de body_html string olmalı");
+    assert!(html1.contains("<strong>bir</strong>"), "seviye 1: {html1}");
+
+    let dugum2 = &dugum1["replies"][0];
+    let html2 = dugum2["body_html"]
+        .as_str()
+        .expect("seviye 2'de (iç içe) body_html string olmalı");
+    assert!(html2.contains("<strong>iki</strong>"), "seviye 2: {html2}");
+
+    let dugum3 = &dugum2["replies"][0];
+    let html3 = dugum3["body_html"]
+        .as_str()
+        .expect("seviye 3'te (iki seviye iç içe) body_html string olmalı");
+    assert!(html3.contains("<strong>üç</strong>"), "seviye 3: {html3}");
+}
+
+/// Ağaçta silinmiş bir düğüm için `?body_html=true` de aynı maskeleme
+/// kuralına uymalı: `body_html` `"[silindi]"` gövdesinden türer, ham gövde
+/// hiçbir şekilde sızmaz (bkz. `silinmis_yorum_body_html_de_maskeli` —
+/// tekil uçtaki aynı iddianın ağaç ucundaki karşılığı).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn agac_body_html_true_silinen_dugumde_maskeli(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "agac_html_silinen").await;
+    let post_id = seed_post(&router, &api_key, "Ağaç HTML silinen").await;
+
+    let ebeveyn = seed_comment(&router, &api_key, &post_id, None, "<script>gizli</script>").await;
+    seed_comment(&router, &api_key, &post_id, Some(&ebeveyn), "çocuk gövdesi").await;
+
+    let (status, _, _) = send(
+        &router,
+        auth_req("DELETE", &format!("/comments/{ebeveyn}"), &api_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, tree) = fetch_tree(&router, &post_id, "body_html=true").await;
+    assert_eq!(status, StatusCode::OK, "{tree}");
+
+    let dugum = &tree["comments"][0];
+    assert_eq!(dugum["deleted"], true, "{tree}");
+    let html = dugum["body_html"]
+        .as_str()
+        .expect("silinmiş düğümde de body_html string olmalı (maskelenmiş içerikle)");
+    assert!(
+        html.contains("[silindi]"),
+        "body_html body ile aynı maskeyi taşımalı: {html}"
+    );
+    assert!(
+        !html.contains("script") && !html.contains("gizli"),
+        "silinmiş düğümün ham gövdesi body_html'e sızmamalı: {html}"
+    );
+
+    // Çocuk yaşamaya devam ediyor ve o da (silinmemiş olduğu için) kendi
+    // gerçek gövdesinden türeyen body_html'i taşıyor.
+    let cocuk_html = dugum["replies"][0]["body_html"]
+        .as_str()
+        .expect("silinmemiş çocukta body_html string olmalı");
+    assert!(cocuk_html.contains("çocuk gövdesi"), "{cocuk_html}");
+}
+
+/// `?body_html=` bool olmayan bir değerle gelirse `400` döner —
+/// `gecersiz_sort_400_doner` ile aynı desen (`parse_body_html`'in kendi
+/// hata yolu, bkz. `comments.rs`).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn gecersiz_body_html_400_doner(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "gecersiz_body_html").await;
+    let post_id = seed_post(&router, &api_key, "Geçersiz body_html").await;
+
+    let (status, body) = fetch_tree(&router, &post_id, "body_html=evet").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}

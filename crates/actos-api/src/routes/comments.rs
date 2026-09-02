@@ -55,11 +55,13 @@ pub fn router() -> OpenApiRouter<AppState> {
 
 // --- Query param tipleri ---------------------------------------------------
 
-/// `GET /posts/{id}/comments?sort=&depth=&parent=&cursor=&limit=` query'si.
+/// `GET /posts/{id}/comments?sort=&depth=&parent=&cursor=&limit=&body_html=`
+/// query'si.
 ///
-/// Sayısal alanlar `String` olarak alınıp elle ayrıştırılıyor: axum'un
-/// `Query<T>` ile ürettiği tip hatası düz metin bir `400` döndürür, oysa bu
-/// API'de her hata RFC 9457 `application/problem+json` olmalı (bkz.
+/// Sayısal alanlar (ve `body_html`) `String` olarak alınıp elle
+/// ayrıştırılıyor: axum'un `Query<T>` ile ürettiği tip hatası düz metin bir
+/// `400` döndürür, oysa bu API'de her hata RFC 9457
+/// `application/problem+json` olmalı (bkz.
 /// `crate::routes::actors::parse_limit` üzerindeki aynı gerekçe).
 #[derive(Debug, Deserialize)]
 struct CommentTreeQuery {
@@ -68,6 +70,10 @@ struct CommentTreeQuery {
     parent: Option<String>,
     cursor: Option<String>,
     limit: Option<String>,
+    /// `?body_html=true` ile ağaçtaki her düğüm için `body_html` hesaplanır
+    /// (bkz. [`parse_body_html`] ve bu modülün `list_comments`
+    /// dokümanındaki "neden ayrı bir parametre" gerekçesi).
+    body_html: Option<String>,
 }
 
 /// `GET /actors/{username}/comments?cursor=&limit=&fields=` query'si.
@@ -95,21 +101,51 @@ fn parse_depth(raw: Option<String>, headers: &HeaderMap) -> Result<i32, ApiError
     }
 }
 
+/// Ham `body_html` query değerini çözer.
+///
+/// Verilmezse `false` (varsayılan) — bugünkü davranış (ağaçta `body_html`
+/// hiç hesaplanmaz) sessizce korunuyor, mevcut istemciler bu parametreden
+/// habersiz olsa da yanıt biçimleri değişmez. `Query<T>`'nin kendi `bool`
+/// ayrıştırması yerine burada da elle çözmemizin sebebi `parse_depth` /
+/// `parse_limit` ile aynı: tip hatasının düz metin `400` değil RFC 9457
+/// `application/problem+json` dönmesi gerekiyor.
+fn parse_body_html(raw: Option<String>, headers: &HeaderMap) -> Result<bool, ApiError> {
+    match raw {
+        None => Ok(false),
+        Some(s) => s.trim().parse::<bool>().map_err(|_| {
+            ApiError::new(Error::Validation(format!("geçersiz body_html: \"{s}\"")))
+                .with_request_id(headers)
+        }),
+    }
+}
+
 /// Bir [`core_comment::CommentNode`] ağacını yanıt DTO'suna çevirir.
 ///
 /// Özyineleme burada: ağacın derinliği `actos_core::comment::
 /// MAX_COMMENT_DEPTH` (32) ile şema seviyesinde sınırlı olduğu için yığın
 /// taşması riski yok — sınırsız derinlikte bir ağaç kurulamıyor.
+///
+/// `include_body_html` her seviyede aynen aktarılır: `?body_html=true`
+/// "yalnızca kökler" ya da "yalnızca yapraklar" gibi kısmi bir taahhüt
+/// değil, ağacın tamamı için tek bir açma/kapama anahtarı — istemci zaten
+/// tüm düğümleri render edeceği için kısmi hesaplama hem API'yi
+/// karmaşıklaştırır hem de pratik bir tasarruf sağlamaz (bkz. bu dosyanın
+/// `list_comments` dokümanı).
 fn comment_node(
     node: &core_comment::CommentNode,
     id_codec: &actos_core::id::IdCodec,
+    include_body_html: bool,
 ) -> Result<CommentNodeResponse, Error> {
     Ok(CommentNodeResponse {
-        content: content_summary(&node.content, id_codec)?,
+        content: content_summary_with_optional_body_html(
+            &node.content,
+            id_codec,
+            include_body_html,
+        )?,
         replies: node
             .replies
             .iter()
-            .map(|child| comment_node(child, id_codec))
+            .map(|child| comment_node(child, id_codec, include_body_html))
             .collect::<Result<Vec<_>, Error>>()?,
     })
 }
@@ -206,15 +242,39 @@ async fn create_comment(
 /// `Json<Value>` olarak elle kuruluyor — `crate::routes::posts::
 /// list_actor_posts`'takiyle aynı sebep değil: burada `?fields=`
 /// **desteklenmiyor**, çünkü alan filtresi düğümün `replies` anahtarını da
-/// eleyip ağacı düzleştirebilirdi. Ağaç uçlarında alan seçimi ayrı bir
-/// tasarım kararı gerektiriyor; şimdilik bilinçli olarak kapsam dışı
-/// (bkz. PLAN.md Faz 9 notları).
+/// eleyip ağacı düzleştirebilirdi. Ağaç uçlarında genel bir alan seçimi hâlâ
+/// bilinçli olarak kapsam dışı (bkz. PLAN.md Faz 9 notları).
+///
+/// **`body_html` için ayrı bir opt-in: `?body_html=true`.** `?fields=`
+/// kullanılamadığı için `body_html`'i açan mekanizma da `?fields=body_html`
+/// olamıyor (bkz. `crate::routes::posts::list_actor_posts` — orada bu
+/// şekilde çalışıyor). Bunun yerine tek amaçlı bir bayrak: `true` ise
+/// ağaçtaki **her düğüm** için `body_html` hesaplanır (bkz.
+/// [`comment_node`] dokümanı — kısmi hesaplama yok), `false`/verilmemişse
+/// hepsi `None` kalır ve bugünkü davranış birebir korunur. İki ayrı
+/// mekanizmanın (liste uçlarında `?fields=body_html`, ağaç ucunda
+/// `?body_html=true`) bir arada var olması kafa karıştırıcı görünebilir
+/// ama kök sebep aynı: `?fields=` zaten bu uçta **hiç yok**, dolayısıyla
+/// `body_html`'i onun bir alt kümesi gibi sunmak mümkün değil — burada
+/// eklenen yeni bir genel alan seçim mekanizması değil, yalnızca
+/// `body_html` için nokta atışı bir kapı.
+///
+/// **Ata zinciri (breadcrumb) bu parametreden etkilenmez, çünkü bu uçta
+/// ata zinciri diye bir şey YOK** — `ancestors` yalnızca `GET
+/// /comments/{id}` yanıtında var (bkz. `get_comment`) ve orası zaten
+/// `?body_html=`'den bağımsız çalışıyor, kendi ata listesini hiçbir zaman
+/// `body_html` ile doldurmuyor: atalar bağlam sağlamak için orada, okunan
+/// asıl kaynak değiller (bkz. `get_comment` dokümanındaki "`ancestors`
+/// bilerek dışarıda bırakılıyor" gerekçesi). Bu yüzden bu değişiklik o
+/// davranışa hiç dokunmuyor.
 #[utoipa::path(
     get,
     path = "/posts/{id}/comments",
     tag = "comments",
     summary = "Bir post'un yorum ağacını listele",
-    description = "`?fields=` bu uçta **desteklenmiyor** (ağacın `replies` alanını bozardı).",
+    description = "`?fields=` bu uçta **desteklenmiyor** (ağacın `replies` alanını bozardı). \
+        `body_html` bunun yerine ayrı bir `?body_html=true` bayrağıyla açılır — \
+        `?fields=body_html` değil, çünkü `?fields=` burada zaten yok.",
     params(
         ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
         ("sort" = Option<String>, Query, description = "`new` ya da `top`"),
@@ -222,6 +282,11 @@ async fn create_comment(
         ("parent" = Option<String>, Query, description = "Verilirse yalnızca bu yorumun alt ağacı döner"),
         ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı (yalnızca üst seviyeyi sayfalar)"),
         ("limit" = Option<String>, Query, description = "Sayfa başına üst seviye yorum sayısı"),
+        ("body_html" = Option<bool>, Query,
+            description = "`true` ise ağaçtaki her düğüm için `body_html` hesaplanır (varsayılan: `false`, hesaplanmaz). \
+                Ayrı bir parametre olma sebebi: bu uçta `?fields=` desteklenmiyor (yukarıya bkz.) — alan filtresi \
+                ağacın `replies` yapısını bozacağı için hiç yok, dolayısıyla `body_html`'i `?fields=body_html` ile \
+                değil, tek amaçlı bu bayrakla açıyoruz."),
     ),
     responses(
         (status = 200, description = "İç içe yorum ağacı, cursor'lu", body = CommentThreadResponse),
@@ -252,6 +317,7 @@ async fn list_comments(
 
     let depth = parse_depth(query.depth, &headers)?;
     let limit = parse_limit(query.limit, &headers)?;
+    let include_body_html = parse_body_html(query.body_html, &headers)?;
 
     // Cursor'ın imzası hangi sıralamaya ait olduğunu taşıyor; `?sort=` ile
     // uyuşmayan bir cursor burada reddedilir (bkz. `decode_cursor_with`).
@@ -274,7 +340,7 @@ async fn list_comments(
     let comments = page
         .items
         .iter()
-        .map(|node| comment_node(node, state.id_codec()))
+        .map(|node| comment_node(node, state.id_codec(), include_body_html))
         .collect::<Result<Vec<_>, Error>>()
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
