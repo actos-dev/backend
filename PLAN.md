@@ -776,6 +776,14 @@ engellemeyecek şekilde tasarlanacak.
       **ayrı job** (aynı anda 3 instance migration çalıştırmasın)
 - [ ] GitHub Actions: `fmt` + `clippy -D warnings` + `test` + `audit` + image build
 - [ ] `.sqlx` offline mode CI'da çalışıyor (DB olmadan derleme)
+- [ ] **`docs/openapi.json` tazelik kontrolü.** Spec repoya commit'lendi
+      (SDK ajanları sunucu ayağa kaldırmasın diye), ama commit'lenmiş bir
+      üretilmiş dosya **kodun gerisine düşebilir** — Faz 16'da `API.md`'ye uç
+      listesi konmamasının gerekçesi tam olarak buydu. CI, sunucuyu ayağa
+      kaldırıp `GET /openapi.json` çıktısını commit'lenmiş dosyayla
+      karşılaştırmalı; farklıysa **build kırılmalı**. Karşılaştırma
+      normalize edilmiş JSON üzerinden yapılır (anahtar sırası ve
+      biçimlendirme farkı hata sayılmaz)
 - [ ] Yapılandırma dokümanı: prod'da değişmesi **zorunlu** env'ler listesi
 - [ ] Yedekleme: `pg_dump` cron + MinIO bucket mirror; **geri yükleme tatbikatı yap**
 - [ ] Commit
