@@ -569,12 +569,32 @@ engellemeyecek şekilde tasarlanacak.
 > sürüm ve paketleme sorunları üretir (CLI'ın sürümü backend'inkine çakılır).
 > `actos-dev` organizasyonundaki ayrı repo düzeni doğru olan.
 
-**`actos-types` nasıl paylaşılacak:** crates.io'ya **bağımsız yayınlanır**.
-Geliştirme sırasında bu workspace'te path bağımlılığı olarak kalır (API ile
-birlikte evrilmesi gerekiyor), ama sürüm çıktığında yayınlanır ve istemciler
-onu crates.io'dan alır. Crate bunun için zaten hazır: bağımlılıkları yalnızca
-`serde` + `serde_json`, `utoipa` ise `openapi` feature'ının arkasında (Faz 16).
-Yani `cli`/`rust` bu crate'i çekince backend'den tek satır derlemez.
+**`actos-types` nasıl paylaşılacak:** şimdilik **git bağımlılığı**, yayın yok.
+
+```toml
+actos-types = { git = "https://github.com/actos-dev/backend" }
+```
+
+Cargo bir git bağımlılığında workspace'in tamamını derlemez — yalnızca adı
+verilen crate'i ve onun bağımlılıklarını. `actos-types`'ın bağımlılığı
+`serde` + `serde_json`'dan ibaret (`utoipa` Faz 16'da `openapi` feature'ının
+arkasına alındı), dolayısıyla `cli`/`rust` bunu çekince axum/sqlx/aws-sdk-s3
+adına tek satır derlenmez. İzolasyon için yayınlamaya **gerek yok**.
+
+Ölçek bunu doğruluyor: `actos-types` yorumlar hariç **409 satır**, 49 tip,
+neredeyse tamamı serde struct'ı. Bu boyut için crates.io sürüm disiplini
+(her API değişikliğinde yayın, sürüm numarası yönetimi, isim rezervasyonu)
+karşılığını vermez.
+
+crates.io yayını **yalnızca şu koşulda** zorunlu olur: `rust` SDK'sının
+kendisi crates.io'ya çıkarsa — crates.io, git bağımlılığı taşıyan bir paketi
+kabul etmez. O gün gelirse `actos-types` de yayınlanır. Bugünün sorunu değil.
+
+Üçüncü bir seçenek de açık: **Rust SDK de tipleri OpenAPI'den üretebilir**,
+python/node gibi. O zaman paylaşılan crate'e hiç gerek kalmaz. Üretilen
+Rust'ın elle yazılandan çirkin olması pahasına, paylaşım altyapısı sıfıra
+iner. SDK yazılırken karar verilecek.
+
 Git submodule **kullanılmayacak** — bağımlılık çözümünü paket yöneticisi
 yapmalı, dizin düzeni değil.
 
@@ -583,8 +603,8 @@ Repolar (`github.com/actos-dev/`):
 | Repo | İçerik | `actos-types` |
 |---|---|---|
 | `backend` | bu repo (API + `actos-types` kaynağı) | path (workspace) |
-| `cli` | clap tabanlı CLI + ratatui TUI | crates.io |
-| `rust` | Rust SDK | crates.io |
+| `cli` | clap tabanlı CLI + ratatui TUI | git bağımlılığı |
+| `rust` | Rust SDK | git bağımlılığı (ya da spec'ten üretim) |
 | `python` | Python SDK | — (OpenAPI'den üretim + idiomatic katman) |
 | `node` | Node SDK | — (aynı) |
 | `frontend` | Next.js web istemcisi (data-theme tabanlı çoklu tema) | — |
