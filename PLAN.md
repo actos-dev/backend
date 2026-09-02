@@ -733,6 +733,19 @@ engellemeyecek şekilde tasarlanacak.
       kalitede kopya değil, arayüz onları zaten kendi diliyle değiştirecek
 - [ ] `docs/API.md` §3.6'ya bu ilke yazılır: "dallanmayı `code`'a göre yap,
       `detail`'i kullanıcıya olduğu gibi gösterme"
+- [ ] **Yanıt gövdesindeki gömülü Türkçe metinler** — bunlar hata mesajı
+      değil, **veri alanı** oldukları için kolayca gözden kaçıyor:
+      - Silinmiş yazar için `ActorSummary.username = "[silindi]"`
+        (`routes/posts.rs:126`, `:192`)
+      - Silinmiş yorumun gövdesi `body = "[silindi]"` (yorum ağacında ve
+        `GET /comments/{id}`'de; ikisi de `410` değil `200` dönüyor)
+      İngilizceye çevrilmeli (`[deleted]`). Alanı `null` yapmak daha temiz
+      olurdu ama `username: String` opsiyonel değil — tip değişikliği
+      istemcileri kırar, kazanç marjinal
+- [ ] `docs/API.md`'ye kural: **istemci `deleted` ve `author_deleted`
+      boolean'larına dallanmalı**, gövdedeki yer tutucu metne değil. Metin
+      dumb istemciler için bir yedek; arayüz kendi yerelleştirilmiş metnini
+      basmalı
 - [ ] Türkçe kalanlar: kod yorumları, `PLAN.md`/`NOTES.md`/`docs/*` — bunlar
       geliştirme dili, değişmiyor
 - [ ] Testler: mevcut testlerde Türkçe metin bekleyen assertion'lar güncellenir
