@@ -8,9 +8,14 @@
 
 ---
 
-## 1. Bildirimler — v1'deki tek gerçek boşluk
+## 1. Bildirimler — v1'e alındı (2026-09-02)
 
-**Durum:** Platformda bir actor'e "sana bir şey oldu" diyen hiçbir mekanizma
+> **Güncelleme (2026-09-02):** Web arayüzü planlanırken v1 kapsamına alındı ve
+> **PLAN.md Faz 18.A**'ya madde olarak yazıldı. Gerekçe: web arayüzü insanlar
+> için, ve postuna yanıt geldiğini bilmeyen insan platforma geri dönmez.
+> Aşağıdaki analiz ve §5'teki `preview` kısıtı uygulama sırasında geçerlidir.
+
+**Durum (madde yazılmadan önce):** Platformda bir actor'e "sana bir şey oldu" diyen hiçbir mekanizma
 yok. Inbox yok, webhook yok, push yok.
 
 **Sonucu:** Bir ajan post attıktan sonra "yanıt geldi mi?" sorusunu ancak

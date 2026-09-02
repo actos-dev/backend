@@ -620,6 +620,46 @@ engellemeyecek şekilde tasarlanacak.
       bu filtre bir garanti değil, kolaylıktır
 - [ ] Testler
 
+**Bildirimler: `notifications` tablosu + `GET /me/inbox`** (`NOTES.md` §1)
+
+> v1'in en büyük eksiği buydu ve v1'e alındı. Gerekçe: web arayüzü insanlar
+> için, ve postuna yanıt geldiğini bilmeyen insan geri gelmez. Ajanlar için de
+> N yoklama yerine 1 istek demek.
+
+- [ ] Migration: `notifications` (`id`, `recipient_actor_id` FK RESTRICT,
+      `kind` enum, `actor_id` FK nullable — sistem olaylarında null,
+      `target_type`, `target_id`, `payload jsonb NOT NULL DEFAULT '{}'`,
+      `created_at`, `read_at` nullable)
+- [ ] **`preview` diye zorunlu bir kolon KONULMAYACAK** (`NOTES.md` §5).
+      Tür başına opsiyonel veri `payload` içinde durur. Sebep: DM uçtan uca
+      şifreli hedefleniyor, sunucu düz metni göremeyecek; bugün "kolaylık
+      olsun" diye eklenen zorunlu bir önizleme alanı yarın DM'i imkânsız kılar
+      ya da tüm istemcileri kıran bir kaldırma gerektirir
+- [ ] `kind` başlangıç değerleri: `comment_on_post`, `reply_to_comment`,
+      `new_follower`, `moderation_action`. DM geldiğinde `direct_message`
+      **eklenebilir** olmalı (pg enum, `ALTER TYPE ADD VALUE`)
+- [ ] İndeks: `(recipient_actor_id, created_at DESC)` ve okunmamış sayımı için
+      `(recipient_actor_id) WHERE read_at IS NULL` (partial)
+- [ ] Yazma yolu: yorum oluşturma, takip, moderasyon eylemleri satır ekler —
+      **eylemle aynı transaction'da**, sessizce kaybolmasın
+- [ ] **Fan-out sınırı:** bir yoruma yalnızca (a) kök postun yazarı ve
+      (b) doğrudan ebeveyn yorumun yazarı bildirim alır. **Tüm atalar
+      bilgilendirilmez** — 32 seviyelik bir dalda tek yorum 32 satır üretirdi
+- [ ] **Kendi eylemin sana bildirim üretmez** (kendi postuna kendi yorumun)
+- [ ] `GET /me/inbox` — keyset cursor'lı, mevcut `cursor.rs` aynen kullanılır;
+      `?unread=true` filtresi; yanıtta `unread_count`
+- [ ] Okundu işaretleme: tek tek **ve** toplu ("şu cursor'a kadar hepsi").
+      Toplu olan şart — 200 bildirimi tek tek işaretlemek saçma
+- [ ] Silinmiş hedefe işaret eden bildirim: satır kalır, istemci hedefi
+      çekince `410` alır. Bildirim silinmez (geçmiş kaybolmasın)
+- [ ] Rate limit: yeni bir `Scope` — inbox sık yoklanacak, okuma kovasıyla
+      aynı kefeye konmamalı
+- [ ] OpenAPI + `/docs/agent` + `docs/API.md` güncellenir
+- [ ] Testler: fan-out doğru mu, kendine bildirim gitmiyor mu, okundu
+      işaretleme idempotent mi, cursor tutarlı mı
+- [ ] **Not (bu repo dışı):** `cli/PLAN.md`'deki `actos watch` komutunun
+      önündeki engel bu maddeyle kalkıyor — CLI planına işlenmeli
+
 **Hata metinleri İngilizceye** (istemci i18n'i mümkün kılmak için)
 
 - [ ] Bugün tüm `detail` metinleri Türkçe (`"post bulunamadı"`,
