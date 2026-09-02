@@ -432,13 +432,34 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 15 — Arama
 
-- [ ] `tsvector` generated column (`title` A ağırlıklı, `body` B) + GIN index
-- [ ] `GET /search?q=...&type=post|comment|actor&cursor=...`
-- [ ] Türkçe + İngilizce karışık içerik için `simple` config + `unaccent`
+- [x] `tsvector` generated column (`title` A ağırlıklı, `body` B) + GIN index
+      - `contents` ve `actors` için ayrı ayrı; ikisi de kısmi index
+        (`WHERE deleted_at IS NULL`)
+- [x] `GET /search?q=...&type=post|comment|actor&cursor=...`
+- [x] Türkçe + İngilizce karışık içerik için `simple` config + `unaccent`
       (dil tespiti v1'de yok)
-- [ ] Sonuç sıralaması: `ts_rank` + hot_score karışımı
-- [ ] Not: Meilisearch/Typesense'e geçiş v2 konusu, şimdilik Postgres yeter
-- [ ] Commit
+      - **`unaccent` doğrudan kullanılamadı:** STABLE olduğu için generated
+        column ifadesinde `ERROR: generation expression is not immutable`
+        veriyor. Çözüm: `unaccent`'i sözlük zincirine gömen özel bir
+        `actos_simple` text search configuration (`to_tsvector(regconfig,
+        text)` iki argümanlı hâli IMMUTABLE). Yaygın "yalancı IMMUTABLE
+        sarmalayıcı" hilesi bilinçli olarak kullanılmadı.
+- [x] ~~Sonuç sıralaması: `ts_rank` + hot_score karışımı~~
+      **Düzeltildi: `hot_score` kullanılmıyor.** İlk uygulama planı harfiyen
+      izleyip `ts_rank*10 + hot_score/50000` yazdı; ölçünce karışımın
+      **dejenere** olduğu görüldü. `hot_score` iki sinyali tek sayıda
+      birleştiriyor (zaman terimi ~39733, oy terimi -3..3 — dört büyüklük
+      mertebesi fark) ve tek bir sabite bölmek ikisini birden anlamsız
+      kılıyor: oy farkı 0.00006, 1 yıl tazelik farkı 0.014, oysa
+      `ts_rank*10`'un gerçek bandı 2.4–10.0. Sıralama pratikte saf
+      `ts_rank`'e iniyordu. Ayrıca `hot_score` denormalize (yalnızca oy
+      anında/periyodik işte tazeleniyor) ve testlerde hep `0`.
+      Yerine iki sinyal **ayrı ayrı ve canlı kolonlardan**:
+      `ts_rank*10 + epoch(created_at)/45000/1750 + sign(score)*log10(max(|score|,1))*0.4`
+      — sabitler "1 yıl yaş farkı ≈ 10 kat skor farkı ≈ 0.4 rank" hedefinden
+      geriye hesaplandı.
+- [x] Not: Meilisearch/Typesense'e geçiş v2 konusu, şimdilik Postgres yeter
+- [x] Commit
 
 ---
 
@@ -524,6 +545,56 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 15'ten çıkanlar:**
+
+- **`docs/query-plans.md`'nin "genel feed sağlam ✅" sonucu YANLIŞ.** O ölçüm
+  20.000 satırda yapılmıştı ve index taraması küçük veri setinin yarattığı bir
+  yanılsamaydı. 200.000 post / 2.000 actor ile yeniden ölçüldü:
+
+  | Sorgu | Mevcut | İki aşamalı |
+  |---|---|---|
+  | `GET /feed` (hot) | 223.9 ms | 0.54 ms |
+  | `GET /feed/following` (2000 takip) | 243.3 ms | 0.68 ms |
+  | `GET /tags/{name}/posts` (100k'lik etiket) | 184.1 ms | 0.76 ms |
+
+  **Tek ve ortak kök neden:** etiketler `array_agg` + `GROUP BY contents.id,
+  actors.id` ile sayfalama sorgusunun *içinde* toplanıyor; bu, planlayıcının
+  `ORDER BY ... LIMIT`'i aggregate'in altına itmesini engelliyor — eşleşen
+  BÜTÜN satırlar gruplanıp diske taşınıyor (~9.8 MB), sonra 26 tanesi
+  seçiliyor. **Faz 17'nin işi**, `search.rs` bu düzeltmeyi zaten aldı,
+  desen oradan kopyalanmalı (`page` CTE'si → dış sorguda `array_agg`).
+- **`docs/query-plans.md`'nin önerdiği iki çözüm gereksiz.** "Fan-out on write
+  materialized feed" ve `(actor_id, hot_score DESC)` bileşik index'i yanlış
+  kök nedene dayanıyordu; iki aşamalı sorgu mevcut index'lerle
+  (`idx_contents_hot`/`_new`/`_top`) sorunu çözüyor, yeni index gerekmiyor.
+  Faz 17 bu dosyayı düzeltmeli.
+- **`hot_score` arama sıralamasında kullanılmıyor** (bkz. Faz 15 maddesi).
+  Feed'de kalıyor; ama denormalize olduğu ve testlerde hep `0` kaldığı için
+  yeni bir sıralama yazan faz onu doğrudan kullanmadan önce iki kere düşünmeli.
+- **`Scope::Search` eklendi** — `/search` genel `Read` kovasına düşmüyor, ayrı
+  ve daha sıkı bir kovası var (GIN taraması + `ts_rank` hesabı tekil bir
+  index-lookup'tan pahalı). Ayrıca **yazmalar gibi fail-closed**: Redis
+  düşerse arama reddediliyor, oysa Faz 6 kararı "okuma fail-open" idi. Bilinçli
+  sapma — altyapı arızasında sınırsız pahalı sorgu DB'yi boğabilir, genel okuma
+  ise çalışmaya devam ediyor. Yeni env: `RATE_LIMIT_SEARCH_{HUMAN,AI_AGENT,IP}_{CAPACITY,WINDOW_SECS}`
+  (Faz 19/20 dağıtım listesine).
+- **`cargo sqlx prepare --workspace` TEK BAŞINA YETMİYOR** — integration test
+  dosyalarındaki sorguları kapsamıyor ve checked-in `.sqlx`'ten onlara ait
+  dosyaları siler, `SQLX_OFFLINE=true cargo check --all-targets` kırılır.
+  Doğrusu: **`cargo sqlx prepare --workspace -- --tests`**. Bu komut
+  Faz 19'da CI'a yazılırken de böyle yazılmalı.
+- **Cursor `q`'ya bağlı değil.** `SortKey::Hot` yeniden kullanıldı (taşınan
+  sayı `hot_score` değil `rank` karışımı — `tag.rs`'in `Top`'u post sayısı
+  için kullanmasıyla aynı desen). Farklı bir `q` ile eski bir cursor
+  kullanılırsa tuhaf ama zararsız bir sayfa döner; güvenlik sorunu değil,
+  cursor imzalı ve `rank` istemciden gelmiyor.
+- **Ölçmeden sabit seçme.** İlk uygulama `ts_rank`'in aralığını tahmin etti,
+  yanlış tahmin etti ve üstüne bir formül kurdu; hiçbir test bunu yakalamadı
+  çünkü testler yalnızca alaka sıralamasını kontrol ediyordu. Ders: bir
+  sıralama formülü yazan faz, **formülün her teriminin sıralamayı gerçekten
+  değiştirdiğini kanıtlayan** test yazmalı (aynı metin/farklı skor, aynı
+  metin/farklı tarih).
 
 **Faz 13 ve 14'ten çıkanlar:**
 
