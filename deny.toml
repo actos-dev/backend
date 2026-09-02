@@ -1,0 +1,131 @@
+# cargo-deny yapılandırması (Faz 17 — Sağlamlaştırma).
+#
+# `cargo-deny 0.20.2` şemasına göre yazıldı (`cargo deny --version` ile
+# doğrulandı, 2026-09-02). Bu sürümde eski `[advisories] vulnerability` /
+# `notice` alanları **deprecated** — kaldırıldılar, kullanılmıyor.
+# Zafiyetler (`vulnerability`) artık koşulsuz hata; `unmaintained`/`unsound`
+# birer lint-level değil, `Scope` alıyor (`all`/`workspace`/`transitive`/
+# `none` — hangi crate kümesinde arandığı, "deny/warn/allow" değil).
+#
+# Çalıştırma: `cargo deny check` (tüm bölümler) ya da
+# `cargo deny check advisories|licenses|bans|sources` (tek tek).
+
+[graph]
+# Tek hedef platformda çalışıyoruz (bkz. `rustc -vV` → host
+# x86_64-unknown-linux-gnu, `docker-compose.yml`'da başka bir platform
+# belirtilmiyor). Kısıtlamıyoruz: `targets` boş bırakılırsa cargo-deny
+# `cargo metadata`'nın döndürdüğü **bütün** platformlar için grafiği
+# kurar. Bunu bilinçli tercih ettik — wasm32/musl gibi hiç
+# derlemeyeceğimiz hedeflerin bağımlılıklarını (ör. `r-efi`) grafikten
+# gizlemek yerine görünür tutup lisans taramasına dahil ettik (aşağıya
+# bkz. `[licenses]`), böylece "temiz" demek gerçekten "her platformda
+# temiz" anlamına geliyor.
+
+[output]
+feature-depth = 1
+
+# --- advisories: RUSTSEC veritabanı ------------------------------------
+[advisories]
+ignore = [
+    # RUSTSEC-2024-0436 — `paste 1.0.15`, *unmaintained* (bakımsız),
+    # GÜVENLİK AÇIĞI DEĞİL. `cargo audit` 422 bağımlılıkta bunun dışında
+    # sıfır bulgu verdi (bkz. docs/load-test.md ve PLAN.md Faz 17 notu).
+    #
+    # Kaynağı: `utoipa-axum 0.2.0`'ın geçişli bağımlılığı (bkz.
+    # Cargo.toml'daki utoipa-axum yorumu — axum 0.8 uyumluluğu için 0.1
+    # yerine 0.2 seçildi, Faz 16). Doğrudan bağımlılığımız değil, `paste`'i
+    # biz seçmedik.
+    #
+    # Neden upgrade/kaldırma yok: `paste`'in "no safe upgrade" (bkz.
+    # advisory) — yazarı projeyi arşivledi, önerilen çatal (`pastey`)
+    # `utoipa-axum`'ın kendi bağımlılığı, bizim kontrolümüzde değil.
+    # `utoipa-axum`'ı bırakmak da bir seçenek değil: OpenAPI route
+    # kaydını (`routes!()` makrosu, bkz. `crates/actos-api/src/openapi.rs`)
+    # o sağlıyor.
+    #
+    # Ne zaman kaldırılacak: `utoipa-axum` bir sonraki sürümünde `paste`'i
+    # bırakırsa (ya da `pastey`'e geçerse) bu ignore da kaldırılmalı —
+    # `cargo deny check advisories` o noktada zaten "kullanılmayan ignore"
+    # uyarısı verecek (`unused-ignored-advisory` varsayılanı `warn`),
+    # kendiliğinden hatırlatır.
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 unmaintained (RUSTSEC-2024-0436), guvenlik acigi degil; utoipa-axum 0.2.0 gecisli bagimliligi, dogrudan alternatif yok, upstream'de 'no safe upgrade'. utoipa-axum paste'i birakinca kaldirilacak." },
+]
+# Varsayılan (Scope::All) bilinçli korunuyor: hem workspace hem geçişli
+# bağımlılıklarda bakımsız crate arıyoruz — `paste` zaten geçişli, yine de
+# görünür kalsın istiyoruz (yukarıdaki ignore ile susturuluyor, gizlenmiyor).
+unmaintained = "all"
+# Yanked (crates.io'dan geri çekilmiş) bir sürüm çekiyorsak bunu bilmek
+# isteriz ama build'i kırmasın — varsayılan `warn` ile aynı, elle yazıldı
+# ki karar bilinçli görünsün.
+yanked = "warn"
+
+# --- licenses: AGPL-3.0-only proje için izin verilen lisanslar ---------
+#
+# Liste `cargo deny list` çalıştırılarak (422 bağımlılığın TAMAMI,
+# 2026-09-02) **ölçülerek** çıkarıldı — tahmin değil. Her satırın
+# gerekçesi:
+[licenses]
+allow = [
+    "AGPL-3.0-only",             # Projenin kendi lisansı (actos-api/core/types).
+    "0BSD",                      # Permissive, koşulsuz. (adler2)
+    "Apache-2.0",                # Permissive, AGPL ile uyumlu. (276 crate)
+    "Apache-2.0 WITH LLVM-exception", # Apache-2.0 + LLVM istisnası, permissive.
+    "BSD-2-Clause",               # Permissive.
+    "BSD-3-Clause",               # Permissive.
+    "BSL-1.0",                    # Boost Software License, permissive.
+    # CDLA-Permissive-2.0: `webpki-roots` (kök sertifika BUNDLE'ı, kod
+    # değil veri) — permissive veri lisansı, copyleft değil.
+    "CDLA-Permissive-2.0",
+    "ISC",                        # Permissive (OpenBSD tarzı), MIT muadili.
+    "MIT",                        # Permissive. (326 crate)
+    # MPL-2.0: `cssparser`, `dtoa-short` — DOSYA seviyesinde zayıf
+    # copyleft (Mozilla). Yalnızca MPL'li dosyanın kendisinde değişiklik
+    # yapılırsa o dosyanın MPL altında paylaşılmasını ister; bütün programın
+    # lisansını etkilemez ve GPL/AGPL ile birleştirmeye MPL'in kendisi
+    # açıkça izin verir (MPL 2.0 §3.3, "Larger Works"). AGPL-3.0 ile
+    # uyumlu, projenin kendi copyleft'inden daha zayıf.
+    "MPL-2.0",
+    "Unicode-3.0",                 # ICU veri/kod lisansı, permissive.
+    "Unlicense",                   # Kamu malı beyanı, permissive.
+    "Zlib",                        # Permissive.
+]
+# `LGPL-2.1-or-later` allowlist'te YOK — bilinçli. Tek kaynağı `r-efi`
+# (wasm32-wasi hedefi için, bizim hiç derlemeyeceğimiz bir platform) ve
+# onun lisans ifadesi `MIT OR Apache-2.0 OR LGPL-2.1-or-later` — bir "OR"
+# ifadesi, cargo-deny allowlist'teki HERHANGİ bir seçeneği (burada MIT ya
+# da Apache-2.0) tatmin etmesi yeterli sayıyor. Yani LGPL koluna hiç
+# başvurulmuyor; `cargo deny check licenses` bunu doğruluyor (temiz).
+# Uyumsuz/copyleft bir lisans bulunsaydı burada rapor edilirdi — bulunmadı.
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+
+# --- bans: aynı crate'in birden fazla sürümü ---------------------------
+[bans]
+# `cargo deny check bans` 422 bağımlılıkta 17 crate için "duplicate"
+# uyarısı veriyor (base64, block-buffer, cpufeatures, crypto-common,
+# digest, getrandom [3 sürüm], hashbrown, http, http-body, miniz_oxide,
+# r-efi, rand, rand_core, sha2, spin, syn, windows-sys — 2026-09-02
+# ölçümü, `cargo deny check bans` çıktısı).
+#
+# `deny` YERİNE `warn` seçildi, gerekçe: bu çiftlerin hiçbiri bizim
+# kontrolümüzde değil — hepsi `aws-sdk-s3`/`aws-smithy-*` (eski `http 0.2`
+# + yeni `http 1.x` desteği), `sqlx`/`tracing-subscriber`/`loom` gibi
+# büyük geçişli ağaçların kendi iç sürüm farkları (ör. `syn 2` vs `syn 3`,
+# farklı proc-macro kütüphaneleri farklı major'a geçmiş). Bunları `deny`
+# yapmak, upstream'in kendi bağımlılık grafiğini bizim düzeltemeyeceğimiz
+# bir noktada build'i kırar — gerçek bir güvenlik/lisans riski
+# doğurmadan saf gürültü üretir. `warn` ile görünürlük korunuyor (yeni bir
+# çift eklenirse fark edilir), ama build kırılmıyor.
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+allow-workspace = true
+
+# --- sources: yalnızca crates.io -----------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

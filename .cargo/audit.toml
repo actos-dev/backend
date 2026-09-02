@@ -1,0 +1,26 @@
+# cargo-audit yapılandırması (Faz 17 — Sağlamlaştırma).
+#
+# Konum önemli: cargo-audit 0.22.2 bu dosyayı yalnızca `./.cargo/audit.toml`
+# (proje köküne göre) ya da `~/.cargo/audit.toml`'da arıyor — repo kökünde
+# `audit.toml` **okunmaz** (bkz. cargo-audit kaynağı: `src/commands.rs`
+# `config_path()`, `src/config.rs`). Bu yüzden burada, `deny.toml`'un
+# yanında değil.
+#
+# Neden ayrıca gerekli, `deny.toml`'un `[advisories]` bölümü yetmiyor mu?
+# `cargo deny check advisories` zaten aynı `paste 1.0.15` (RUSTSEC-2024-0436,
+# *unmaintained*) bulgusunu gerekçeli `ignore` ile susturuyor ve bitirme
+# kontrol listesindeki `cargo audit` **varsayılan ayarlarıyla** (bayraksız)
+# zaten `exit 0` dönüyor — `cargo-audit` varsayılan olarak "unmaintained"
+# gibi bilgilendirici uyarılarda build'i kırmıyor, yalnızca "warning: 1
+# allowed warning found" yazıp başarıyla çıkıyor (ölçüldü, 2026-09-02).
+#
+# Yine de bu dosya tutuluyor: birisi ileride `cargo audit -D warnings`
+# (ya da `-D unmaintained`) ile daha katı bir CI adımı eklerse, o an
+# `paste` bulgusu build'i **gerekçesiz** kırar. Bu dosya o durumda da
+# gerekçenin (aşağıdaki `ignore`) zaten yürürlükte olmasını sağlıyor —
+# iki araç ayrı config dosyaları okuduğu için gerekçe iki yerde tutuluyor,
+# ama tek bir gerçek kaynağı var: `../deny.toml`'daki `[advisories].ignore`
+# yorumu. Tam gerekçe (kaynak, neden kaldırılamaz, ne zaman kaldırılacak)
+# için oraya bakın; burada tekrar etmiyoruz.
+[advisories]
+ignore = ["RUSTSEC-2024-0436"]
