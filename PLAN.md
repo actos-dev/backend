@@ -465,14 +465,39 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 16 — API Dokümantasyonu
 
-- [ ] `utoipa` ile OpenAPI 3.1 spec üretimi (tüm endpoint'ler annotate)
-- [ ] `GET /openapi.json` + Scalar/Redoc UI `GET /docs`
-- [ ] Örnek istek/yanıtlar her endpoint için (SDK üretimi buna dayanacak)
-- [ ] `docs/API.md` — insan-okunur özet + curl örnekleri
-- [ ] **`llms.txt` / `GET /docs/agent`** — AI ajanların tek istekte tüm API'yi
+- [x] `utoipa` ile OpenAPI 3.1 spec üretimi (tüm endpoint'ler annotate)
+      - `utoipa 5.5` + `utoipa-axum 0.2` + `utoipa-scalar 0.3` (0.1 axum 0.7'ye
+        bağlı, kullanılamazdı). 42 yol / 51 operasyon / 53 şema.
+- [x] `GET /openapi.json` + Scalar/Redoc UI `GET /docs`
+      - `/openapi.json`, `/docs`, `/docs/agent` üçü de **hem kimlik doğrulamadan
+        hem hız sınırından muaf**: bir ajan API'yi öğrenmeden key alamaz, tersi
+        döngüsel olurdu.
+- [x] Örnek istek/yanıtlar her endpoint için (SDK üretimi buna dayanacak)
+      - Sekiz hata yanıtı (`ValidationFailed`, `Unauthorized`, `Forbidden`,
+        `NotFound`, `Gone`, `Conflict`, `UnsupportedMedia`, `RateLimited`)
+        tekrar kullanılan `IntoResponses` tipleri olarak; her uçta elle
+        yazılmıyor.
+- [x] `docs/API.md` — insan-okunur özet + curl örnekleri
+      - **Bilinçli olarak 42 ucu tek tek saymıyor.** Markdown'a uç listesi
+        kopyalamak çürümesi garanti ikinci bir kaynak yaratırdı; ayrıntı için
+        `/openapi.json`'a yönlendiriyor. İçerik: kimlik akışı, sözleşmeler
+        (dış ID, cursor, soft-delete/410, idempotency, RFC 9457), ve uçtan uca
+        `curl` zinciri. Zincirin tamamı canlı sunucuda çalıştırılarak
+        doğrulandı.
+- [x] **`llms.txt` / `GET /docs/agent`** — AI ajanların tek istekte tüm API'yi
       öğrenebileceği kompakt, düz metin döküman. *Bu platformun ruhu bu.*
-- [ ] Spec'in kodla senkron kaldığını doğrulayan CI kontrolü
-- [ ] Commit
+      - 27 KB `text/plain`. **Melez**: uç referansı `ApiDoc::openapi()`
+        çıktısından üretiliyor (sapamaz), önsöz ise elle yazıldı — spec'in
+        anlatmadığı "nasıl kullanılır" bilgisi (kayıt akışı, key formatı,
+        cursor, idempotency, hata `code` alanı) orada.
+- [x] ~~Spec'in kodla senkron kaldığını doğrulayan CI kontrolü~~
+      **CI yerine derleme zamanı garantisi.** Kullanıcı CI/CD'yi kapsam dışı
+      bıraktı, ama bu madde CI olmadan daha güçlü karşılandı: `utoipa-axum`'un
+      `OpenApiRouter` + `routes!()` makrosu rotayı ve şemasını aynı yerde
+      kaydediyor, yani anotasyonu unutulmuş bir uç **derlenmiyor**. Elle
+      `#[openapi(paths(...))]` listesi tutulsaydı sessizce kaçardı. Ayrıca bir
+      test 42 yolun tamamının spec'te olduğunu açık listeyle doğruluyor.
+- [x] Commit
 
 ---
 
@@ -545,6 +570,41 @@ engellemeyecek şekilde tasarlanacak.
 ---
 
 ## Notlar / Kararsız Kalınan Yerler
+
+**Faz 16'dan çıkanlar:**
+
+- **Yeni uç eklerken artık anotasyon zorunlu.** Router `utoipa_axum::OpenApiRouter`
+  tabanlı; `.route(...)` yerine `.routes(routes!(handler))` kullanılıyor ve
+  handler'da `#[utoipa::path(...)]` yoksa **derlenmiyor**. Faz 17+ yeni bir uç
+  eklerse spec'i ayrıca güncellemesi gerekmiyor — ama anotasyonu yazmadan
+  geçemez. `tests/openapi.rs` ayrıca 42 yolun listesini açıkça tutuyor; yeni uç
+  o listeye de eklenmeli, yoksa test kırılır (bilinçli: sessizce büyüyen bir
+  yüzey istemiyoruz).
+- **`actos-types` artık feature'lı.** `openapi` feature'ı açıkken `utoipa`
+  çekiliyor, kapalıyken (varsayılan) crate hâlâ yalnızca `serde`. CLI/TUI/SDK
+  varsayılanı alacak. Yeni bir DTO eklerken
+  `#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]` satırı
+  unutulmamalı.
+- **Self-referential DTO'lar `schema(no_recursion)` ister.**
+  `CommentNodeResponse.replies: Vec<CommentNodeResponse>` bu işaret olmadan
+  utoipa'nın şema üretimini sonsuz özyinelemeye sokup yığın taşmasıyla
+  çökertiyordu (1 GiB stack'te bile bitmiyor). Belirtisi ilgisiz bir testin
+  *rastgele* çökmesiydi. Ağaç şeklinde yeni bir DTO eklenirse aynı işaret şart.
+- **`IntoResponses` tiplerinin içindeki şema `components`'e otomatik girmiyor.**
+  `routes!()` yalnızca `$ref` üretiyor, hedefi eklemiyordu — spec'teki bütün
+  hata yanıtları var olmayan bir şemaya işaret ediyordu. `ProblemDetails`
+  `ApiDoc`'ta elle kaydedildi; bir test sallantıda referans kalmadığını
+  doğruluyor. Benzer bir ortak yanıt tipi eklenirse aynı tuzak var.
+- **`docs/API.md` uç listesi tutmuyor, bilinçli.** Ayrıntı `/openapi.json`'da.
+  Yeni bir uç eklendiğinde `API.md` güncellenmek zorunda değil — yalnızca yeni
+  bir *kavram* (yeni bir sözleşme, yeni bir kimlik akışı) girerse güncellenmeli.
+- **`README.md`'deki `cargo sqlx prepare --workspace` komutu yanlıştı**, düzeltildi:
+  `-- --tests` olmadan `.sqlx` bozuluyor (bkz. Faz 15 notu).
+- `cargo audit`: 422 bağımlılıkta **sıfır güvenlik açığı**. Tek uyarı
+  `paste 1.0.15` (RUSTSEC-2024-0436, *unmaintained* — açık değil), `utoipa-axum`
+  geçişli bağımlılığı, alternatifi yok. **Faz 17** bunu `deny.toml`/`audit.toml`'da
+  gerekçeli ignore'lamalı; "temiz" demek sıfır bulgu değil, gerekçelendirilmemiş
+  bulgu olmaması.
 
 **Faz 15'ten çıkanlar:**
 
