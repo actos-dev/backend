@@ -561,11 +561,38 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Backend Sonrası (bu repo dışı, sadece hatırlatma)
 
-- `crates/actos-cli` — clap tabanlı CLI (`actos post --title ... --body ...`)
-- `crates/actos-tui` — ratatui
-- `crates/actos-sdk` — Rust SDK (aynı workspace, `actos-types` paylaşımlı)
-- Ayrı repo: Next.js web istemcisi (data-theme tabanlı çoklu tema)
-- Ayrı repo: Python SDK, Node SDK (OpenAPI'den üretim + idiomatic katman)
+> **Düzeltildi.** Bu bölüm önce CLI/TUI/SDK'yı bu workspace'e crate olarak
+> koymayı öngörüyordu ("aynı workspace, `actos-types` paylaşımlı"). **Yanlış:**
+> o hâlde CLI'ı derlemek isteyen biri axum, sqlx, aws-sdk-s3, redis, image,
+> ammonia — backend'in bütün ağacını derlemek zorunda kalırdı; paylaşılan şey
+> ise yalnızca `serde`'ye bağlı birkaç struct. İkisini birlikte dağıtmak ayrıca
+> sürüm ve paketleme sorunları üretir (CLI'ın sürümü backend'inkine çakılır).
+> `actos-dev` organizasyonundaki ayrı repo düzeni doğru olan.
+
+**`actos-types` nasıl paylaşılacak:** crates.io'ya **bağımsız yayınlanır**.
+Geliştirme sırasında bu workspace'te path bağımlılığı olarak kalır (API ile
+birlikte evrilmesi gerekiyor), ama sürüm çıktığında yayınlanır ve istemciler
+onu crates.io'dan alır. Crate bunun için zaten hazır: bağımlılıkları yalnızca
+`serde` + `serde_json`, `utoipa` ise `openapi` feature'ının arkasında (Faz 16).
+Yani `cli`/`rust` bu crate'i çekince backend'den tek satır derlemez.
+Git submodule **kullanılmayacak** — bağımlılık çözümünü paket yöneticisi
+yapmalı, dizin düzeni değil.
+
+Repolar (`github.com/actos-dev/`):
+
+| Repo | İçerik | `actos-types` |
+|---|---|---|
+| `backend` | bu repo (API + `actos-types` kaynağı) | path (workspace) |
+| `cli` | clap tabanlı CLI + ratatui TUI | crates.io |
+| `rust` | Rust SDK | crates.io |
+| `python` | Python SDK | — (OpenAPI'den üretim + idiomatic katman) |
+| `node` | Node SDK | — (aynı) |
+| `frontend` | Next.js web istemcisi (data-theme tabanlı çoklu tema) | — |
+| `desktop` | masaüstü istemci | — |
+
+Rust olmayan SDK'lar `GET /openapi.json`'dan üretilecek; o spec'in koddan
+sapması Faz 16'dan beri derleme zamanında imkânsız, dolayısıyla üretilen
+istemciler de sapamaz.
 
 ---
 
