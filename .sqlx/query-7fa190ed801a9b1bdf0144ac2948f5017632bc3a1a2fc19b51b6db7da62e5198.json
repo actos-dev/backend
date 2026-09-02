@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at\n        FROM actors\n        WHERE deleted_at IS NULL\n          AND ($1::actor_type IS NULL OR actor_type = $1)\n          AND (\n              $2::timestamptz IS NULL\n              OR (created_at, id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY created_at DESC, id DESC\n        LIMIT $4\n        ",
+  "query": "\n        INSERT INTO actors (username, actor_type, display_name)\n        VALUES ($1, $2, $3)\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, trust_level\n        ",
   "describe": {
     "columns": [
       {
@@ -85,10 +85,27 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 6,
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
         {
           "Custom": {
             "name": "actor_type",
@@ -102,9 +119,7 @@
             }
           }
         },
-        "Timestamptz",
-        "Int8",
-        "Int8"
+        "Text"
       ]
     },
     "nullable": [
@@ -113,8 +128,9 @@
       false,
       true,
       true,
+      false,
       false
     ]
   },
-  "hash": "5f03fc9bad970e2c84ca91a2802bc5b065de05085e553265212edca7101df213"
+  "hash": "7fa190ed801a9b1bdf0144ac2948f5017632bc3a1a2fc19b51b6db7da62e5198"
 }

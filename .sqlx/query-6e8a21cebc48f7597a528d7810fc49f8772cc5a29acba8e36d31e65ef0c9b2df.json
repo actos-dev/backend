@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                WITH page AS (\n                    SELECT contents.id\n                    FROM contents\n                    WHERE contents.content_type = 'post'::content_type\n                      AND contents.deleted_at IS NULL\n                      AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)\n                      AND (\n                          $2::bigint IS NULL\n                          OR contents.actor_id IN (\n                              SELECT followed_actor_id FROM follows\n                              WHERE follower_actor_id = $2::bigint\n                          )\n                      )\n                      AND (\n                          $6::actor_type IS NULL\n                          OR contents.actor_id IN (\n                              SELECT id FROM actors WHERE actor_type = $6::actor_type\n                          )\n                      )\n                      AND (\n                          $3::timestamptz IS NULL\n                          OR (contents.created_at, contents.id) < ($3::timestamptz, $4::bigint)\n                      )\n                    ORDER BY contents.created_at DESC, contents.id DESC\n                    LIMIT $5\n                )\n                SELECT\n                    contents.id,\n                    contents.content_type AS \"content_type: ContentType\",\n                    contents.title,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.metadata,\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at,\n                    COALESCE(\n                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                        '{}'\n                    ) AS \"tags!: Vec<String>\"\n                FROM page\n                JOIN contents ON contents.id = page.id\n                JOIN actors ON actors.id = contents.actor_id\n                LEFT JOIN content_tags ON content_tags.content_id = page.id\n                LEFT JOIN tags ON tags.id = content_tags.tag_id\n                GROUP BY contents.id, actors.id\n                ORDER BY contents.created_at DESC, contents.id DESC\n                ",
+  "query": "\n        WITH page AS (\n            SELECT\n                contents.id,\n                (\n                    ts_rank(contents.search_vector, websearch_to_tsquery('actos_simple', $1)) * 10.0\n                    + extract(epoch FROM contents.created_at) / 45000.0 / 1750.0\n                    + sign(contents.score::double precision)\n                      * log10(greatest(abs(contents.score), 1)::double precision) * 0.4\n                ) AS rank\n            FROM contents\n            WHERE contents.search_vector @@ websearch_to_tsquery('actos_simple', $1)\n              AND contents.content_type = $2::content_type\n              AND contents.deleted_at IS NULL\n              AND (\n                  $3::double precision IS NULL\n                  OR (\n                      ts_rank(contents.search_vector, websearch_to_tsquery('actos_simple', $1)) * 10.0\n                      + extract(epoch FROM contents.created_at) / 45000.0 / 1750.0\n                      + sign(contents.score::double precision)\n                        * log10(greatest(abs(contents.score), 1)::double precision) * 0.4,\n                      contents.id\n                  ) < ($3::double precision, $4::bigint)\n              )\n            ORDER BY rank DESC, contents.id DESC\n            LIMIT $5\n        )\n        SELECT\n            contents.id,\n            contents.content_type AS \"content_type: ContentType\",\n            contents.title,\n            contents.body,\n            contents.body_format AS \"body_format: BodyFormat\",\n            contents.metadata,\n            contents.score,\n            contents.upvotes,\n            contents.downvotes,\n            contents.comment_count,\n            contents.hot_score,\n            contents.created_at,\n            contents.edited_at,\n            contents.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.trust_level AS author_trust_level,\n            actors.deleted_at AS author_deleted_at,\n            COALESCE(\n                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                '{}'\n            ) AS \"tags!: Vec<String>\",\n            page.rank AS \"rank!\"\n        FROM page\n        JOIN contents ON contents.id = page.id\n        JOIN actors ON actors.id = contents.actor_id\n        LEFT JOIN content_tags ON content_tags.content_id = contents.id\n        LEFT JOIN tags ON tags.id = content_tags.tag_id\n        GROUP BY contents.id, actors.id, page.rank\n        ORDER BY \"rank!\" DESC, contents.id DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -262,6 +262,17 @@
       },
       {
         "ordinal": 20,
+        "name": "author_trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -272,32 +283,35 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "tags!: Vec<String>",
         "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 23,
+        "name": "rank!",
+        "type_info": "Float8",
         "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Timestamptz",
-        "Int8",
-        "Timestamptz",
-        "Int8",
-        "Int8",
+        "Text",
         {
           "Custom": {
-            "name": "actor_type",
+            "name": "content_type",
             "kind": {
               "Enum": [
-                "human",
-                "ai_agent",
-                "system_bot",
-                "organization"
+                "post",
+                "comment"
               ]
             }
           }
-        }
+        },
+        "Float8",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -321,9 +335,11 @@
       true,
       true,
       false,
+      false,
       true,
+      null,
       null
     ]
   },
-  "hash": "d8436ab359821271cfbbcf86daf52903a819c4c44b8d6ab70c50e1ad6e4731b7"
+  "hash": "6e8a21cebc48f7597a528d7810fc49f8772cc5a29acba8e36d31e65ef0c9b2df"
 }

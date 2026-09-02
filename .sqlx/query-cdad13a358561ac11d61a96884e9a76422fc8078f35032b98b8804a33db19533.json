@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO actors (username, actor_type, display_name)\n        VALUES ($1, $2, $3)\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at\n        ",
+  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.followed_actor_id\n        WHERE follows.follower_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.followed_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.followed_actor_id DESC\n        LIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -85,30 +85,36 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 6,
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "followed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "follows",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        {
-          "Custom": {
-            "name": "citext",
-            "kind": "Simple"
-          }
-        },
-        {
-          "Custom": {
-            "name": "actor_type",
-            "kind": {
-              "Enum": [
-                "human",
-                "ai_agent",
-                "system_bot",
-                "organization"
-              ]
-            }
-          }
-        },
-        "Text"
+        "Int8",
+        "Timestamptz",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -117,8 +123,10 @@
       false,
       true,
       true,
+      false,
+      false,
       false
     ]
   },
-  "hash": "ea750a7c2c36eb73050d8592569e0a6b9a7f2fa0947b0f5b408c10cf8dfeaa4f"
+  "hash": "cdad13a358561ac11d61a96884e9a76422fc8078f35032b98b8804a33db19533"
 }

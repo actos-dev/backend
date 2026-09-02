@@ -138,6 +138,7 @@ struct CommentRow {
     author_display_name: Option<String>,
     author_bio: Option<String>,
     author_created_at: DateTime<Utc>,
+    author_trust_level: i16,
     author_deleted_at: Option<DateTime<Utc>>,
 }
 
@@ -153,6 +154,7 @@ impl From<CommentRow> for Content {
                 display_name: row.author_display_name,
                 bio: row.author_bio,
                 created_at: row.author_created_at,
+                trust_level: row.author_trust_level,
             },
             author_deleted: row.author_deleted_at.is_some(),
             title: None,
@@ -436,6 +438,7 @@ pub async fn get_comment(pool: &PgPool, id: i64) -> Result<Content> {
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
+            actors.trust_level AS author_trust_level,
             actors.deleted_at AS author_deleted_at
         FROM contents
         JOIN actors ON actors.id = contents.actor_id
@@ -484,6 +487,7 @@ pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
         author_display_name: Option<String>,
         author_bio: Option<String>,
         author_created_at: DateTime<Utc>,
+        author_trust_level: i16,
         author_deleted_at: Option<DateTime<Utc>>,
     }
 
@@ -511,6 +515,7 @@ pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
+            actors.trust_level AS author_trust_level,
             actors.deleted_at AS author_deleted_at
         FROM contents AS ata
         JOIN contents AS hedef ON hedef.id = $1
@@ -535,6 +540,7 @@ pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
                 display_name: row.author_display_name,
                 bio: row.author_bio,
                 created_at: row.author_created_at,
+                trust_level: row.author_trust_level,
             },
             author_deleted: row.author_deleted_at.is_some(),
             title: row.title,
@@ -711,6 +717,7 @@ async fn fetch_children_page(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
+                    actors.trust_level AS author_trust_level,
                     actors.deleted_at AS author_deleted_at
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
@@ -756,6 +763,7 @@ async fn fetch_children_page(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
+                    actors.trust_level AS author_trust_level,
                     actors.deleted_at AS author_deleted_at
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
@@ -828,6 +836,7 @@ async fn fetch_descendants(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
+                    actors.trust_level AS author_trust_level,
                     actors.deleted_at AS author_deleted_at
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
@@ -868,6 +877,7 @@ async fn fetch_descendants(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
+                    actors.trust_level AS author_trust_level,
                     actors.deleted_at AS author_deleted_at
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
@@ -1094,6 +1104,7 @@ pub async fn list_comments_by_actor(
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
+            actors.trust_level AS author_trust_level,
             actors.deleted_at AS author_deleted_at
         FROM contents
         JOIN actors ON actors.id = contents.actor_id

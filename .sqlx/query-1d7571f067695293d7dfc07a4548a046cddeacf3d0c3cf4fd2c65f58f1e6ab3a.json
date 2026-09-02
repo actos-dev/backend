@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT trust_level FROM actors WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1d7571f067695293d7dfc07a4548a046cddeacf3d0c3cf4fd2c65f58f1e6ab3a"
+}

@@ -35,6 +35,11 @@ pub struct ActorSummary {
     pub bio: Option<String>,
     /// RFC 3339.
     pub created_at: String,
+    /// Güven kademesi (0-2) — bkz. `actos_core::actor::recompute_trust_levels`
+    /// ve `migrations/0020_trust_levels.up.sql`. Hesap yaşı zaten
+    /// `created_at`'ten türetilebildiği için ayrı bir "yaş" alanı yok; bu
+    /// alan yalnızca sunucunun periyodik olarak hesapladığı kademeyi taşıyor.
+    pub trust_level: i16,
 }
 
 /// `POST /auth/register` yanıt gövdesi.

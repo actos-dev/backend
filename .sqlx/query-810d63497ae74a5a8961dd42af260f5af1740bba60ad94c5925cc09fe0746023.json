@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                WITH page AS (\n                    SELECT contents.id\n                    FROM contents\n                    JOIN content_tags AS filtre ON filtre.content_id = contents.id\n                    WHERE filtre.tag_id = $1\n                      AND contents.content_type = 'post'::content_type\n                      AND contents.deleted_at IS NULL\n                      AND (\n                          $2::int IS NULL\n                          OR (contents.score, contents.id) < ($2::int, $3::bigint)\n                      )\n                    ORDER BY contents.score DESC, contents.id DESC\n                    LIMIT $4\n                )\n                SELECT\n                    contents.id,\n                    contents.content_type AS \"content_type: ContentType\",\n                    contents.title,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.metadata,\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at,\n                    COALESCE(\n                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                        '{}'\n                    ) AS \"tags!: Vec<String>\"\n                FROM page\n                JOIN contents ON contents.id = page.id\n                JOIN actors ON actors.id = contents.actor_id\n                LEFT JOIN content_tags ON content_tags.content_id = page.id\n                LEFT JOIN tags ON tags.id = content_tags.tag_id\n                GROUP BY contents.id, actors.id\n                ORDER BY contents.score DESC, contents.id DESC\n                ",
+  "query": "\n                WITH page AS (\n                    SELECT contents.id\n                    FROM contents\n                    JOIN content_tags AS filtre ON filtre.content_id = contents.id\n                    WHERE filtre.tag_id = $1\n                      AND contents.content_type = 'post'::content_type\n                      AND contents.deleted_at IS NULL\n                      AND (\n                          $2::int IS NULL\n                          OR (contents.score, contents.id) < ($2::int, $3::bigint)\n                      )\n                    ORDER BY contents.score DESC, contents.id DESC\n                    LIMIT $4\n                )\n                SELECT\n                    contents.id,\n                    contents.content_type AS \"content_type: ContentType\",\n                    contents.title,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.metadata,\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.trust_level AS author_trust_level,\n                    actors.deleted_at AS author_deleted_at,\n                    COALESCE(\n                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                        '{}'\n                    ) AS \"tags!: Vec<String>\"\n                FROM page\n                JOIN contents ON contents.id = page.id\n                JOIN actors ON actors.id = contents.actor_id\n                LEFT JOIN content_tags ON content_tags.content_id = page.id\n                LEFT JOIN tags ON tags.id = content_tags.tag_id\n                GROUP BY contents.id, actors.id\n                ORDER BY contents.score DESC, contents.id DESC\n                ",
   "describe": {
     "columns": [
       {
@@ -262,6 +262,17 @@
       },
       {
         "ordinal": 20,
+        "name": "author_trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -272,7 +283,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "tags!: Vec<String>",
         "type_info": "TextArray",
         "origin": "Expression"
@@ -307,9 +318,10 @@
       true,
       true,
       false,
+      false,
       true,
       null
     ]
   },
-  "hash": "379d12a64da0fc7ac37dd1f04f38e72ca45c13d13030061d349d4909a4491c98"
+  "hash": "810d63497ae74a5a8961dd42af260f5af1740bba60ad94c5925cc09fe0746023"
 }

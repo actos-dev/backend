@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            actors.id,\n            actors.username::text AS \"username!\",\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            (\n                CASE WHEN actors.username::text LIKE $2 || '%' THEN 1000.0 ELSE 0.0 END\n                + ts_rank(actors.search_vector, websearch_to_tsquery('actos_simple', $1)) * 10.0\n                + similarity(actors.username::text, $2)\n            ) AS \"rank!\"\n        FROM actors\n        WHERE actors.deleted_at IS NULL\n          AND (\n              actors.search_vector @@ websearch_to_tsquery('actos_simple', $1)\n              OR actors.username::text LIKE $2 || '%'\n              OR similarity(actors.username::text, $2) >= $3\n          )\n          AND (\n              $4::double precision IS NULL\n              OR (\n                  CASE WHEN actors.username::text LIKE $2 || '%' THEN 1000.0 ELSE 0.0 END\n                  + ts_rank(actors.search_vector, websearch_to_tsquery('actos_simple', $1)) * 10.0\n                  + similarity(actors.username::text, $2),\n                  actors.id\n              ) < ($4::double precision, $5::bigint)\n          )\n        ORDER BY \"rank!\" DESC, actors.id DESC\n        LIMIT $6\n        ",
+  "query": "\n        SELECT\n            actors.id,\n            actors.username::text AS \"username!\",\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            (\n                CASE WHEN actors.username::text LIKE $2 || '%' THEN 1000.0 ELSE 0.0 END\n                + ts_rank(actors.search_vector, websearch_to_tsquery('actos_simple', $1)) * 10.0\n                + similarity(actors.username::text, $2)\n            ) AS \"rank!\"\n        FROM actors\n        WHERE actors.deleted_at IS NULL\n          AND (\n              actors.search_vector @@ websearch_to_tsquery('actos_simple', $1)\n              OR actors.username::text LIKE $2 || '%'\n              OR similarity(actors.username::text, $2) >= $3\n          )\n          AND (\n              $4::double precision IS NULL\n              OR (\n                  CASE WHEN actors.username::text LIKE $2 || '%' THEN 1000.0 ELSE 0.0 END\n                  + ts_rank(actors.search_vector, websearch_to_tsquery('actos_simple', $1)) * 10.0\n                  + similarity(actors.username::text, $2),\n                  actors.id\n              ) < ($4::double precision, $5::bigint)\n          )\n        ORDER BY \"rank!\" DESC, actors.id DESC\n        LIMIT $6\n        ",
   "describe": {
     "columns": [
       {
@@ -78,6 +78,17 @@
       },
       {
         "ordinal": 6,
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "rank!",
         "type_info": "Float8",
         "origin": "Expression"
@@ -100,8 +111,9 @@
       true,
       true,
       false,
+      false,
       null
     ]
   },
-  "hash": "1ae6ed3b8e551125397fd01739a7b868f19763f1368e7ba80a9a61bec3b77a0b"
+  "hash": "7fa3c177d08b1b12ae9d1db2d73551a4c582b7d67e695980872aa10f86aa498b"
 }

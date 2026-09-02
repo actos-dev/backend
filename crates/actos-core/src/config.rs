@@ -57,6 +57,9 @@ pub struct ServerConfig {
     /// Bağlanmamış yüklemeleri toplayan işin aralığı (bkz.
     /// `crate::attachment::cleanup_orphaned`). Sıfır = iş hiç başlatılmaz.
     pub orphan_cleanup_interval: Duration,
+    /// Güven kademesi (trust level) tazeleme işinin çalışma aralığı (bkz.
+    /// `crate::actor::recompute_trust_levels`). Sıfır = iş hiç başlatılmaz.
+    pub trust_level_interval: Duration,
     /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
     /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
     /// güvenilebileceğini belirler.
@@ -169,6 +172,15 @@ impl Config {
                 // olduğunda siliniyor, yani daha sık koşmanın karşılığı yok.
                 orphan_cleanup_interval: Duration::from_secs(
                     optional("ORPHAN_CLEANUP_INTERVAL_SECS")?.unwrap_or(60 * 60),
+                ),
+                // Varsayılan 1 saat: terfi eşikleri saat/gün mertebesinde
+                // (24 saat, 7 gün), bu yüzden dakikalarca sık koşmanın
+                // karşılığı yok — ama bir raporun onaylanmasından sonraki
+                // düşürmenin makul bir sürede yansıması için `tag_cleanup`
+                // kadar seyrek de değil (bkz. `crate::actor::
+                // recompute_trust_levels`).
+                trust_level_interval: Duration::from_secs(
+                    optional("TRUST_LEVEL_INTERVAL_SECS")?.unwrap_or(60 * 60),
                 ),
             },
             database: DatabaseConfig {

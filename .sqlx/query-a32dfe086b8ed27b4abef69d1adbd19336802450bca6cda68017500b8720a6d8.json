@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                WITH page AS (\n                    SELECT contents.id\n                    FROM contents\n                    WHERE contents.content_type = 'post'::content_type\n                      AND contents.deleted_at IS NULL\n                      AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)\n                      AND (\n                          $2::bigint IS NULL\n                          OR contents.actor_id IN (\n                              SELECT followed_actor_id FROM follows\n                              WHERE follower_actor_id = $2::bigint\n                          )\n                      )\n                      AND (\n                          $6::actor_type IS NULL\n                          OR contents.actor_id IN (\n                              SELECT id FROM actors WHERE actor_type = $6::actor_type\n                          )\n                      )\n                      AND (\n                          $3::int IS NULL\n                          OR (contents.score, contents.id) < ($3::int, $4::bigint)\n                      )\n                    ORDER BY contents.score DESC, contents.id DESC\n                    LIMIT $5\n                )\n                SELECT\n                    contents.id,\n                    contents.content_type AS \"content_type: ContentType\",\n                    contents.title,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.metadata,\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at,\n                    COALESCE(\n                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                        '{}'\n                    ) AS \"tags!: Vec<String>\"\n                FROM page\n                JOIN contents ON contents.id = page.id\n                JOIN actors ON actors.id = contents.actor_id\n                LEFT JOIN content_tags ON content_tags.content_id = page.id\n                LEFT JOIN tags ON tags.id = content_tags.tag_id\n                GROUP BY contents.id, actors.id\n                ORDER BY contents.score DESC, contents.id DESC\n                ",
+  "query": "\n        WITH page AS (\n            SELECT contents.id\n            FROM contents\n            WHERE contents.actor_id = $1\n              AND contents.content_type = 'post'::content_type\n              AND contents.deleted_at IS NULL\n              AND (\n                  $2::timestamptz IS NULL\n                  OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)\n              )\n            ORDER BY contents.created_at DESC, contents.id DESC\n            LIMIT $4\n        )\n        SELECT\n            contents.id,\n            contents.content_type AS \"content_type: ContentType\",\n            contents.title,\n            contents.body,\n            contents.body_format AS \"body_format: BodyFormat\",\n            contents.metadata,\n            contents.score,\n            contents.upvotes,\n            contents.downvotes,\n            contents.comment_count,\n            contents.hot_score,\n            contents.created_at,\n            contents.edited_at,\n            contents.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.trust_level AS author_trust_level,\n            actors.deleted_at AS author_deleted_at,\n            COALESCE(\n                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                '{}'\n            ) AS \"tags!: Vec<String>\"\n        FROM page\n        JOIN contents ON contents.id = page.id\n        JOIN actors ON actors.id = contents.actor_id\n        LEFT JOIN content_tags ON content_tags.content_id = page.id\n        LEFT JOIN tags ON tags.id = content_tags.tag_id\n        GROUP BY contents.id, actors.id\n        ORDER BY contents.created_at DESC, contents.id DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -262,6 +262,17 @@
       },
       {
         "ordinal": 20,
+        "name": "author_trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -272,7 +283,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "tags!: Vec<String>",
         "type_info": "TextArray",
         "origin": "Expression"
@@ -280,24 +291,10 @@
     ],
     "parameters": {
       "Left": [
+        "Int8",
         "Timestamptz",
         "Int8",
-        "Int4",
-        "Int8",
-        "Int8",
-        {
-          "Custom": {
-            "name": "actor_type",
-            "kind": {
-              "Enum": [
-                "human",
-                "ai_agent",
-                "system_bot",
-                "organization"
-              ]
-            }
-          }
-        }
+        "Int8"
       ]
     },
     "nullable": [
@@ -321,9 +318,10 @@
       true,
       true,
       false,
+      false,
       true,
       null
     ]
   },
-  "hash": "9b68370bffa6eebbdb51f3a47ac4ace398346b8707002738826c1587addcf4d4"
+  "hash": "a32dfe086b8ed27b4abef69d1adbd19336802450bca6cda68017500b8720a6d8"
 }

@@ -101,6 +101,7 @@ pub(crate) fn actor_summary(
         display_name: actor.display_name.clone(),
         bio: actor.bio.clone(),
         created_at: actor.created_at.to_rfc3339(),
+        trust_level: actor.trust_level,
     })
 }
 

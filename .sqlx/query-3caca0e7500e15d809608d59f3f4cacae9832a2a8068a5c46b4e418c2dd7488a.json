@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            api_keys.secret_hash,\n            api_keys.revoked_at AS key_revoked_at,\n            actors.id AS actor_id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.deleted_at,\n            (\n                bans.actor_id IS NOT NULL\n                AND (bans.expires_at IS NULL OR bans.expires_at > now())\n            ) AS \"is_banned!\"\n        FROM api_keys\n        JOIN actors ON actors.id = api_keys.actor_id\n        LEFT JOIN bans ON bans.actor_id = actors.id\n        WHERE api_keys.id = $1\n        ",
+  "query": "\n        SELECT\n            api_keys.secret_hash,\n            api_keys.revoked_at AS key_revoked_at,\n            actors.id AS actor_id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.deleted_at,\n            (\n                bans.actor_id IS NOT NULL\n                AND (bans.expires_at IS NULL OR bans.expires_at > now())\n            ) AS \"is_banned!\"\n        FROM api_keys\n        JOIN actors ON actors.id = api_keys.actor_id\n        LEFT JOIN bans ON bans.actor_id = actors.id\n        WHERE api_keys.id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -110,6 +110,17 @@
       },
       {
         "ordinal": 8,
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
         "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -120,7 +131,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "is_banned!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -140,9 +151,10 @@
       true,
       true,
       false,
+      false,
       true,
       null
     ]
   },
-  "hash": "df29bd7cdf3b3556f1d6130ed2f073b71689ce44c9493da0ddc0c32a1e5395a5"
+  "hash": "3caca0e7500e15d809608d59f3f4cacae9832a2a8068a5c46b4e418c2dd7488a"
 }

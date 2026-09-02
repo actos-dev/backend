@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.follower_actor_id\n        WHERE follows.followed_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.follower_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.follower_actor_id DESC\n        LIMIT $4\n        ",
+  "query": "\n        UPDATE actors\n        SET\n            display_name = CASE WHEN $2 THEN $3 ELSE display_name END,\n            bio = CASE WHEN $4 THEN $5 ELSE bio END\n        WHERE id = $1 AND deleted_at IS NULL\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, trust_level\n        ",
   "describe": {
     "columns": [
       {
@@ -88,12 +88,12 @@
       },
       {
         "ordinal": 6,
-        "name": "followed_at",
-        "type_info": "Timestamptz",
+        "name": "trust_level",
+        "type_info": "Int2",
         "origin": {
           "Table": {
-            "table": "follows",
-            "name": "created_at"
+            "table": "actors",
+            "name": "trust_level"
           }
         }
       }
@@ -101,9 +101,10 @@
     "parameters": {
       "Left": [
         "Int8",
-        "Timestamptz",
-        "Int8",
-        "Int8"
+        "Bool",
+        "Text",
+        "Bool",
+        "Text"
       ]
     },
     "nullable": [
@@ -116,5 +117,5 @@
       false
     ]
   },
-  "hash": "e4b45183c13306de96476cb78499fa4e0e27e3b8812c0fcdb437ecd058ce08fd"
+  "hash": "ae55bd1dd452f9d6240b0de0bfa04d29d0170622dda4cd2c5cdef9c3e2787749"
 }

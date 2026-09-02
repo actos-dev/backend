@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        UPDATE actors\n        SET\n            display_name = CASE WHEN $2 THEN $3 ELSE display_name END,\n            bio = CASE WHEN $4 THEN $5 ELSE bio END\n        WHERE id = $1 AND deleted_at IS NULL\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at\n        ",
+  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.follower_actor_id\n        WHERE follows.followed_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.follower_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.follower_actor_id DESC\n        LIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -85,15 +85,36 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 6,
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "followed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "follows",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
         "Int8",
-        "Bool",
-        "Text",
-        "Bool",
-        "Text"
+        "Timestamptz",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -102,8 +123,10 @@
       false,
       true,
       true,
+      false,
+      false,
       false
     ]
   },
-  "hash": "00975e78373f718b5b901054be1833bf4f3626ed4f55315c73a5daaee1096536"
+  "hash": "b0ce82a5fd8c427f9561e98f7ecfe44556463bb468cb5c28c5f3ded77623136d"
 }

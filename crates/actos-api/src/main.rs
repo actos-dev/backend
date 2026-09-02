@@ -54,6 +54,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let tag_cleanup_interval = config.server.tag_cleanup_interval;
     let hot_score_interval = config.server.hot_score_interval;
     let orphan_cleanup_interval = config.server.orphan_cleanup_interval;
+    let trust_level_interval = config.server.trust_level_interval;
     let state = state::AppState::new(
         config,
         db,
@@ -65,7 +66,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         idempotency,
     );
 
-    // Periyodik bakım işleri (Faz 10 ve 12). İkisi de kendi advisory
+    // Periyodik bakım işleri (Faz 10, 12 ve 18.A). Her biri kendi advisory
     // lock'ını kendi içinde alıyor, bu yüzden birden fazla instance
     // çalışsa bile aynı anda yalnızca birinde iş yapılıyor — bkz.
     // `crate::jobs` modül dokümantasyonu.
@@ -92,6 +93,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let storage = cleanup_storage.clone();
             async move { actos_core::attachment::cleanup_orphaned(&pool, &storage).await }
         },
+    );
+    jobs::spawn_periodic(
+        "güven kademesi tazeleme",
+        state.db().clone(),
+        trust_level_interval,
+        |pool| async move { actos_core::actor::recompute_trust_levels(&pool).await },
     );
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın

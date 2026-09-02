@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.followed_actor_id\n        WHERE follows.follower_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.followed_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.followed_actor_id DESC\n        LIMIT $4\n        ",
+  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.deleted_at,\n            COUNT(contents.id) FILTER (\n                WHERE contents.content_type = 'post' AND contents.deleted_at IS NULL\n            ) AS \"post_count!\",\n            COUNT(contents.id) FILTER (\n                WHERE contents.content_type = 'comment' AND contents.deleted_at IS NULL\n            ) AS \"comment_count!\",\n            COALESCE(\n                SUM(contents.score) FILTER (WHERE contents.deleted_at IS NULL),\n                0\n            )::bigint AS \"total_score!\"\n        FROM actors\n        LEFT JOIN contents ON contents.actor_id = actors.id\n        WHERE actors.username = $1\n        GROUP BY actors.id\n        ",
   "describe": {
     "columns": [
       {
@@ -88,22 +88,53 @@
       },
       {
         "ordinal": 6,
-        "name": "followed_at",
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "follows",
-            "name": "created_at"
+            "table": "actors",
+            "name": "deleted_at"
           }
         }
+      },
+      {
+        "ordinal": 8,
+        "name": "post_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "comment_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "total_score!",
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Timestamptz",
-        "Int8",
-        "Int8"
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        }
       ]
     },
     "nullable": [
@@ -113,8 +144,12 @@
       true,
       true,
       false,
-      false
+      false,
+      true,
+      null,
+      null,
+      null
     ]
   },
-  "hash": "539f813e8a09a621655f5700734045688f5ded934d48d19e32567ef20cbdc016"
+  "hash": "9e3d49e19b241982dd59dc1b26edb1f6ee7f241261bf40ff0f5b174fe3eba969"
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO actors (username, actor_type)\n        VALUES ($1, 'human'::actor_type)\n        RETURNING id, created_at\n        ",
+  "query": "\n        INSERT INTO actors (username, actor_type)\n        VALUES ($1, 'human'::actor_type)\n        RETURNING id, created_at, trust_level\n        ",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "trust_level",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "trust_level"
+          }
+        }
       }
     ],
     "parameters": {
@@ -38,8 +49,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "4bed3184449668ddd2ad25444deb84512cdd104b91774edbd77bf61a38daf8f9"
+  "hash": "60fb5c9bff02a204bea069cf4753ab7555eb740a25cd587edd29a367b26617c2"
 }

@@ -139,6 +139,7 @@ struct ContentRow {
     author_display_name: Option<String>,
     author_bio: Option<String>,
     author_created_at: DateTime<Utc>,
+    author_trust_level: i16,
     author_deleted_at: Option<DateTime<Utc>>,
     tags: Vec<String>,
 }
@@ -155,6 +156,7 @@ impl From<ContentRow> for Content {
                 display_name: row.author_display_name,
                 bio: row.author_bio,
                 created_at: row.author_created_at,
+                trust_level: row.author_trust_level,
             },
             author_deleted: row.author_deleted_at.is_some(),
             title: row.title,
@@ -413,6 +415,7 @@ pub async fn get_post(pool: &PgPool, id: i64) -> Result<Content> {
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
+            actors.trust_level AS author_trust_level,
             actors.deleted_at AS author_deleted_at,
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
@@ -685,6 +688,7 @@ pub async fn list_posts_by_actor(
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
+            actors.trust_level AS author_trust_level,
             actors.deleted_at AS author_deleted_at,
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
@@ -906,6 +910,7 @@ pub async fn list_posts_by_tag(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
+                    actors.trust_level AS author_trust_level,
                     actors.deleted_at AS author_deleted_at,
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
@@ -966,6 +971,7 @@ pub async fn list_posts_by_tag(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
+                    actors.trust_level AS author_trust_level,
                     actors.deleted_at AS author_deleted_at,
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
@@ -1026,6 +1032,7 @@ pub async fn list_posts_by_tag(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
+                    actors.trust_level AS author_trust_level,
                     actors.deleted_at AS author_deleted_at,
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),

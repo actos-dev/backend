@@ -26,7 +26,7 @@ async fn seed_actor(pool: &PgPool, username: &str) -> ActorRecord {
         r#"
         INSERT INTO actors (username, actor_type)
         VALUES ($1, 'human'::actor_type)
-        RETURNING id, created_at
+        RETURNING id, created_at, trust_level
         "#,
         username,
     )
@@ -41,6 +41,7 @@ async fn seed_actor(pool: &PgPool, username: &str) -> ActorRecord {
         display_name: None,
         bio: None,
         created_at: row.created_at,
+        trust_level: row.trust_level,
     }
 }
 

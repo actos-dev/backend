@@ -118,8 +118,8 @@ const fn body_format_str(f: core_content::BodyFormat) -> &'static str {
 /// `actos_core::id` modül dokümantasyonu) bir string, gerçek `bigint`'i
 /// sızdırmıyor — aynı deleted actor'ün yazdığı birden fazla postu bu id
 /// üzerinden birbirine bağlamak (ör. moderasyonda) hâlâ mümkün olsun diye
-/// korunuyor. `actor_type`/`created_at` de aynı gerekçeyle (hassas değil)
-/// korunuyor.
+/// korunuyor. `actor_type`/`created_at`/`trust_level` de aynı gerekçeyle
+/// (hassas değil) korunuyor.
 fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<ActorSummary, Error> {
     Ok(ActorSummary {
         id: encode_actor_id(id_codec, actor.id)?,
@@ -128,6 +128,7 @@ fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<Actor
         display_name: None,
         bio: None,
         created_at: actor.created_at.to_rfc3339(),
+        trust_level: actor.trust_level,
     })
 }
 
