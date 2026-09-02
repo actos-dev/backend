@@ -593,32 +593,39 @@ engellemeyecek şekilde tasarlanacak.
 
 **`body_html`** (`NOTES.md` §8.3 — `render_markdown` yazılı ama çağrılmıyor)
 
-- [ ] `Content` ve `ContentSummary`'ye `body_html: Option<String>`
-- [ ] **Okuma anında hesaplanır, saklanmaz** — migration/backfill olmaz ve
+- [x] `Content` ve `ContentSummary`'ye `body_html: Option<String>`
+- [x] **Okuma anında hesaplanır, saklanmaz** — migration/backfill olmaz ve
       "gövde düzenlendi ama html eski kaldı" sınıfı tutarsızlık doğamaz
-- [ ] `body_format == "plain"` içerikte markdown **render edilmez**; yalnızca
+- [x] `body_format == "plain"` içerikte markdown **render edilmez**; yalnızca
       HTML-escape edilip paragrafa sarılır. Aksi halde kullanıcının düz metin
       diye yazdığı `*yıldız*` italik olur
-- [ ] Tek-öğe uçlarında (`GET /posts/{id}`, `GET /comments/{id}`) her zaman
+- [x] Tek-öğe uçlarında (`GET /posts/{id}`, `GET /comments/{id}`) her zaman
       dolu; liste uçlarında yalnızca `?fields=body_html` ile (gövde boyutu)
-- [ ] `?fields=` allowlist'ine `body_html` eklenir
-- [ ] Silinmiş içerikte `body_html`, `body` ile **aynı** maskeleme kuralına uyar
-- [ ] Testler: `text.rs`'teki XSS senaryoları artık uç üzerinden de doğrulanır;
+- [x] `?fields=` allowlist'ine `body_html` eklenir
+- [x] Silinmiş içerikte `body_html`, `body` ile **aynı** maskeleme kuralına uyar
+- [x] Testler: `text.rs`'teki XSS senaryoları artık uç üzerinden de doğrulanır;
       `plain` içerikte render yapılmadığı; `fields` ile seçilebildiği
+- [ ] **Açık boşluk (uygulama sonrası bulundu):** yorum **ağacı**
+      (`GET /posts/{id}/comments`) `body_html` almıyor — `routes/comments.rs:108`
+      düz `content_summary` çağırıyor. Oysa yorumların asıl okunma yolu o uç;
+      web istemcisi orada yine kendi markdown render'ını yapmak zorunda kalır,
+      yani bu maddenin amacı yarım kalır. Ağaç `?fields=` alamıyor (bilinçli:
+      `replies` yapısını bozardı), o yüzden opt-in bir `?body_html=true`
+      parametresi eklenmeli
 
 **`/feed`'de `actor_type` filtresi** (`NOTES.md` §8.1)
 
-- [ ] `FeedQuery`'ye opsiyonel `actor_type`
-- [ ] `GET /feed` ve `GET /feed/following` sorgularına filtre — Faz 17'de
+- [x] `FeedQuery`'ye opsiyonel `actor_type`
+- [x] `GET /feed` ve `GET /feed/following` sorgularına filtre — Faz 17'de
       kurulan **iki aşamalı CTE deseni bozulmadan** (bkz. `docs/query-plans.md`)
-- [ ] **Ölçmeden index ekleme:** filtre `contents` üzerindeki partial
+- [x] **Ölçmeden index ekleme:** filtre `contents` üzerindeki partial
       `idx_contents_hot/new/top` index'lerini kullanamayabilir (tür `actors`
       tablosunda). `EXPLAIN (ANALYZE, BUFFERS)` ile bakılır, gerekirse index
       eklenir ve sonuç `docs/query-plans.md`'ye yazılır
-- [ ] OpenAPI parametresi + `/docs/agent` güncellenir
-- [ ] `docs/API.md`'ye not: **`actor_type` kendi beyanıdır, doğrulanmaz** —
+- [x] OpenAPI parametresi + `/docs/agent` güncellenir
+- [x] `docs/API.md`'ye not: **`actor_type` kendi beyanıdır, doğrulanmaz** —
       bu filtre bir garanti değil, kolaylıktır
-- [ ] Testler
+- [x] Testler
 
 **Bildirimler: `notifications` tablosu + `GET /me/inbox`** (`NOTES.md` §1)
 
