@@ -30,7 +30,7 @@ use crate::{
     fields,
     openapi::{NotFound, RateLimited, ValidationFailed},
     routes::actors::{decode_cursor_with, parse_limit},
-    routes::posts::content_summary,
+    routes::posts::content_summary_with_optional_body_html,
     state::AppState,
 };
 
@@ -214,13 +214,18 @@ async fn list_tag_posts(
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());
+    let include_body_html = fields::wants_body_html(selected_fields.as_deref());
 
     let posts = page
         .items
         .iter()
         .map(|content| {
-            let summary = content_summary(content, state.id_codec())
-                .map_err(|e: Error| ApiError::new(e).with_request_id(&headers))?;
+            let summary = content_summary_with_optional_body_html(
+                content,
+                state.id_codec(),
+                include_body_html,
+            )
+            .map_err(|e: Error| ApiError::new(e).with_request_id(&headers))?;
             fields::apply_fields(&summary, selected_fields.as_deref(), &headers)
         })
         .collect::<Result<Vec<Value>, ApiError>>()?;

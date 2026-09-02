@@ -68,6 +68,37 @@ pub struct ContentSummary {
     pub body: String,
     /// `"markdown"` veya `"plain"`.
     pub body_format: String,
+    /// `body`'nin sanitize edilmiş HTML'i (Faz 18.A, bkz. NOTES.md §8.3).
+    ///
+    /// **Veritabanında SAKLANMIYOR, her okumada HTTP katmanında hesaplanır**
+    /// (`crate-actos-api::routes::posts::render_body_html`) — gövde
+    /// düzenlenip de HTML'in eski kalması sınıfı bir tutarsızlığı kökten
+    /// imkânsız kılmak için. Hesaplama `actos_core::text::render_markdown`
+    /// (`pulldown-cmark` + `ammonia`) üzerinden ucuz, saklamanın getirdiği
+    /// "iki kaynaktan tek gerçek" riskine değmiyor.
+    ///
+    /// **`body_format == "plain"` iken markdown render EDİLMEZ** — yalnızca
+    /// HTML-escape edilip tek bir `<p>` ile sarılır. Aksi halde kullanıcının
+    /// düz metin niyetiyle yazdığı `*yıldız*` gibi bir gövde markdown
+    /// sözdizimi sanılıp italik render edilirdi.
+    ///
+    /// `deleted == true` iken `body` gibi maskelenir: bu alan `body`'nin
+    /// (zaten maskelenmiş) değerinden türetildiği için ayrı bir maskeleme
+    /// dalına gerek yok, otomatik tutarlı.
+    ///
+    /// **`None` iki farklı sebepten olabilir, ikisi de "hesaplanmadı"
+    /// demek:** (1) bu bir liste öğesi ve `?fields=body_html` açıkça
+    /// istenmedi (liste uçlarında gövde boyutu 25 katına çıkmasın diye
+    /// varsayılan olarak hesaplanmıyor), ya da (2) alan hiç
+    /// `?fields=`'le filtrelenmedi ama çağıran uç zaten hesaplamıyor.
+    /// Tekil uçlar (`GET /posts/{id}`, `GET /comments/{id}`) `?fields=`'ten
+    /// bağımsız her zaman doldurur. `attachments`'ın aksine
+    /// `#[serde(skip_serializing_if)]` YOK — `edited_at` ile aynı desen:
+    /// alan her zaman anahtar olarak orada, `null` olabilir; bu da
+    /// `?fields=body_html` filtresinin (bkz. `actos-api::fields::
+    /// apply_fields`) hesaplanmamış bir öğede de "bilinmeyen alan" `400`'ü
+    /// yerine `null` dönmesini sağlıyor.
+    pub body_html: Option<String>,
     /// Serbest biçimli ek veri, her zaman bir JSON nesnesi (veri yoksa
     /// `{}`).
     ///

@@ -149,6 +149,26 @@ impl FeedWindow {
 /// **içinde** — genel feed'in `NULL` sabitiyle planlayıcının alt sorguyu
 /// tamamen elediği davranış korundu (bkz. `docs/query-plans.md`).
 ///
+/// ## `actor_type` filtresi (Faz 18.A, `NOTES.md` §8.1)
+///
+/// Aynı desen: `$6::actor_type IS NULL OR contents.actor_id IN (SELECT id
+/// FROM actors WHERE actor_type = $6)`, `follower`'ınkiyle **aynı** `page`
+/// CTE'sinin içinde, `ORDER BY ... LIMIT`'ten önce — iki aşamalı yapıyı
+/// bozmuyor. `EXPLAIN (ANALYZE, BUFFERS)` ile `actos_explain`'de ölçüldü
+/// (`docs/query-plans.md`): planlayıcı bunu da `follower` filtresiyle
+/// birebir aynı şekle sokuyor — `idx_contents_hot/new/top` üzerinde tek bir
+/// `Index Scan`, `actors` alt sorgusu (2 000 satır, ucuz bir `Seq Scan`)
+/// **bir kez** hashlenip `Filter` olarak uygulanıyor, `LIMIT` hemen
+/// ardından geliyor. **Yeni bir index gerekmedi** — `actors` tablosu o
+/// kadar küçük ki (2 000 satır) hash'lenmesi ölçülemeyecek kadar ucuz;
+/// `follower` filtresinin 1 999 satırlık `follows` alt sorgusuyla aynı
+/// gerekçe.
+///
+/// **Doğrulanmıyor:** `actor_type` kayıt sırasında actor'ün kendi beyanı
+/// (`POST /auth/register`), sunucu bunu bağımsız bir şekilde teyit etmiyor
+/// (ör. bir insan `ai_agent` diye kaydolabilir). Bu filtre bu yüzden bir
+/// *garanti* değil bir *kolaylık* — bkz. `docs/API.md` §3.8.
+///
 /// # Errors
 /// Cursor bu listenin sıralamasına ait değilse [`Error::InvalidCursor`];
 /// veritabanı hatası [`Error::Database`].
@@ -157,6 +177,7 @@ pub async fn list_feed(
     follower: Option<i64>,
     sort: PostSort,
     window: FeedWindow,
+    actor_type: Option<ActorType>,
     cursor: Option<Cursor>,
     limit: i64,
 ) -> Result<Page<Content>> {
@@ -218,6 +239,12 @@ pub async fn list_feed(
                           )
                       )
                       AND (
+                          $6::actor_type IS NULL
+                          OR contents.actor_id IN (
+                              SELECT id FROM actors WHERE actor_type = $6::actor_type
+                          )
+                      )
+                      AND (
                           $3::timestamptz IS NULL
                           OR (contents.created_at, contents.id) < ($3::timestamptz, $4::bigint)
                       )
@@ -263,6 +290,7 @@ pub async fn list_feed(
                 cursor_created_at,
                 cursor_id,
                 limit + 1,
+                actor_type as Option<ActorType>,
             )
             .fetch_all(pool)
             .await?
@@ -282,6 +310,12 @@ pub async fn list_feed(
                           OR contents.actor_id IN (
                               SELECT followed_actor_id FROM follows
                               WHERE follower_actor_id = $2::bigint
+                          )
+                      )
+                      AND (
+                          $6::actor_type IS NULL
+                          OR contents.actor_id IN (
+                              SELECT id FROM actors WHERE actor_type = $6::actor_type
                           )
                       )
                       AND (
@@ -330,6 +364,7 @@ pub async fn list_feed(
                 cursor_score,
                 cursor_id,
                 limit + 1,
+                actor_type as Option<ActorType>,
             )
             .fetch_all(pool)
             .await?
@@ -349,6 +384,12 @@ pub async fn list_feed(
                           OR contents.actor_id IN (
                               SELECT followed_actor_id FROM follows
                               WHERE follower_actor_id = $2::bigint
+                          )
+                      )
+                      AND (
+                          $6::actor_type IS NULL
+                          OR contents.actor_id IN (
+                              SELECT id FROM actors WHERE actor_type = $6::actor_type
                           )
                       )
                       AND (
@@ -397,6 +438,7 @@ pub async fn list_feed(
                 cursor_hot,
                 cursor_id,
                 limit + 1,
+                actor_type as Option<ActorType>,
             )
             .fetch_all(pool)
             .await?

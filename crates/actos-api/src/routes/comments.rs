@@ -38,7 +38,10 @@ use crate::{
     fields,
     openapi::{Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor, decode_cursor_with, parse_limit},
-    routes::posts::{content_summary, decode_content_id},
+    routes::posts::{
+        content_summary, content_summary_with_body_html, content_summary_with_optional_body_html,
+        decode_content_id,
+    },
     state::AppState,
 };
 
@@ -326,12 +329,13 @@ async fn get_comment(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let comment = crate::routes::posts::content_summary_with(
-        &comment,
-        state.id_codec(),
-        Some((&ekler, state.storage())),
-    )
-    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    // Tekil uç: `body_html` her zaman hesaplanır (bkz.
+    // `actos_types::content::ContentSummary::body_html` "Nerede dolu
+    // döner"). `ancestors` bilerek dışarıda bırakılıyor — bunlar
+    // breadcrumb'ın kalan zinciri, uç doğrudan bunlar için çekilmiyor.
+    let comment =
+        content_summary_with_body_html(&comment, state.id_codec(), Some((&ekler, state.storage())))
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let ancestors = ancestors
         .iter()
@@ -459,13 +463,18 @@ async fn list_actor_comments(
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());
+    let include_body_html = fields::wants_body_html(selected_fields.as_deref());
 
     let comments = page
         .items
         .iter()
         .map(|content| {
-            let summary = content_summary(content, state.id_codec())
-                .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+            let summary = content_summary_with_optional_body_html(
+                content,
+                state.id_codec(),
+                include_body_html,
+            )
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
             fields::apply_fields(&summary, selected_fields.as_deref(), &headers)
         })
         .collect::<Result<Vec<Value>, ApiError>>()?;

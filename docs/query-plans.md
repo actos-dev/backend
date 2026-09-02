@@ -235,6 +235,86 @@ bedelsiz olduğu (yeni index yok, davranış aynı) için Faz 17 bunu da aynı
 desene çevirdi — çok post'lu bir actor (ör. bir bot hesap, binlerce post)
 gelecekte aynı sınıf soruna düşmesin diye.
 
+## `GET /feed`'de `actor_type` filtresi (Faz 18.A, `NOTES.md` §8.1)
+
+`FeedQuery`'ye eklenen `?actor_type=` filtresi `contents.actor_id`'yi
+`actors.actor_type`'a bakan bir alt sorguyla eşliyor — `follower`
+filtresiyle **birebir aynı desen** (`contents.actor_id IN (SELECT id FROM
+actors WHERE actor_type = $6)`), aynı `page` CTE'sinin içinde, `ORDER BY
+... LIMIT`'ten önce. Yukarıdaki "Çözüm — iki aşamalı sorgu" bölümündeki
+yapıyı bozmuyor.
+
+Soru şuydu: filtre `actors` tablosunda, sıralama ise `contents` üzerindeki
+partial index'lerde (`idx_contents_hot/new/top`) — ikisi birlikte nasıl
+planlanıyor, yeni bir index gerekiyor mu?
+
+**Ölçüm**, aynı `actos_explain` veritabanında (200 000 `contents`, 2 000
+`actors` — bu kurulumda dört `actor_type` değerine **eşit** dağıtılmış,
+her biri 500 actor), `EXPLAIN (ANALYZE, BUFFERS)`, warm (ikinci çalışma):
+
+Genel feed, `sort=hot`, `actor_type=ai_agent` (seçicilik ~%25, follower
+filtresi `NULL`):
+
+```
+ Limit (actual time=0.334..0.709 rows=26.00 loops=1)
+   ->  Index Scan using idx_contents_hot on contents (rows=26.00 loops=1)
+         Filter: (ANY (actor_id = (hashed SubPlan 1).col1))
+         Rows Removed by Filter: 117
+         SubPlan 1
+           ->  Seq Scan on actors (actual time=0.008..0.251 rows=500.00 loops=1)
+                 Filter: (actor_type = 'ai_agent'::actor_type)
+                 Rows Removed by Filter: 1500
+ Execution Time: 1.186 ms
+```
+
+`follower` **ve** `actor_type` birlikte (actor #1, 1 999 takip, `sort=hot`,
+`actor_type=human`) — iki hashlenmiş `SubPlan`, ikisi de `Filter` olarak
+aynı `Index Scan`'e uygulanıyor:
+
+```
+ Limit (actual time=0.638..0.842 rows=26.00 loops=1)
+   ->  Index Scan using idx_contents_hot on contents (rows=26.00 loops=1)
+         Filter: ((ANY (actor_id = (hashed SubPlan 1).col1)) AND (ANY (actor_id = (hashed SubPlan 2).col1)))
+         Rows Removed by Filter: 63
+         SubPlan 1
+           ->  Index Only Scan using follows_pkey on follows (rows=1999.00 loops=1)
+         SubPlan 2
+           ->  Seq Scan on actors (actual time=0.004..0.221 rows=500.00 loops=1)
+                 Filter: (actor_type = 'human'::actor_type)
+ Execution Time: 1.327 ms
+```
+
+Filtresiz temel değer (yukarıdaki "Sonuçlar" bölümü) `0.579 ms`, tek
+`follower` filtreli `1.027 ms` idi — `actor_type` eklenince `1.186 ms`
+(tek başına) / `1.327 ms` (`follower` ile birlikte). Ölçülebilir bir artış
+var ama aynı büyüklük mertebesinde; `GroupAggregate`'in `LIMIT`'in altına
+düşmesi gibi bir kalite sıçraması **yok** — plan şekli hâlâ "tek `Index
+Scan`, `Filter` olarak hashlenmiş alt sorgu(lar), `LIMIT` hemen ardından"
+(bkz. yukarıdaki "Sonuçlar" bölümündeki `follower`'lı örnekle aynı desen).
+
+**Karar: yeni bir index eklenmedi.** Gerekçe: `actors` tablosu ölçüm
+veritabanında 2 000 satır — planlayıcı `Seq Scan on actors` ile onu tek
+seferde (yalnızca ~0.25 ms) hash'liyor ve `Filter`'a besliyor; tıpkı
+`follower` filtresinin 1 999 satırlık `follows` alt sorgusunda olduğu gibi
+(bkz. yukarıdaki "Kaldırılan yanlış öneriler" — aynı gerekçe, "planlayıcı
+binlerce ayrı index taraması yapmıyor" burada da geçerli). `actors`
+tablosu `contents`'ten (200 000 satır) çok daha küçük ve büyüme hızı da
+çok daha yavaş (yeni bir post her `contents` satırı ekler, yeni bir actor
+nadiren); bu oranın üretimde tersine dönüp `actors`'ın `contents`'le
+kıyaslanabilir büyüklüğe ulaşması beklenmiyor. `idx_actors_type_created_live`
+(`actor_type, created_at DESC WHERE deleted_at IS NULL`) zaten var —
+`GET /actors?type=` keşif dizini için eklenmişti (Faz ~14/15) — ama bu
+sorguda **kullanılmıyor**: burada sıralama `contents` sütunlarına göre,
+`actors`'a yalnızca bir üyelik testi (`IN`) için bakılıyor, bu da bir
+`actor_type` eşitliği için `Seq Scan`'i `Index Scan`'den daha ucuz kılıyor
+(2 000 satırlık bir tabloda index'e gitmenin kazancı yok). Bu yüzden o
+index'e de dokunulmadı.
+
+**Tekrarlamak için:** yukarıdaki "Ölçümü tekrarlamak" bölümündeki
+`actos_explain` kurulumunu kullan; bu ölçüm için ek olarak `actors`
+tablosunun `actor_type` dağılımının (yaklaşık) eşit olduğundan emin ol —
+gerçek kurulumda zaten öyleydi (4 × 500).
+
 ## Kaldırılan yanlış öneriler
 
 Bu belgenin önceki sürümü (Faz 12), yanlış kök nedene dayanarak iki çözüm

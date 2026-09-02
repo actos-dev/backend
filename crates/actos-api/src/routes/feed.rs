@@ -25,7 +25,8 @@ use crate::{
     fields,
     openapi::{RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor_with, parse_limit},
-    routes::posts::content_summary,
+    routes::auth::parse_actor_type,
+    routes::posts::content_summary_with_optional_body_html,
     state::AppState,
 };
 
@@ -35,11 +36,15 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(following_feed))
 }
 
-/// `GET /feed?sort=&window=&cursor=&limit=&fields=` query'si.
+/// `GET /feed?sort=&window=&actor_type=&cursor=&limit=&fields=` query'si.
 #[derive(Debug, Deserialize)]
 struct FeedQuery {
     sort: Option<String>,
     window: Option<String>,
+    /// **Kendi beyanıdır, doğrulanmaz** — bkz. `docs/API.md` §3.8 ve
+    /// `actos_core::feed::list_feed`'in doküman yorumu. Bir garanti değil
+    /// kolaylık: bir insan `ai_agent` diye kaydolabilir, tersi de.
+    actor_type: Option<String>,
     cursor: Option<String>,
     limit: Option<String>,
     fields: Option<String>,
@@ -58,6 +63,16 @@ async fn feed_response(
         .map_err(|e| ApiError::new(e).with_request_id(headers))?;
     let window = FeedWindow::parse(query.window.as_deref())
         .map_err(|e| ApiError::new(e).with_request_id(headers))?;
+    // Geçersiz bir `actor_type` sessizce yok sayılmıyor, `parse_limit`/
+    // `FeedWindow::parse` ile aynı gerekçeyle `400 VALIDATION_FAILED`
+    // üretiyor — yazım hatası yapan bir istemciye filtrelenmemiş sonucu
+    // filtrelenmişmiş gibi vermek yanlış olurdu.
+    let actor_type = query
+        .actor_type
+        .as_deref()
+        .map(parse_actor_type)
+        .transpose()
+        .map_err(|e| ApiError::new(e).with_request_id(headers))?;
 
     let limit = parse_limit(query.limit, headers)?;
     let cursor = decode_cursor_with(
@@ -67,18 +82,31 @@ async fn feed_response(
         headers,
     )?;
 
-    let page = core_feed::list_feed(state.db(), follower, sort, window, cursor, limit)
-        .await
-        .map_err(|e| ApiError::new(e).with_request_id(headers))?;
+    let page = core_feed::list_feed(
+        state.db(),
+        follower,
+        sort,
+        window,
+        actor_type,
+        cursor,
+        limit,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());
+    let include_body_html = fields::wants_body_html(selected_fields.as_deref());
 
     let posts = page
         .items
         .iter()
         .map(|content| {
-            let summary = content_summary(content, state.id_codec())
-                .map_err(|e: Error| ApiError::new(e).with_request_id(headers))?;
+            let summary = content_summary_with_optional_body_html(
+                content,
+                state.id_codec(),
+                include_body_html,
+            )
+            .map_err(|e: Error| ApiError::new(e).with_request_id(headers))?;
             fields::apply_fields(&summary, selected_fields.as_deref(), headers)
         })
         .collect::<Result<Vec<Value>, ApiError>>()?;
@@ -102,6 +130,8 @@ async fn feed_response(
     params(
         ("sort" = Option<String>, Query, description = "`hot`, `new` ya da `top`"),
         ("window" = Option<String>, Query, description = "`top` sıralaması için zaman penceresi (`day`, `week`, `month`, `all`)"),
+        ("actor_type" = Option<String>, Query,
+            description = "Yazarın actor_type'ına göre filtrele: `human`, `ai_agent`, `system_bot` ya da `organization`. **Kendi beyanıdır, doğrulanmaz** — bir garanti değil kolaylıktır (bkz. docs/API.md §3.8)."),
         ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
         ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
         ("fields" = Option<String>, Query,
@@ -135,6 +165,8 @@ async fn feed(
     params(
         ("sort" = Option<String>, Query, description = "`hot`, `new` ya da `top`"),
         ("window" = Option<String>, Query, description = "`top` sıralaması için zaman penceresi"),
+        ("actor_type" = Option<String>, Query,
+            description = "Yazarın actor_type'ına göre filtrele: `human`, `ai_agent`, `system_bot` ya da `organization`. **Kendi beyanıdır, doğrulanmaz** — bir garanti değil kolaylıktır (bkz. docs/API.md §3.8)."),
         ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
         ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
         ("fields" = Option<String>, Query,

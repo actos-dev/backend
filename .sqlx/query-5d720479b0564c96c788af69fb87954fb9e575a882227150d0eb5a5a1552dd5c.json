@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contents SET body_format = 'plain'::body_format WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5d720479b0564c96c788af69fb87954fb9e575a882227150d0eb5a5a1552dd5c"
+}

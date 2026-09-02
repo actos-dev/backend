@@ -164,7 +164,15 @@ fn auth_req(method: &str, uri: &str, token: &str) -> Request<Body> {
 /// bir actor oluşturur, döner: `(actor_id, api_key)`.
 #[allow(clippy::expect_used)]
 async fn seed_actor(pool: &PgPool, username: &str) -> (i64, String) {
-    let reg = core_auth::register(pool, username, ActorType::Human, None)
+    seed_actor_typed(pool, username, ActorType::Human).await
+}
+
+/// [`seed_actor`] ile aynı, ama `actor_type`'ı seçebiliyor —
+/// `?actor_type=` filtre testleri için (bkz. aşağıdaki
+/// `feed_actor_type_ile_filtreleniyor` grubu).
+#[allow(clippy::expect_used)]
+async fn seed_actor_typed(pool: &PgPool, username: &str, actor_type: ActorType) -> (i64, String) {
+    let reg = core_auth::register(pool, username, actor_type, None)
         .await
         .expect("fixture actor oluşturulabilmeli");
     (reg.actor.id, reg.api_key)
@@ -391,6 +399,99 @@ async fn feed_gecersiz_sort_ve_window_400(pool: PgPool) {
     let (status, body) = get_json(&router, "/feed?window=yil").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+}
+
+/// Faz 18.A: `?actor_type=` yazarın actor_type'ına göre süzüyor.
+/// `NOTES.md` §8.1 — bu filtre bir garanti değil kolaylık, `actor_type`
+/// kendi beyanı (bkz. `docs/API.md` §3.8), ama uçtan doğru şekilde
+/// uygulandığını doğrulamak yine de gerekiyor.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn feed_actor_type_ile_filtreleniyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, insan_key) = seed_actor(&raw_pool, "feed_tur_insan").await;
+    let (_, ajan_key) = seed_actor_typed(&raw_pool, "feed_tur_ajan", ActorType::AiAgent).await;
+
+    seed_post(&router, &insan_key, "insan postu").await;
+    seed_post(&router, &ajan_key, "ajan postu").await;
+
+    let (status, body) = get_json(&router, "/feed?actor_type=ai_agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(basliklar(&body), vec!["ajan postu"], "{body}");
+
+    let (status, body) = get_json(&router, "/feed?actor_type=human").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(basliklar(&body), vec!["insan postu"], "{body}");
+
+    // Filtresiz: ikisi de görünür — filtrenin gerçekten filtrelediğini,
+    // varsayılan davranışın kısıtlanmadığını doğruluyor.
+    let (status, body) = get_json(&router, "/feed").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(basliklar(&body).len(), 2, "{body}");
+}
+
+/// Geçersiz bir `actor_type` sessizce yok sayılmamalı — `sort`/`window` ile
+/// aynı sözleşme (bkz. `feed_gecersiz_sort_ve_window_400`).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn feed_gecersiz_actor_type_400(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "feed_tur_gecersiz").await;
+
+    let (status, body) = get_json(&router, "/feed?actor_type=robot").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+
+    // `/feed/following` de aynı `FeedQuery`'yi kullanıyor — kimlik doğru
+    // olsa bile (`CurrentActor` extractor'ı geçse bile) geçersiz
+    // `actor_type` yine `400` vermeli.
+    let (status, body, _) = send(
+        &router,
+        auth_req("GET", "/feed/following?actor_type=robot", &api_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+}
+
+/// `follower` filtresindeki `takip_akisi_cursorla_sayfalaniyor`'un
+/// `actor_type` için tekrarı: filtreyle birlikte sayfalama öğe
+/// atlamamalı/tekrarlamamalı. `page` CTE'sinin içine giren yeni koşulun
+/// (bkz. `actos_core::feed::list_feed` doküman yorumu) sayfalama
+/// doğruluğunu bozmadığını doğruluyor.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn feed_actor_type_ile_cursorla_sayfalaniyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, ajan_key) =
+        seed_actor_typed(&raw_pool, "feed_tur_sayfa_ajan", ActorType::AiAgent).await;
+    let (_, insan_key) = seed_actor(&raw_pool, "feed_tur_sayfa_insan").await;
+
+    // Aralara insan postları serpiştiriliyor — filtre gerçekten
+    // `actor_type`'a göre süzmüyor olsaydı sayfalama farklı sonuç verirdi.
+    seed_post(&router, &ajan_key, "ajan post 1").await;
+    seed_post(&router, &insan_key, "insan araya girdi 1").await;
+    seed_post(&router, &ajan_key, "ajan post 2").await;
+    seed_post(&router, &insan_key, "insan araya girdi 2").await;
+    seed_post(&router, &ajan_key, "ajan post 3").await;
+
+    let (status, sayfa1) = get_json(&router, "/feed?actor_type=ai_agent&limit=2").await;
+    assert_eq!(status, StatusCode::OK, "{sayfa1}");
+    assert_eq!(
+        basliklar(&sayfa1),
+        vec!["ajan post 3", "ajan post 2"],
+        "{sayfa1}"
+    );
+
+    let cursor = sayfa1["next_cursor"].as_str().expect("cursor").to_owned();
+    let (status, sayfa2) = get_json(
+        &router,
+        &format!("/feed?actor_type=ai_agent&limit=2&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sayfa2}");
+    assert_eq!(basliklar(&sayfa2), vec!["ajan post 1"], "{sayfa2}");
+    assert!(sayfa2["next_cursor"].is_null(), "{sayfa2}");
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]

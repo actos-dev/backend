@@ -70,6 +70,26 @@ pub fn parse_fields(raw: Option<&str>) -> Option<Vec<String>> {
     }
 }
 
+/// Liste uçlarında `body_html`'in hesaplanıp hesaplanmayacağına karar
+/// verir (Faz 18.A, bkz. `actos_types::content::ContentSummary::body_html`
+/// dokümanı "Nerede dolu döner").
+///
+/// **Neden `apply_fields`'ten önce, ayrı bir kontrol:** `apply_fields`
+/// zaten serialize edilmiş bir DTO üzerinde çalışıyor — hesaplamanın
+/// kendisi (markdown render + `ammonia` sanitize) o noktada çoktan
+/// yapılmış ya da hiç yapılmamış olmalı. Liste uçlarında gövde boyutu
+/// 25 katına çıkmasın diye `body_html` varsayılan olarak hesaplanmıyor;
+/// yalnızca istemci `?fields=body_html` (ya da `body_html`'i içeren daha
+/// geniş bir küme) ile açıkça istediğinde hesaplanıyor. `fields` `None`
+/// ise (filtre yok, tüm alanlar isteniyor) bilerek `false` dönüyor —
+/// "filtresiz istek her şeyi ister" liste uçları için geçerli değil,
+/// tekil uçlar zaten kendi `body_html`'ini `fields`'ten bağımsız hep
+/// dolduruyor (bkz. `crate::routes::posts::content_summary_with_body_html`).
+#[must_use]
+pub fn wants_body_html(fields: Option<&[String]>) -> bool {
+    fields.is_some_and(|f| f.iter().any(|name| name == "body_html"))
+}
+
 /// Bir DTO'yu serialize edip yalnızca `fields` içindeki anahtarları
 /// bırakır. `fields` `None` ise DTO'nun tamamı (filtresiz) döner.
 ///

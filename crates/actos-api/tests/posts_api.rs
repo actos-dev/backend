@@ -1174,3 +1174,239 @@ async fn metadata_verilmezse_bos_obje_donuyor(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["metadata"], json!({}), "{body}");
 }
+
+// --- `body_html` (Faz 18.A, bkz. NOTES.md §8.3) -----------------------------
+
+/// `tests/comments_api.rs`'teki `test_id_codec` ile birebir aynı desen —
+/// ayrı bir entegrasyon test binary'si olduğu için yeniden tanımlanıyor
+/// (bkz. dosya başı doküman yorumu).
+#[allow(clippy::expect_used)]
+fn test_id_codec() -> IdCodec {
+    IdCodec::new(&test_config().security.id_obfuscation_key).expect("geçerli anahtar")
+}
+
+/// `text.rs`'teki `script_etiketi_çıktıda_yok` / `javascript_şemalı_link_reddediliyor`
+/// birim testlerinin uç üzerinden de doğrulanması: `render_markdown`
+/// üretimde hiçbir yerden çağrılmıyordu (bkz. görev tanımı kök nedeni) —
+/// bu test artık `GET /posts/{id}`'in gerçekten sanitize edilmiş HTML
+/// döndürdüğünü kanıtlıyor.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn get_post_body_html_xss_temizleniyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "xss_author").await;
+
+    let gövde = "zararlı <script>alert(1)</script> ve [tıkla](javascript:alert(1))";
+    let (status, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "xss testi", "body": gövde, "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Ham `body` sanitize edilmemiş kalmalı — sanitizasyon `body_html`'e
+    // özgü, `body` istemcinin gönderdiğini aynen taşımaya devam ediyor.
+    assert_eq!(body["body"], gövde, "{body}");
+
+    let html = body["body_html"].as_str().expect("body_html string olmalı");
+    assert!(
+        !html.contains("<script"),
+        "script etiketi body_html'e sızmamalı: {html}"
+    );
+    assert!(
+        !html.contains("javascript:"),
+        "javascript: şeması body_html'e sızmamalı: {html}"
+    );
+    assert!(html.contains("zararlı"), "zararsız metin korunmalı: {html}");
+}
+
+/// `?fields=` `body_html`'ten bağımsız hesaplansa da (tekil uç, bkz. görev
+/// tanımı madde 4), `apply_fields` yine de yalnızca istenen anahtarı
+/// bırakmalı.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn get_post_fields_body_html_secilebilir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "body_html_fields_author").await;
+
+    let (_, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "başlık", "body": "**kalın** metin", "tags": [] }),
+        ),
+    )
+    .await;
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", &format!("/posts/{id}?fields=body_html")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let obj = body.as_object().expect("nesne olmalı");
+    assert_eq!(obj.len(), 1, "yalnızca body_html olmalı: {body}");
+    let html = obj["body_html"].as_str().expect("string olmalı");
+    assert!(html.contains("<strong>kalın</strong>"), "{html}");
+}
+
+/// Tekil uç: `body_html` `?fields=` hiç verilmese de her zaman dolu döner
+/// (bkz. `actos_types::content::ContentSummary::body_html` "Nerede dolu
+/// döner").
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn get_post_body_html_fields_olmadan_da_dolu(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "body_html_default_author").await;
+
+    let (_, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "başlık", "body": "gövde", "tags": [] }),
+        ),
+    )
+    .await;
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["body_html"].is_string(),
+        "?fields= verilmeden de body_html dolu olmalı: {body}"
+    );
+}
+
+/// `body_format == "plain"` iken markdown render EDİLMEZ — yalnızca
+/// HTML-escape edilir (bkz. görev tanımı madde 3). Bugünkü API `POST
+/// /posts` ile yalnızca `markdown` üretebiliyor (bkz.
+/// `actos_core::content::create_post`'un sabit `'markdown'::body_format`'ı),
+/// bu yüzden `plain`'i doğrudan veritabanında kuruyoruz.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn get_post_body_html_plain_formatta_markdown_render_edilmiyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let codec = test_id_codec();
+    let (_, api_key) = seed_actor(&raw_pool, "plain_author").await;
+
+    let (_, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "düz metin", "body": "*yıldız* düz kalmalı", "tags": [] }),
+        ),
+    )
+    .await;
+    let id = created["id"].as_str().expect("id olmalı").to_owned();
+
+    let internal_id = codec
+        .decode::<actos_core::id::Content>(&id)
+        .expect("id çözülebilmeli");
+    sqlx::query!(
+        r#"UPDATE contents SET body_format = 'plain'::body_format WHERE id = $1"#,
+        internal_id,
+    )
+    .execute(&raw_pool)
+    .await
+    .expect("body_format yazılabilmeli");
+
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["body_format"], "plain", "{body}");
+
+    let html = body["body_html"].as_str().expect("body_html string olmalı");
+    assert!(
+        !html.contains("<em>"),
+        "plain formatta markdown render edilmemeli (yıldızlar italik olmamalı): {html}"
+    );
+    assert!(
+        html.contains("*yıldız*"),
+        "yıldızlar olduğu gibi (escape edilmiş) kalmalı: {html}"
+    );
+}
+
+/// Liste uçlarında `body_html` varsayılan olarak hesaplanmaz — gövde
+/// boyutu 25 katına çıkmasın diye (görev tanımı madde 4).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_postlari_body_html_varsayilan_hesaplanmiyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "list_body_html_author").await;
+
+    let (status, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "liste testi", "body": "**kalın**", "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", "/actors/list_body_html_author/posts"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let posts = body["posts"].as_array().expect("posts dizi olmalı");
+    assert_eq!(posts.len(), 1, "{body}");
+    assert!(
+        posts[0]["body_html"].is_null(),
+        "?fields= ile açıkça istenmeden liste öğesinde body_html hesaplanmamalı: {body}"
+    );
+}
+
+/// `?fields=body_html` liste uçlarında da hesaplamayı açık şekilde tetikler.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_postlari_fields_body_html_ile_hesaplaniyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "list_body_html_fields_author").await;
+
+    let (status, created, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            &api_key,
+            json!({ "title": "liste testi", "body": "**kalın**", "tags": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, body, _) = send(
+        &router,
+        empty_req(
+            "GET",
+            "/actors/list_body_html_fields_author/posts?fields=id,body_html",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let posts = body["posts"].as_array().expect("posts dizi olmalı");
+    assert_eq!(posts.len(), 1, "{body}");
+    let html = posts[0]["body_html"]
+        .as_str()
+        .expect("?fields=body_html ile string dönmeli");
+    assert!(html.contains("<strong>kalın</strong>"), "{html}");
+}

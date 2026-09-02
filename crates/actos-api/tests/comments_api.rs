@@ -870,3 +870,103 @@ async fn actor_yorumlari_fields_ile_filtreleniyor(pool: PgPool) {
         "istenmeyen alan gelmemeli: {body}"
     );
 }
+
+// --- `body_html` (Faz 18.A, bkz. NOTES.md §8.3) -----------------------------
+
+/// Tekil uç: `GET /comments/{id}` `body_html`'i her zaman doldurur (bkz.
+/// `actos_types::content::ContentSummary::body_html` "Nerede dolu döner").
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn get_comment_body_html_her_zaman_dolu(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "yorum_html").await;
+    let post_id = seed_post(&router, &api_key, "HTML").await;
+    let c1 = seed_comment(&router, &api_key, &post_id, None, "**kalın** gövde").await;
+
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/comments/{c1}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let html = body["comment"]["body_html"]
+        .as_str()
+        .expect("body_html string olmalı");
+    assert!(html.contains("<strong>kalın</strong>"), "{html}");
+}
+
+/// Bugün silinmiş yorum `body = "[silindi]"` ile `200` dönüyor (bkz.
+/// `silinmis_yorum_200_ile_maskeli_doner`) — `body_html` de aynı maskeleme
+/// kuralına uymalı: ham gövde hiçbir şekilde sızmamalı (görev tanımı
+/// madde 6).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn silinmis_yorum_body_html_de_maskeli(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "yorum_html_maskeli").await;
+    let post_id = seed_post(&router, &api_key, "Maske HTML").await;
+    let c1 = seed_comment(&router, &api_key, &post_id, None, "<script>gizli</script>").await;
+
+    let (status, _, _) = send(
+        &router,
+        auth_req("DELETE", &format!("/comments/{c1}"), &api_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/comments/{c1}"))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let html = body["comment"]["body_html"]
+        .as_str()
+        .expect("body_html string olmalı");
+    assert!(
+        html.contains("[silindi]"),
+        "body_html body ile aynı maskeyi taşımalı: {html}"
+    );
+    assert!(
+        !html.contains("script") && !html.contains("gizli"),
+        "silinmiş yorumun ham gövdesi body_html'e de sızmamalı: {html}"
+    );
+}
+
+/// Liste uçlarında `body_html` varsayılan olarak hesaplanmaz (görev tanımı
+/// madde 4).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_yorumlari_body_html_varsayilan_hesaplanmiyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "yorum_liste_html").await;
+    let post_id = seed_post(&router, &api_key, "Liste HTML").await;
+    seed_comment(&router, &api_key, &post_id, None, "**kalın**").await;
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", "/actors/yorum_liste_html/comments"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["comments"][0]["body_html"].is_null(),
+        "?fields= olmadan liste öğesinde body_html hesaplanmamalı: {body}"
+    );
+}
+
+/// `?fields=body_html` liste ucunda hesaplamayı açıkça tetikler.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn actor_yorumlari_fields_body_html_ile_hesaplaniyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, api_key) = seed_actor(&raw_pool, "yorum_liste_html_fields").await;
+    let post_id = seed_post(&router, &api_key, "Liste HTML Fields").await;
+    seed_comment(&router, &api_key, &post_id, None, "**kalın**").await;
+
+    let (status, body, _) = send(
+        &router,
+        empty_req(
+            "GET",
+            "/actors/yorum_liste_html_fields/comments?fields=id,body_html",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let html = body["comments"][0]["body_html"]
+        .as_str()
+        .expect("?fields=body_html ile string dönmeli");
+    assert!(html.contains("<strong>kalın</strong>"), "{html}");
+}

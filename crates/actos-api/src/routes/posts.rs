@@ -133,6 +133,10 @@ fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<Actor
 
 /// Bir [`core_content::Content`]'i HTTP yanıt DTO'suna çevirir.
 ///
+/// `body_html` hesaplanmıyor (`None` kalır) — bu kısa yol yalnızca
+/// `?fields=body_html` desteklemeyen ya da desteklese de talep edilmediği
+/// yollar için (bkz. [`content_summary_with_body_html`]).
+///
 /// **Savunmacı tasarım:** `content.deleted_at.is_some()` burada da
 /// kontrol ediliyor (yalnızca çağıranların — bkz. `get_post`/`update_post`/
 /// `create_post` — zaten hep canlı içerik vermesine güvenmek yerine),
@@ -144,17 +148,56 @@ pub(crate) fn content_summary(
     content: &core_content::Content,
     id_codec: &IdCodec,
 ) -> Result<ContentSummary, Error> {
-    content_summary_with(content, id_codec, None)
+    content_summary_full(content, id_codec, None, false)
 }
 
 /// [`content_summary`]'nin ekleri de dolduran hâli.
 ///
 /// `ekler` `None` ise DTO'daki alan da `None` kalır — "yüklenmedi" ile
 /// "yok" ayrımı için bkz. `actos_types::content::ContentSummary`.
+///
+/// `body_html` burada da hesaplanmıyor; tekil uçlar (`GET /posts/{id}`,
+/// `GET /comments/{id}`) [`content_summary_with_body_html`]'i kullanıyor.
 pub(crate) fn content_summary_with(
     content: &core_content::Content,
     id_codec: &IdCodec,
     ekler: Option<(&[actos_core::attachment::Attachment], &actos_core::Storage)>,
+) -> Result<ContentSummary, Error> {
+    content_summary_full(content, id_codec, ekler, false)
+}
+
+/// [`content_summary_with`]'in `body_html`'i her zaman hesaplayan hâli.
+///
+/// Yalnızca tekil-öğe uçları (`GET /posts/{id}`, `GET /comments/{id}`)
+/// çağırır — bkz. `actos_types::content::ContentSummary::body_html`
+/// dokümanı "Nerede dolu döner" gerekçesi. Liste uçları bunun yerine
+/// [`content_summary_with_optional_body_html`]'i kullanır: orada hesaplama
+/// yalnızca istemci `?fields=body_html` ile açıkça istediyse yapılır.
+pub(crate) fn content_summary_with_body_html(
+    content: &core_content::Content,
+    id_codec: &IdCodec,
+    ekler: Option<(&[actos_core::attachment::Attachment], &actos_core::Storage)>,
+) -> Result<ContentSummary, Error> {
+    content_summary_full(content, id_codec, ekler, true)
+}
+
+/// Liste öğeleri için: `body_html` yalnızca `include_body_html` `true` ise
+/// hesaplanır. Çağıran bunu `selected_fields`'in `"body_html"` içerip
+/// içermediğine bakarak belirler (bkz. `crate::routes::posts::
+/// list_actor_posts`).
+pub(crate) fn content_summary_with_optional_body_html(
+    content: &core_content::Content,
+    id_codec: &IdCodec,
+    include_body_html: bool,
+) -> Result<ContentSummary, Error> {
+    content_summary_full(content, id_codec, None, include_body_html)
+}
+
+fn content_summary_full(
+    content: &core_content::Content,
+    id_codec: &IdCodec,
+    ekler: Option<(&[actos_core::attachment::Attachment], &actos_core::Storage)>,
+    include_body_html: bool,
 ) -> Result<ContentSummary, Error> {
     let attachments = match ekler {
         None => None,
@@ -165,13 +208,57 @@ pub(crate) fn content_summary_with(
                 .collect::<Result<Vec<_>, Error>>()?,
         ),
     };
-    content_summary_inner(content, id_codec, attachments)
+    content_summary_inner(content, id_codec, attachments, include_body_html)
+}
+
+/// `body` + `body_format`'tan sanitize edilmiş HTML üretir (bkz.
+/// `actos_types::content::ContentSummary::body_html` dokümanı).
+///
+/// **`plain` içerikte markdown render EDİLMEZ.** `actos_core::text::
+/// render_markdown` yalnızca `body_format == "markdown"` iken çağrılıyor;
+/// `plain` için tek yapılan HTML özel karakterlerini escape edip tek bir
+/// `<p>` ile sarmak — kullanıcının düz metin niyetiyle yazdığı `*yıldız*`
+/// gibi bir gövdeyi markdown sözdizimi sanıp italikleştirmemek için.
+///
+/// Silinmiş içerik için ayrı bir dal YOK: `body` çağıran tarafından zaten
+/// maskelenmiş (`"[silindi]"`) olarak geliyor (bkz.
+/// `content_summary_inner`) — bu fonksiyon her zaman aynı iki yoldan
+/// birini işlettiği için `body_html`'in `body` ile birebir aynı maskeleme
+/// kuralına tabi olması otomatik garanti ediliyor, özel bir "silinmişse"
+/// kontrolüne gerek kalmıyor.
+fn render_body_html(body: &str, body_format: &str) -> String {
+    if body_format == "plain" {
+        escape_plain_body_html(body)
+    } else {
+        actos_core::text::render_markdown(body)
+    }
+}
+
+/// `render_body_html`'in `plain` dalı: HTML özel karakterlerini escape
+/// eder ve tek bir `<p>` ile sarar. Markdown render'ının aksine burada
+/// `pulldown-cmark`/`ammonia` hiç devrede değil — yalnızca beş özel
+/// karakterin (`&`, `<`, `>`, `"`, `'`) mekanik değişimi, bu yüzden
+/// `ammonia`'yı `actos-api`'ye bağımlılık olarak eklemeye gerek yok.
+fn escape_plain_body_html(body: &str) -> String {
+    let mut escaped = String::with_capacity(body.len());
+    for ch in body.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            other => escaped.push(other),
+        }
+    }
+    format!("<p>{escaped}</p>")
 }
 
 fn content_summary_inner(
     content: &core_content::Content,
     id_codec: &IdCodec,
     attachments: Option<Vec<actos_types::upload::UploadResponse>>,
+    include_body_html: bool,
 ) -> Result<ContentSummary, Error> {
     let id = id_codec.encode::<ContentIdKind>(content.id)?;
 
@@ -200,6 +287,12 @@ fn content_summary_inner(
         )
     };
 
+    let body_format = body_format_str(content.body_format).to_owned();
+    // `body`'den türetiliyor (`deleted` iken zaten yukarıda maskelenmiş) —
+    // bkz. `render_body_html` dokümanı: ayrı bir "silinmişse" dalına gerek
+    // yok, maskeleme otomatik devrediyor.
+    let body_html = include_body_html.then(|| render_body_html(&body, &body_format));
+
     Ok(ContentSummary {
         id,
         content_type: content_type_str(content.content_type).to_owned(),
@@ -207,7 +300,8 @@ fn content_summary_inner(
         author_deleted: content.author_deleted,
         title,
         body,
-        body_format: body_format_str(content.body_format).to_owned(),
+        body_format,
+        body_html,
         metadata,
         tags: content.tags.clone(),
         score: content.score,
@@ -432,8 +526,13 @@ async fn get_post(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let summary = content_summary_with(&content, state.id_codec(), Some((&ekler, state.storage())))
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    // Tekil uç: `body_html` `?fields=`'ten bağımsız her zaman hesaplanır
+    // (bkz. `actos_types::content::ContentSummary::body_html` "Nerede dolu
+    // döner"); `?fields=` yalnızca sonraki `apply_fields` adımında hangi
+    // anahtarların yanıta gireceğini daraltır.
+    let summary =
+        content_summary_with_body_html(&content, state.id_codec(), Some((&ekler, state.storage())))
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());
     let json = fields::apply_fields(&summary, selected_fields.as_deref(), &headers)?;
@@ -570,13 +669,18 @@ async fn list_actor_posts(
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());
+    let include_body_html = fields::wants_body_html(selected_fields.as_deref());
 
     let posts = page
         .items
         .iter()
         .map(|content| {
-            let summary = content_summary(content, state.id_codec())
-                .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+            let summary = content_summary_with_optional_body_html(
+                content,
+                state.id_codec(),
+                include_body_html,
+            )
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
             fields::apply_fields(&summary, selected_fields.as_deref(), &headers)
         })
         .collect::<Result<Vec<Value>, ApiError>>()?;
