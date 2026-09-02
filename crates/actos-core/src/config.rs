@@ -276,6 +276,10 @@ pub struct ScopeLimits {
     pub vote: RateLimitConfig,
     pub read: RateLimitConfig,
     pub upload: RateLimitConfig,
+    /// `GET /search` için ayrı kova (bkz. `crate::ratelimit::Scope::Search`
+    /// üzerindeki gerekçe — arama genel okumadan belirgin ölçüde daha
+    /// pahalı).
+    pub search: RateLimitConfig,
 }
 
 /// Kimliksiz (IP başına) istekler için scope başına limitler.
@@ -284,6 +288,9 @@ pub struct AnonymousLimits {
     pub register: RateLimitConfig,
     pub recover: RateLimitConfig,
     pub read: RateLimitConfig,
+    /// `GET /search`, kimliksiz (IP başına) — bkz. [`ScopeLimits::search`]
+    /// üzerindeki aynı gerekçe.
+    pub search: RateLimitConfig,
     /// Ayrıca tablolanmamış diğer tüm yazma uçları (ör. follow, delete) için
     /// tek, muhafazakâr bir kova. [`Scope::Write`] ve kimliksiz isteklerde
     /// [`Scope::Post`]/[`Scope::Comment`]/[`Scope::Vote`]/[`Scope::Upload`]
@@ -321,6 +328,7 @@ impl LimitTable {
                 Scope::Register => self.anonymous.register,
                 Scope::Recover => self.anonymous.recover,
                 Scope::Read => self.anonymous.read,
+                Scope::Search => self.anonymous.search,
                 Scope::Post | Scope::Comment | Scope::Vote | Scope::Upload | Scope::Write => {
                     self.anonymous.write
                 }
@@ -351,6 +359,7 @@ impl LimitTable {
             Scope::Vote => tier.vote,
             Scope::Read => tier.read,
             Scope::Upload => tier.upload,
+            Scope::Search => tier.search,
             // Register/Recover/Write kimlikli actor'ler için tablolanmadı
             // (PLAN.md'de yalnızca IP başına tanımlı) — savunmacı varsayılan
             // olarak anonim "diğer yazmalar" kovasına düşer.
@@ -408,6 +417,19 @@ impl LimitTable {
                     20,
                     3600
                 ),
+                // `read`'in (600/dk) yirmide biri: arama GIN taraması +
+                // `ts_rank` hesaplaması taşıyor, sıradan bir
+                // `GET /posts/{id}`'den belirgin ölçüde daha pahalı (bkz.
+                // `Scope::Search` üzerindeki gerekçe). Oran kademeye göre
+                // değişiyor: ajan 100/1200 (~1/12), anonim 20/120 (~1/6) —
+                // ajanların arama yükünü daha çok taşıması bilinçli, bu
+                // platformda keşif birinci sınıf bir kullanım.
+                search: rl!(
+                    "RATE_LIMIT_SEARCH_HUMAN_CAPACITY",
+                    "RATE_LIMIT_SEARCH_HUMAN_WINDOW_SECS",
+                    30,
+                    60
+                ),
             },
             ai_agent: ScopeLimits {
                 post: rl!(
@@ -440,6 +462,12 @@ impl LimitTable {
                     20,
                     3600
                 ),
+                search: rl!(
+                    "RATE_LIMIT_SEARCH_AI_AGENT_CAPACITY",
+                    "RATE_LIMIT_SEARCH_AI_AGENT_WINDOW_SECS",
+                    100,
+                    60
+                ),
             },
             anonymous: AnonymousLimits {
                 register: rl!(
@@ -458,6 +486,12 @@ impl LimitTable {
                     "RATE_LIMIT_READ_IP_CAPACITY",
                     "RATE_LIMIT_READ_IP_WINDOW_SECS",
                     120,
+                    60
+                ),
+                search: rl!(
+                    "RATE_LIMIT_SEARCH_IP_CAPACITY",
+                    "RATE_LIMIT_SEARCH_IP_WINDOW_SECS",
+                    20,
                     60
                 ),
                 write: rl!(
@@ -483,6 +517,7 @@ impl LimitTable {
             ("RATE_LIMIT_VOTE_HUMAN_CAPACITY", self.human.vote),
             ("RATE_LIMIT_READ_HUMAN_CAPACITY", self.human.read),
             ("RATE_LIMIT_UPLOAD_HUMAN_CAPACITY", self.human.upload),
+            ("RATE_LIMIT_SEARCH_HUMAN_CAPACITY", self.human.search),
             ("RATE_LIMIT_POST_AI_AGENT_CAPACITY", self.ai_agent.post),
             (
                 "RATE_LIMIT_COMMENT_AI_AGENT_CAPACITY",
@@ -491,9 +526,11 @@ impl LimitTable {
             ("RATE_LIMIT_VOTE_AI_AGENT_CAPACITY", self.ai_agent.vote),
             ("RATE_LIMIT_READ_AI_AGENT_CAPACITY", self.ai_agent.read),
             ("RATE_LIMIT_UPLOAD_AI_AGENT_CAPACITY", self.ai_agent.upload),
+            ("RATE_LIMIT_SEARCH_AI_AGENT_CAPACITY", self.ai_agent.search),
             ("RATE_LIMIT_REGISTER_IP_CAPACITY", self.anonymous.register),
             ("RATE_LIMIT_RECOVER_IP_CAPACITY", self.anonymous.recover),
             ("RATE_LIMIT_READ_IP_CAPACITY", self.anonymous.read),
+            ("RATE_LIMIT_SEARCH_IP_CAPACITY", self.anonymous.search),
             ("RATE_LIMIT_WRITE_IP_CAPACITY", self.anonymous.write),
         ];
         for (name, cfg) in all {

@@ -79,6 +79,24 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
         return Some(Scope::Vote);
     }
 
+    // `GET /search`. Genel `Scope::Read`'e bırakılmadı — bilinçli bir
+    // karar: `Read` kovası "bir satır/sayfa çek" maliyetini varsayıyor
+    // (ör. `GET /posts/{id}`, tek bir index lookup), oysa arama her
+    // istekte bir GIN index taraması + her eşleşen satır için `ts_rank`
+    // hesaplaması yapıyor (actor aramasında ayrıca bir trigram
+    // `similarity()` taraması daha). `Read`'in insan için `600/dakika`
+    // gibi bir kapasitesi arama için makul değil — bu kapasitede sürekli
+    // arama isteği atan bir istemci (özellikle bir ajan, bu platformda
+    // birinci sınıf vatandaş ve otomatik/hacimli istek atma eğiliminde)
+    // veritabanını sürekli pahalı sorgularla meşgul tutabilir. Ayrı bir kova
+    // hem daha düşük bir varsayılan kapasite (bkz. `config::LimitTable`)
+    // hem de arızada farklı bir fallback politikası (bkz.
+    // `actos_core::ratelimit::RateLimiter::fallback_decision` — `Search`
+    // `Read`'in aksine fail-closed) uygulayabilmemizi sağlıyor.
+    if (*method == Method::GET || *method == Method::HEAD) && path == "/search" {
+        return Some(Scope::Search);
+    }
+
     // Faz 13 geldiğinde buraya eklenecek:
     //   if *method == Method::POST && path == "/media" { return Some(Scope::Upload); }
     // Bu satırların üstünde durmaları gerekiyor çünkü aşağıdaki genel
@@ -133,9 +151,9 @@ fn resolve_client_ip(req: &Request, trusted_proxy_hops: usize) -> IpAddr {
 /// etmiyor (bkz. `crates/actos-core/src/auth.rs`). Onu genişletmek
 /// `actos-core`'a dokunmak demek olurdu (bu görevde yasak). Ek sorgunun
 /// maliyetini sınırlamak için yalnızca `config_from_json`'ın gerçekten
-/// tanıdığı scope'larda (`Post`/`Comment`/`Vote`/`Read`/`Upload`) atılıyor
-/// — `Register`/`Recover`/`Write` için o fonksiyon zaten koşulsuz `None`
-/// döndüğünden sorgu bile gereksiz.
+/// tanıdığı scope'larda (`Post`/`Comment`/`Vote`/`Read`/`Upload`/`Search`)
+/// atılıyor — `Register`/`Recover`/`Write` için o fonksiyon zaten koşulsuz
+/// `None` döndüğünden sorgu bile gereksiz.
 async fn actor_rate_limit_override(
     db: &PgPool,
     actor_id: i64,
@@ -143,7 +161,7 @@ async fn actor_rate_limit_override(
 ) -> Option<RateLimitConfig> {
     if !matches!(
         scope,
-        Scope::Post | Scope::Comment | Scope::Vote | Scope::Read | Scope::Upload
+        Scope::Post | Scope::Comment | Scope::Vote | Scope::Read | Scope::Upload | Scope::Search
     ) {
         return None;
     }

@@ -106,6 +106,13 @@ pub enum Scope {
     Recover,
     Upload,
     Write,
+    /// `GET /search`. Genel `Read`'den **ayrı** bir kova — bkz.
+    /// `crates/actos-api/src/middleware/ratelimit.rs::classify` üzerindeki
+    /// gerekçe: arama tek bir satır çekmek yerine GIN index taraması +
+    /// `ts_rank` hesaplaması + (actor aramasında) trigram benzerliği
+    /// yapıyor, `GET /posts/{id}` gibi bir tekil okumadan belirgin ölçüde
+    /// daha pahalı.
+    Search,
 }
 
 impl Scope {
@@ -121,6 +128,7 @@ impl Scope {
             Self::Recover => "recover",
             Self::Upload => "upload",
             Self::Write => "write",
+            Self::Search => "search",
         }
     }
 }
@@ -448,6 +456,16 @@ impl RateLimiter {
         context: &str,
         error: &str,
     ) -> RateLimitDecision {
+        // `Search` bilerek `Read`'in dışında bırakıldı: bu bir okuma
+        // olduğu için "fail-open" ilkesi ilk bakışta ona da uygulanabilir
+        // görünüyor, ama arama diğer okumalardan farklı — pahalı bir GIN
+        // index taraması + `ts_rank` hesaplaması (bkz. `Scope::Search`
+        // üzerindeki yorum). Redis çökmüşken sınırsız aramaya izin vermek,
+        // bir altyapı arızasını veritabanını pahalı sorgularla boğan bir
+        // DoS penceresine çevirebilir; platformun geri kalanı (post/yorum/
+        // profil okuma) `Read` fail-open sayesinde çalışmaya devam ederken
+        // yalnızca arama geçici olarak kısılıyor — bu, tüm okumaların
+        // durması kadar felç edici değil.
         let fail_open = matches!(scope, Scope::Read);
         tracing::warn!(
             scope = scope.as_key_str(),
@@ -588,9 +606,10 @@ impl RateLimiter {
 /// (veritabanı satırı) çağıranın işi — bu modül veritabanını bilmiyor.
 ///
 /// Tanınan anahtarlar: `posts_per_hour`, `comments_per_hour`,
-/// `votes_per_hour`, `reads_per_minute`, `uploads_per_hour`. Diğer
-/// scope'ların (`Register`, `Recover`, `Write`) actor başına override'ı yok
-/// — bunlar zaten kimliksiz (IP başına) uygulanıyor.
+/// `votes_per_hour`, `reads_per_minute`, `uploads_per_hour`,
+/// `searches_per_minute`. Diğer scope'ların (`Register`, `Recover`,
+/// `Write`) actor başına override'ı yok — bunlar zaten kimliksiz (IP
+/// başına) uygulanıyor.
 ///
 /// Tanınmayan bir anahtar, eksik bir alan ya da beklenmeyen bir tip (string,
 /// negatif sayı, ondalık, sıfır, `u32`'ye sığmayan bir değer) sessizce
@@ -604,6 +623,7 @@ pub fn config_from_json(value: &serde_json::Value, scope: Scope) -> Option<RateL
         Scope::Vote => ("votes_per_hour", Duration::from_secs(3600)),
         Scope::Read => ("reads_per_minute", Duration::from_secs(60)),
         Scope::Upload => ("uploads_per_hour", Duration::from_secs(3600)),
+        Scope::Search => ("searches_per_minute", Duration::from_secs(60)),
         Scope::Register | Scope::Recover | Scope::Write => return None,
     };
 

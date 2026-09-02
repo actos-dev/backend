@@ -21,6 +21,7 @@ pub mod interaction;
 pub mod media;
 pub mod moderation;
 pub mod ratelimit;
+pub mod search;
 pub mod secret;
 pub mod storage;
 pub mod tag;

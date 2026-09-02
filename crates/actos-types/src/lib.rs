@@ -29,6 +29,9 @@ pub mod upload;
 /// mesajdan daha önemli: mesaj metni değişebilir, bu kodlar değişmez.
 pub mod error;
 
+/// `GET /search` uçlarının yanıt tipleri.
+pub mod search;
+
 /// Etiket uçlarının yanıt tipleri.
 pub mod tag;
 

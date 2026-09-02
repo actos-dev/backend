@@ -9,6 +9,7 @@ pub mod health;
 pub mod interactions;
 pub mod meta;
 pub mod posts;
+pub mod search;
 pub mod tags;
 pub mod uploads;
 
@@ -27,6 +28,7 @@ pub fn router() -> Router<AppState> {
         .merge(posts::router())
         .merge(comments::router())
         .merge(tags::router())
+        .merge(search::router())
         .merge(interactions::router())
         .merge(feed::router())
         .merge(uploads::router())
