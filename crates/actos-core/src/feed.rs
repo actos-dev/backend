@@ -126,6 +126,29 @@ impl FeedWindow {
 /// Yalnızca **post**'lar (yorumlar feed'e girmez) ve yalnızca canlı
 /// içerik.
 ///
+/// ## Performans: iki aşamalı sorgu (Faz 17)
+///
+/// Üç sıralamanın SQL'i de `WITH page AS (...)` CTE'siyle **iki aşamalı**:
+/// önce `page` yalnızca eşleşen satırların `id`'sini `ORDER BY ... LIMIT`
+/// ile sayfa boyutuna keser, sonra dıştaki sorgu bu az sayıdaki id için
+/// `actors`/`content_tags`/`tags` `JOIN`'lerini ve `array_agg`'i yapar.
+///
+/// Tek aşamalı hâlde (etiket `JOIN`/`GROUP BY`'ı `ORDER BY`/`LIMIT`'ten
+/// önce) planlayıcı `GROUP BY contents.id, actors.id` yüzünden `ORDER BY
+/// ... LIMIT`'i aggregate'in altına itemiyordu: eşleşen bütün satırlar
+/// (200 000 satırlık ölçüm veritabanında pratikte tüm tablo) önce
+/// gruplanıp diske taşınıyor, sonra son `limit+1` tanesi seçiliyordu.
+/// Ölçülmüş öncesi/sonrası süreler ve `EXPLAIN` çıktıları
+/// `docs/query-plans.md`'de. Desen `crate::search::search_content`'ten
+/// aynen kopyalandı (bkz. o modülün "Performans" bölümü) — **yeni bir
+/// index gerekmiyor**, `idx_contents_new`/`_top`/`_hot` zaten doğru
+/// index'ler, sorun onların kullanılamaması değil aggregate'in erken
+/// çalışmasıydı.
+///
+/// `follower` filtresi (`$2::bigint IS NULL OR ...`) artık `page` CTE'sinin
+/// **içinde** — genel feed'in `NULL` sabitiyle planlayıcının alt sorguyu
+/// tamamen elediği davranış korundu (bkz. `docs/query-plans.md`).
+///
 /// # Errors
 /// Cursor bu listenin sıralamasına ait değilse [`Error::InvalidCursor`];
 /// veritabanı hatası [`Error::Database`].
@@ -165,11 +188,42 @@ pub async fn list_feed(
         _ => return Err(Error::InvalidCursor),
     };
 
+    // İki aşamalı sorgu — bkz. modül dokümantasyonu "Performans" bölümü ve
+    // `docs/query-plans.md`. `page` CTE'si yalnızca sayfanın `id`'lerini
+    // `ORDER BY ... LIMIT` ile keser (etiket `JOIN`/`array_agg`'inden VE
+    // `GROUP BY`'dan ÖNCE); dıştaki sorgu bu az sayıdaki id için etiketleri
+    // toplar. Desen `crate::search::search_content`'ten aynen kopyalandı.
+    // `contents.id` (primary key) `GROUP BY`'da olduğu için Postgres'in
+    // fonksiyonel bağımlılık kuralı `contents`'in diğer sütunlarının (ör.
+    // `created_at`) `ORDER BY`'da agregat dışı kullanılmasına izin veriyor
+    // — `page`'den ayrı bir sıralama anahtarı taşımaya gerek yok, tıpkı
+    // eski (tek aşamalı) sorgunun zaten aynı GROUP BY ile SELECT'te
+    // `contents.created_at`'i agregat dışı kullanmasında olduğu gibi.
     let rows = match sort {
         PostSort::New => {
             sqlx::query_as!(
                 FeedRow,
                 r#"
+                WITH page AS (
+                    SELECT contents.id
+                    FROM contents
+                    WHERE contents.content_type = 'post'::content_type
+                      AND contents.deleted_at IS NULL
+                      AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
+                      AND (
+                          $2::bigint IS NULL
+                          OR contents.actor_id IN (
+                              SELECT followed_actor_id FROM follows
+                              WHERE follower_actor_id = $2::bigint
+                          )
+                      )
+                      AND (
+                          $3::timestamptz IS NULL
+                          OR (contents.created_at, contents.id) < ($3::timestamptz, $4::bigint)
+                      )
+                    ORDER BY contents.created_at DESC, contents.id DESC
+                    LIMIT $5
+                )
                 SELECT
                     contents.id,
                     contents.content_type AS "content_type: ContentType",
@@ -196,27 +250,13 @@ pub async fn list_feed(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
                     ) AS "tags!: Vec<String>"
-                FROM contents
+                FROM page
+                JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
-                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                WHERE contents.content_type = 'post'::content_type
-                  AND contents.deleted_at IS NULL
-                  AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
-                  AND (
-                      $2::bigint IS NULL
-                      OR contents.actor_id IN (
-                          SELECT followed_actor_id FROM follows
-                          WHERE follower_actor_id = $2::bigint
-                      )
-                  )
-                  AND (
-                      $3::timestamptz IS NULL
-                      OR (contents.created_at, contents.id) < ($3::timestamptz, $4::bigint)
-                  )
                 GROUP BY contents.id, actors.id
                 ORDER BY contents.created_at DESC, contents.id DESC
-                LIMIT $5
                 "#,
                 cutoff,
                 follower,
@@ -231,6 +271,26 @@ pub async fn list_feed(
             sqlx::query_as!(
                 FeedRow,
                 r#"
+                WITH page AS (
+                    SELECT contents.id
+                    FROM contents
+                    WHERE contents.content_type = 'post'::content_type
+                      AND contents.deleted_at IS NULL
+                      AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
+                      AND (
+                          $2::bigint IS NULL
+                          OR contents.actor_id IN (
+                              SELECT followed_actor_id FROM follows
+                              WHERE follower_actor_id = $2::bigint
+                          )
+                      )
+                      AND (
+                          $3::int IS NULL
+                          OR (contents.score, contents.id) < ($3::int, $4::bigint)
+                      )
+                    ORDER BY contents.score DESC, contents.id DESC
+                    LIMIT $5
+                )
                 SELECT
                     contents.id,
                     contents.content_type AS "content_type: ContentType",
@@ -257,27 +317,13 @@ pub async fn list_feed(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
                     ) AS "tags!: Vec<String>"
-                FROM contents
+                FROM page
+                JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
-                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                WHERE contents.content_type = 'post'::content_type
-                  AND contents.deleted_at IS NULL
-                  AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
-                  AND (
-                      $2::bigint IS NULL
-                      OR contents.actor_id IN (
-                          SELECT followed_actor_id FROM follows
-                          WHERE follower_actor_id = $2::bigint
-                      )
-                  )
-                  AND (
-                      $3::int IS NULL
-                      OR (contents.score, contents.id) < ($3::int, $4::bigint)
-                  )
                 GROUP BY contents.id, actors.id
                 ORDER BY contents.score DESC, contents.id DESC
-                LIMIT $5
                 "#,
                 cutoff,
                 follower,
@@ -292,6 +338,26 @@ pub async fn list_feed(
             sqlx::query_as!(
                 FeedRow,
                 r#"
+                WITH page AS (
+                    SELECT contents.id
+                    FROM contents
+                    WHERE contents.content_type = 'post'::content_type
+                      AND contents.deleted_at IS NULL
+                      AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
+                      AND (
+                          $2::bigint IS NULL
+                          OR contents.actor_id IN (
+                              SELECT followed_actor_id FROM follows
+                              WHERE follower_actor_id = $2::bigint
+                          )
+                      )
+                      AND (
+                          $3::double precision IS NULL
+                          OR (contents.hot_score, contents.id) < ($3::double precision, $4::bigint)
+                      )
+                    ORDER BY contents.hot_score DESC, contents.id DESC
+                    LIMIT $5
+                )
                 SELECT
                     contents.id,
                     contents.content_type AS "content_type: ContentType",
@@ -318,27 +384,13 @@ pub async fn list_feed(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
                     ) AS "tags!: Vec<String>"
-                FROM contents
+                FROM page
+                JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
-                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                WHERE contents.content_type = 'post'::content_type
-                  AND contents.deleted_at IS NULL
-                  AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
-                  AND (
-                      $2::bigint IS NULL
-                      OR contents.actor_id IN (
-                          SELECT followed_actor_id FROM follows
-                          WHERE follower_actor_id = $2::bigint
-                      )
-                  )
-                  AND (
-                      $3::double precision IS NULL
-                      OR (contents.hot_score, contents.id) < ($3::double precision, $4::bigint)
-                  )
                 GROUP BY contents.id, actors.id
                 ORDER BY contents.hot_score DESC, contents.id DESC
-                LIMIT $5
                 "#,
                 cutoff,
                 follower,

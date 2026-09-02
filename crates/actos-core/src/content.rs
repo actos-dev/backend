@@ -636,9 +636,34 @@ pub async fn list_posts_by_actor(
     let actor_id = resolve_live_actor_id(pool, username).await?;
     let (cursor_created_at, cursor_id) = split_new_cursor(cursor);
 
+    // İki aşamalı sorgu — bkz. `crate::feed::list_feed` dokümantasyonu
+    // "Performans" bölümü ve `docs/query-plans.md`. Bu fonksiyon `actor_id =
+    // $1` eşitliğiyle filtrelediği için satır sayısı platformun tamamıyla
+    // değil yalnızca o actor'ün post sayısıyla büyüyor (ölçüm veritabanında
+    // actor başına ~100), yani pratikte diske taşan bir aggregate riski
+    // düşük — ama sorgu şekli `list_feed`/`list_posts_by_tag` ile birebir
+    // aynı kusuru taşıyordu (`GROUP BY`, `ORDER BY ... LIMIT`'ten önce
+    // çalışıyordu, ölçüldü: `actos_explain`'de en çok post'lu actor için
+    // `GroupAggregate rows=100` → `Limit`). Aynı deseni burada da uygulamak
+    // bedelsiz (yeni index yok, davranış aynı) ve çok post'lu bir actor
+    // (ör. bir bot hesap) için gelecekte aynı sınıf soruna düşmeyi baştan
+    // engelliyor.
     let rows = sqlx::query_as!(
         ContentRow,
         r#"
+        WITH page AS (
+            SELECT contents.id
+            FROM contents
+            WHERE contents.actor_id = $1
+              AND contents.content_type = 'post'::content_type
+              AND contents.deleted_at IS NULL
+              AND (
+                  $2::timestamptz IS NULL
+                  OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
+              )
+            ORDER BY contents.created_at DESC, contents.id DESC
+            LIMIT $4
+        )
         SELECT
             contents.id,
             contents.content_type AS "content_type: ContentType",
@@ -665,20 +690,13 @@ pub async fn list_posts_by_actor(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                 '{}'
             ) AS "tags!: Vec<String>"
-        FROM contents
+        FROM page
+        JOIN contents ON contents.id = page.id
         JOIN actors ON actors.id = contents.actor_id
-        LEFT JOIN content_tags ON content_tags.content_id = contents.id
+        LEFT JOIN content_tags ON content_tags.content_id = page.id
         LEFT JOIN tags ON tags.id = content_tags.tag_id
-        WHERE contents.actor_id = $1
-          AND contents.content_type = 'post'::content_type
-          AND contents.deleted_at IS NULL
-          AND (
-              $2::timestamptz IS NULL
-              OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
-          )
         GROUP BY contents.id, actors.id
         ORDER BY contents.created_at DESC, contents.id DESC
-        LIMIT $4
         "#,
         actor_id,
         cursor_created_at,
@@ -842,11 +860,31 @@ pub async fn list_posts_by_tag(
 
     let (cursor_created_at, cursor_score, cursor_hot, cursor_id) = split_post_cursor(sort, cursor)?;
 
+    // İki aşamalı sorgu — bkz. `crate::feed::list_feed` dokümantasyonu
+    // "Performans" bölümü ve `docs/query-plans.md`. Etiket filtresi
+    // (`filtre.tag_id = $1`) artık `page` CTE'sinin içinde: popüler bir
+    // etiket (ölçüm veritabanında 100 000 post) için bütün eşleşen küme
+    // önce gruplanıp diske taşınmadan, yalnızca sayfa boyutu kadar id
+    // seçiliyor.
     let rows = match sort {
         PostSort::New => {
             sqlx::query_as!(
                 ContentRow,
                 r#"
+                WITH page AS (
+                    SELECT contents.id
+                    FROM contents
+                    JOIN content_tags AS filtre ON filtre.content_id = contents.id
+                    WHERE filtre.tag_id = $1
+                      AND contents.content_type = 'post'::content_type
+                      AND contents.deleted_at IS NULL
+                      AND (
+                          $2::timestamptz IS NULL
+                          OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
+                      )
+                    ORDER BY contents.created_at DESC, contents.id DESC
+                    LIMIT $4
+                )
                 SELECT
                     contents.id,
                     contents.content_type AS "content_type: ContentType",
@@ -873,21 +911,13 @@ pub async fn list_posts_by_tag(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
                     ) AS "tags!: Vec<String>"
-                FROM contents
+                FROM page
+                JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
-                JOIN content_tags AS filtre ON filtre.content_id = contents.id
-                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                WHERE filtre.tag_id = $1
-                  AND contents.content_type = 'post'::content_type
-                  AND contents.deleted_at IS NULL
-                  AND (
-                      $2::timestamptz IS NULL
-                      OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
-                  )
                 GROUP BY contents.id, actors.id
                 ORDER BY contents.created_at DESC, contents.id DESC
-                LIMIT $4
                 "#,
                 tag_id,
                 cursor_created_at,
@@ -901,6 +931,20 @@ pub async fn list_posts_by_tag(
             sqlx::query_as!(
                 ContentRow,
                 r#"
+                WITH page AS (
+                    SELECT contents.id
+                    FROM contents
+                    JOIN content_tags AS filtre ON filtre.content_id = contents.id
+                    WHERE filtre.tag_id = $1
+                      AND contents.content_type = 'post'::content_type
+                      AND contents.deleted_at IS NULL
+                      AND (
+                          $2::int IS NULL
+                          OR (contents.score, contents.id) < ($2::int, $3::bigint)
+                      )
+                    ORDER BY contents.score DESC, contents.id DESC
+                    LIMIT $4
+                )
                 SELECT
                     contents.id,
                     contents.content_type AS "content_type: ContentType",
@@ -927,21 +971,13 @@ pub async fn list_posts_by_tag(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
                     ) AS "tags!: Vec<String>"
-                FROM contents
+                FROM page
+                JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
-                JOIN content_tags AS filtre ON filtre.content_id = contents.id
-                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                WHERE filtre.tag_id = $1
-                  AND contents.content_type = 'post'::content_type
-                  AND contents.deleted_at IS NULL
-                  AND (
-                      $2::int IS NULL
-                      OR (contents.score, contents.id) < ($2::int, $3::bigint)
-                  )
                 GROUP BY contents.id, actors.id
                 ORDER BY contents.score DESC, contents.id DESC
-                LIMIT $4
                 "#,
                 tag_id,
                 cursor_score,
@@ -955,6 +991,20 @@ pub async fn list_posts_by_tag(
             sqlx::query_as!(
                 ContentRow,
                 r#"
+                WITH page AS (
+                    SELECT contents.id
+                    FROM contents
+                    JOIN content_tags AS filtre ON filtre.content_id = contents.id
+                    WHERE filtre.tag_id = $1
+                      AND contents.content_type = 'post'::content_type
+                      AND contents.deleted_at IS NULL
+                      AND (
+                          $2::double precision IS NULL
+                          OR (contents.hot_score, contents.id) < ($2::double precision, $3::bigint)
+                      )
+                    ORDER BY contents.hot_score DESC, contents.id DESC
+                    LIMIT $4
+                )
                 SELECT
                     contents.id,
                     contents.content_type AS "content_type: ContentType",
@@ -981,21 +1031,13 @@ pub async fn list_posts_by_tag(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
                     ) AS "tags!: Vec<String>"
-                FROM contents
+                FROM page
+                JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
-                JOIN content_tags AS filtre ON filtre.content_id = contents.id
-                LEFT JOIN content_tags ON content_tags.content_id = contents.id
+                LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                WHERE filtre.tag_id = $1
-                  AND contents.content_type = 'post'::content_type
-                  AND contents.deleted_at IS NULL
-                  AND (
-                      $2::double precision IS NULL
-                      OR (contents.hot_score, contents.id) < ($2::double precision, $3::bigint)
-                  )
                 GROUP BY contents.id, actors.id
                 ORDER BY contents.hot_score DESC, contents.id DESC
-                LIMIT $4
                 "#,
                 tag_id,
                 cursor_hot,

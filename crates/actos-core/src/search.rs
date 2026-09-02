@@ -122,15 +122,15 @@
 //! yani aggregate'in `LIMIT`'in altına inmemesi diye bir risk yok — teyit
 //! edildi, dokunulmadı.
 //!
-//! **Kapsam notu:** `crate::feed::list_feed` ve
-//! `crate::content::list_posts_by_tag` da **aynı** deseni taşıyor (aggregate
-//! `ORDER BY`/`LIMIT`'ten önce) — ölçüldü (`224ms → 0.54ms`, `184ms →
-//! 0.76ms`), ama onlara burada **dokunulmadı**: PLAN.md Faz 17
-//! ("Sağlamlaştırma ve Gözlemlenebilirlik") bu ikisini zaten "maliyet
-//! sorunu, doğruluk sorunu değil" diye kayıt altına almış (bkz.
-//! `docs/query-plans.md` ve PLAN.md Faz 12 notları). Faz 17 bu CTE desenini
-//! (önce `rank`+`id` seç, sonra `JOIN`/`array_agg` yap) buradan aynen
-//! kopyalayabilir.
+//! **Kapsam notu (Faz 17'de kapandı):** `crate::feed::list_feed`,
+//! `crate::content::list_posts_by_tag` ve `crate::content::list_posts_by_actor`
+//! da **aynı** deseni taşıyordu (aggregate `ORDER BY`/`LIMIT`'ten önce).
+//! Faz 15'te burada yalnızca arama düzeltilmiş, diğerleri Faz 17'ye
+//! bırakılmıştı; **Faz 17 üçünü de aynı CTE desenine çevirdi**. Ölçümler ve
+//! öncesi/sonrası `EXPLAIN` çıktıları `docs/query-plans.md`'de. Yani bu desen
+//! artık kod tabanında dört yerde: sayfalanan ve yanında çoğul bir ilişki
+//! (etiket/ek) toplayan **yeni** bir liste ucu yazan da aynı şekli
+//! kullanmalı.
 //!
 //! ## Cursor: mekanizma aynı, anlamı `q`'ya bağlı
 //!

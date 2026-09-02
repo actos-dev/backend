@@ -480,3 +480,53 @@ async fn takip_akisi_bos_liste_donebiliyor(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body["posts"].as_array().expect("dizi").is_empty(), "{body}");
 }
+
+/// `list_feed`'in Faz 17'de iki aşamalı sorguya çevrilmesi `follower`
+/// filtreli sayfalamanın davranışını değiştirmemeli — bu test tam olarak
+/// onu doğruluyor: `feed_cursorla_sayfalaniyor`'un genel feed için yaptığını
+/// `follower` dolu uç için tekrarlıyor (tekrar yok, atlama yok, son sayfada
+/// `next_cursor` yok).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn takip_akisi_cursorla_sayfalaniyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, okuyan_key) = seed_actor(&raw_pool, "akis_sayfa_okuyan").await;
+    let (_, takip_key) = seed_actor(&raw_pool, "akis_sayfa_takip").await;
+
+    let (status, _, _) = send(
+        &router,
+        auth_req("PUT", "/actors/akis_sayfa_takip/follow", &okuyan_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    for i in 1..=3 {
+        seed_post(&router, &takip_key, &format!("takip post {i}")).await;
+    }
+
+    let (status, sayfa1, _) = send(
+        &router,
+        auth_req("GET", "/feed/following?limit=2", &okuyan_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sayfa1}");
+    assert_eq!(
+        basliklar(&sayfa1),
+        vec!["takip post 3", "takip post 2"],
+        "{sayfa1}"
+    );
+
+    let cursor = sayfa1["next_cursor"].as_str().expect("cursor").to_owned();
+    let (status, sayfa2, _) = send(
+        &router,
+        auth_req(
+            "GET",
+            &format!("/feed/following?limit=2&cursor={cursor}"),
+            &okuyan_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sayfa2}");
+    assert_eq!(basliklar(&sayfa2), vec!["takip post 1"], "{sayfa2}");
+    assert!(sayfa2["next_cursor"].is_null(), "{sayfa2}");
+}

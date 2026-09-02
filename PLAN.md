@@ -669,13 +669,13 @@ istemciler de sapamaz.
   actors.id` ile sayfalama sorgusunun *içinde* toplanıyor; bu, planlayıcının
   `ORDER BY ... LIMIT`'i aggregate'in altına itmesini engelliyor — eşleşen
   BÜTÜN satırlar gruplanıp diske taşınıyor (~9.8 MB), sonra 26 tanesi
-  seçiliyor. **Faz 17'nin işi**, `search.rs` bu düzeltmeyi zaten aldı,
-  desen oradan kopyalanmalı (`page` CTE'si → dış sorguda `array_agg`).
+  seçiliyor. → **Faz 17'de düzeltildi** (üç uç + `list_posts_by_actor`);
+  ölçümler ve öncesi/sonrası `EXPLAIN` çıktıları `docs/query-plans.md`'de.
 - **`docs/query-plans.md`'nin önerdiği iki çözüm gereksiz.** "Fan-out on write
   materialized feed" ve `(actor_id, hot_score DESC)` bileşik index'i yanlış
   kök nedene dayanıyordu; iki aşamalı sorgu mevcut index'lerle
   (`idx_contents_hot`/`_new`/`_top`) sorunu çözüyor, yeni index gerekmiyor.
-  Faz 17 bu dosyayı düzeltmeli.
+  → **Faz 17'de dosya yeniden yazıldı**, iki yanlış öneri kaldırıldı.
 - **`hot_score` arama sıralamasında kullanılmıyor** (bkz. Faz 15 maddesi).
   Feed'de kalıyor; ama denormalize olduğu ve testlerde hep `0` kaldığı için
   yeni bir sıralama yazan faz onu doğrudan kullanmadan önce iki kere düşünmeli.
