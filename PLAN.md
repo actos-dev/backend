@@ -503,18 +503,64 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 17 — Sağlamlaştırma ve Gözlemlenebilirlik
 
-- [ ] `GET /metrics` — Prometheus (istek sayısı/süresi, DB pool, rate limit hit)
-- [ ] Structured logging: her istekte actor_id, route, süre, status
-- [ ] Panik yakalama (`CatchPanicLayer`) → 500 + log, süreç ölmez
-- [ ] Güvenlik header'ları: `X-Content-Type-Options`, `Referrer-Policy`,
+- [x] **Faz 12'den devir: sorgu planı sorunları.** `docs/query-plans.md`'nin
+      "genel feed sağlam ✅" sonucu 20.000 satırda alındığı için yanlıştı;
+      200.000 satırda üç uç da çöküyordu (aggregate `LIMIT`'in altına
+      inemiyor). İki aşamalı sorguya çevrildi: `/feed` 209→0.58 ms,
+      `/feed/following` 213→1.03 ms, `/tags/{name}/posts` 132→1.04 ms.
+      `list_posts_by_actor` da aynı şekle çevrildi. Yeni index gerekmedi.
+- [x] `GET /metrics` — Prometheus (istek sayısı/süresi, DB pool, rate limit hit)
+      - Route etiketi `MatchedPath`'ten; ham id kullanılsaydı her post ayrı
+        zaman serisi üretirdi. Bir test bunu koruyor.
+      - Kimlik doğrulaması yok, hız sınırından muaf. Doğru koruma **ağ
+        seviyesinde** (Faz 19), uygulama seviyesinde değil — kodda yazılı.
+- [x] Structured logging: her istekte actor_id, route, süre, status
+- [x] Panik yakalama (`CatchPanicLayer`) → 500 + log, süreç ölmez
+      — **zaten Faz 2'de yapılmıştı**, doğrulandı, yeniden eklenmedi.
+- [x] Güvenlik header'ları: `X-Content-Type-Options`, `Referrer-Policy`,
       `Content-Security-Policy` (docs sayfası için)
-- [ ] CORS politikası — istemci çeşitliliği için geniş ama bilinçli
-- [ ] Gövde boyutu limitleri her endpoint'te
-- [ ] SQL injection: sqlx parametreli sorgular (dinamik sıralama için allowlist enum,
-      string concat **yok**)
-- [ ] `cargo audit` + `cargo deny` temiz
-- [ ] Yük testi (`oha`/`k6`): feed endpoint'i p99 hedefi belirle ve ölç
-- [ ] Commit
+      - **İki ayrı CSP:** API yanıtları katı (`default-src 'none'`), `/docs`
+        kendi alt router'ında gevşetilmiş (Scalar cdn.jsdelivr.net'ten script,
+        fonts.scalar.com'dan font çekiyor). Headless Chromium ile doğrulandı:
+        DOM 110 KB → 567 KB, bütün uçlar render oluyor, sıfır CSP ihlali.
+- [x] CORS politikası — istemci çeşitliliği için geniş ama bilinçli
+      — mevcut hâli (`Any` origin/method/header, `allow_credentials` **yok**)
+        doğrulandı ve korundu. Kimlik `Authorization` ile taşınıyor, çerez yok.
+- [x] ~~Gövde boyutu limitleri her endpoint'te~~ **Doğrulandı, değişiklik
+      gerekmedi.** Global 1 MB + `/uploads` 8 MB override var; ayrıca
+      `text.rs` alan bazında sınır uyguluyor (gövde 100k, başlık 300) ve
+      bunlar bayt sınırının çok altında. Uç başına ayrı bayt limiti bakım
+      yükü getirir, güvenlik kazancı getirmez.
+- [x] SQL injection: sqlx parametreli sorgular (dinamik sıralama için allowlist enum,
+      string concat **yok**) — **doğrulandı.** `format!`/`push_str`/`QueryBuilder`
+      ile kurulan SQL arandı, hiçbiri yok. Dinamik sıralama enum üzerinde
+      `match` ile ayrı literal `query_as!` çağrılarına dallanıyor.
+- [x] `cargo audit` + `cargo deny` temiz
+      - `deny.toml` + `.cargo/audit.toml`. 440 bağımlılıkta **0 güvenlik açığı**.
+      - Tek `ignore`: RUSTSEC-2024-0436 (`paste 1.0.15`, *unmaintained*, açık
+        değil) — `utoipa-axum` geçişli bağımlılığı, alternatifi yok. Gerekçe ve
+        kaldırma koşulu yazılı; `utoipa-axum` bırakınca cargo-deny'nin
+        `unused-ignored-advisory` uyarısı kendiliğinden hatırlatacak.
+      - Lisans taraması: 422 bağımlılık, 14 lisans ailesi, **uyumsuz yok**
+        (MPL-2.0'lar AGPL ile uyumlu, §3.3).
+      - `multiple-versions = "warn"` (deny değil): 17 çift sürümün tamamı
+        aws-sdk/sqlx/tracing gibi geçişli ağaçların iç farkı, bizim
+        kontrolümüzde değil — `deny` düzeltemeyeceğimiz yerde build kırardı.
+- [x] Yük testi (`oha`/`k6`): feed endpoint'i p99 hedefi belirle ve ölç
+      - `docs/load-test.md`. Release binary, 200k post'lu veri, hız sınırı
+        geçici olarak yükseltilmiş (429 oranı %0; varsayılan limitlerle
+        yapılan hatalı kontrol koşusu da belgede duruyor).
+      - `/feed?sort=hot` p99 **9.55 ms** (6959 RPS), `/posts/{id}` p99
+        **5.50 ms**, seçici `/search` p99 **4.08 ms**.
+      - **Hedefler:** `/feed` p99 < 50 ms, `/posts/{id}` ve seçici arama
+        p99 < 30 ms. Regresyon alarmı eşiği olarak konuldu, üretim SLO'su
+        değil (ölçüm tek makinede, yük üreticisi sunucuyla aynı CPU'da).
+      - **Bilinen sınır, hedef konmadı:** 200k satırın tamamıyla eşleşen bir
+        terim (`q=lorem`) p99 ~1.2 s. Tek istek 64 ms; `ts_rank` sıralaması
+        GIN index'ine itilemediği için bütün eşleşmeler puanlanıyor
+        (`Gather Merge` + `top-N heapsort`). Ranked FTS'in doğası, `search.rs`
+        kusuru değil. Çözüm adayları `docs/load-test.md`'de, **uygulanmadı**.
+- [x] Commit
 
 ---
 
