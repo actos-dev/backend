@@ -619,6 +619,27 @@ engellemeyecek şekilde tasarlanacak.
 - [ ] `docs/API.md`'ye not: **`actor_type` kendi beyanıdır, doğrulanmaz** —
       bu filtre bir garanti değil, kolaylıktır
 - [ ] Testler
+
+**Hata metinleri İngilizceye** (istemci i18n'i mümkün kılmak için)
+
+- [ ] Bugün tüm `detail` metinleri Türkçe (`"post bulunamadı"`,
+      `"doğrulama başarısız: oy değeri yalnızca -1, 0 veya 1 olabilir"`).
+      Hedef kitle "dünyadaki herkes" olan bir API için varsayılan İngilizce olmalı
+- [ ] `Error` varyantlarının ürettiği tüm metinler ve `ApiError`'ın
+      `title` alanları İngilizceye çevrilir
+- [ ] **Karar: API tek dilli (İngilizce) kalır, `Accept-Language` desteklenmez.**
+      Yerelleştirme istemcinin işidir ve `code` üzerinden yapılır — sözleşme
+      olan alan `code`, `detail` geliştirici/log metnidir. Aksi hâlde her yeni
+      dil backend'e çeviri dosyası ve `Accept-Language` boru hattı eklemek
+      demek olurdu; üstelik `detail` metinleri son kullanıcıya gösterilecek
+      kalitede kopya değil, arayüz onları zaten kendi diliyle değiştirecek
+- [ ] `docs/API.md` §3.6'ya bu ilke yazılır: "dallanmayı `code`'a göre yap,
+      `detail`'i kullanıcıya olduğu gibi gösterme"
+- [ ] Türkçe kalanlar: kod yorumları, `PLAN.md`/`NOTES.md`/`docs/*` — bunlar
+      geliştirme dili, değişmiyor
+- [ ] Testler: mevcut testlerde Türkçe metin bekleyen assertion'lar güncellenir
+      (metin yerine `code` kontrolüne çevrilmeleri tercih edilir — test de
+      sözleşmeye bakmalı, metne değil)
 - [ ] Commit (18.A)
 
 ### 18.B — Test örtüsü
