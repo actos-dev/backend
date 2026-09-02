@@ -27,6 +27,9 @@ tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 deadpool-redis = { workspace = true }
 dotenvy = { workspace = true }
+# Gözlemlenebilirlik (Faz 17) — sürüm/feature gerekçesi kök `Cargo.toml`'da.
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 uuid = { workspace = true }
 # `POST /admin/bans`'in expires_at alanını RFC 3339'dan ayrıştırmak için.
 chrono = { workspace = true }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use axum::{
     Router,
-    http::{HeaderName, StatusCode},
+    http::{HeaderName, HeaderValue, StatusCode},
     middleware::from_fn_with_state,
 };
 use tower::ServiceBuilder;
@@ -15,6 +15,7 @@ use tower_http::{
     limit::RequestBodyLimitLayer,
     request_id::{PropagateRequestIdLayer, SetRequestIdLayer},
     sensitive_headers::SetSensitiveRequestHeadersLayer,
+    set_header::SetResponseHeaderLayer,
     timeout::TimeoutLayer,
     trace::{DefaultOnResponse, TraceLayer},
 };
@@ -24,7 +25,7 @@ use crate::{
     middleware::{identity, ratelimit},
     routes,
     state::AppState,
-    telemetry::MakeRequestUuidV7,
+    telemetry::{self, MakeRequestUuidV7},
 };
 
 /// Rotaları ve middleware yığınını birleştirir.
@@ -34,23 +35,50 @@ use crate::{
 /// 2. `Trace` — kimlik atandıktan sonra, ki log satırlarında yer alsın
 /// 3. `PropagateRequestId` — kimliği yanıta da yaz
 /// 4. `CatchPanic` — panik olursa süreç ölmesin, 500 dönsün
-/// 5. `SetSensitiveRequestHeaders` — `Authorization` loglara düşmesin
-/// 6. `Cors`
-/// 7. `Timeout` — asılı kalan istek bağlantıyı sonsuza dek tutmasın
-/// 8. `ConcurrencyLimit` — doygunlukta kuyruğa yığmak yerine reddet
-/// 9. `identity::resolve` — `Authorization`'ı **bir kez** çözer, sonucu
-///    request extension'ına koyar (bkz. `crate::middleware::identity`).
-///    Handler'ların/extractor'ların ikinci kez `authenticate` çağırmaması
-///    ve hız sınırlamanın (aşağıdaki katman) doğru `Subject`'i seçebilmesi
-///    için `RequestBodyLimit`'ten önce, `ConcurrencyLimit`'ten sonra
-///    çalışıyor — kabul edilmeyecek (doygunlukta reddedilen) bir istek için
-///    boşuna veritabanına gitmesin.
-/// 10. `ratelimit::enforce` — `identity`'den **sonra** (Subject'e ihtiyacı
+/// 5. `SecurityHeaders` (Faz 17) — `X-Content-Type-Options`,
+///    `Referrer-Policy`, `Content-Security-Policy`. `CatchPanic`'ten
+///    **sonra** ki bir panikten dönen 500 de bu header'ları taşısın; asıl
+///    rotalardan önce olması (`Cors`'tan bile önce) gereken bir sıra yok —
+///    yalnızca yanıta yazıyor, isteğe hiç dokunmuyor (bkz. `security_headers`
+///    dokümanı — CSP özelinde `/docs`'un kendi katmanıyla nasıl geçersiz
+///    kıldığı orada anlatılıyor).
+/// 6. `SetSensitiveRequestHeaders` — `Authorization` loglara düşmesin
+/// 7. `Cors`
+/// 8. `Timeout` — asılı kalan istek bağlantıyı sonsuza dek tutmasın
+/// 9. `ConcurrencyLimit` — doygunlukta kuyruğa yığmak yerine reddet
+/// 10. `identity::resolve` — `Authorization`'ı **bir kez** çözer, sonucu
+///     request extension'ına koyar (bkz. `crate::middleware::identity`).
+///     Handler'ların/extractor'ların ikinci kez `authenticate` çağırmaması
+///     ve hız sınırlamanın (aşağıdaki katman) doğru `Subject`'i seçebilmesi
+///     için `RequestBodyLimit`'ten önce, `ConcurrencyLimit`'ten sonra
+///     çalışıyor — kabul edilmeyecek (doygunlukta reddedilen) bir istek için
+///     boşuna veritabanına gitmesin.
+/// 11. `ratelimit::enforce` — `identity`'den **sonra** (Subject'e ihtiyacı
 ///     var), `RequestBodyLimit`'ten **önce** (gövdeye hiç dokunmuyor, erken
 ///     reddetmek daha ucuz). `X-RateLimit-*`/`Retry-After` header'larını
 ///     buradan sonraki her yanıta (401/404 dahil) ekler.
-/// 11. `RequestBodyLimit` — en içte, gövde okunmadan hemen önce
+/// 12. `RequestBodyLimit` — en içte, gövde okunmadan hemen önce
+///
+/// Bunların **hiçbiri** `MatchedPath`'e ihtiyaç duymuyor — Faz 17'nin
+/// istek-metrikleri/yapılandırılmış-log middleware'i (`telemetry::observe`)
+/// bu yüzden burada değil, `routes::router()`'ın içinde `Router::route_layer`
+/// ile ekleniyor (bkz. `crate::telemetry` modül dokümanı "Neden `MatchedPath`
+/// bu modülde..." bölümü) — axum rota eşleştirmesini bu `ServiceBuilder`
+/// tamamen dışarıdan sardığı için burada asla göremez.
 pub fn build(state: AppState) -> Router {
+    // Faz 17: global `metrics` kaydını burada, ilk isteği hiç beklemeden
+    // kur — `main.rs` ve her entegrasyon testi (`tests/*.rs`, hepsi bu
+    // fonksiyonu çağırıyor) için tek ortak nokta burası. Kurulumu `GET
+    // /metrics`'in ilk çağrısına ertelemiş olsaydık, o ana kadar `identity`/
+    // `ratelimit::enforce`/`telemetry::observe`'un yazdığı sayaçlar
+    // `metrics` crate'inin varsayılan no-op recorder'ına düşüp sessizce
+    // kaybolurdu (bkz. `metrics::with_recorder`: kurulu bir global recorder
+    // yoksa her çağrı o an için no-op'a düşer — kalıcı bir "unutma" değil,
+    // ama o ana kadarki veri geri gelmez). `prometheus_handle()` süreç
+    // başına tam bir kez kurduğu için (`OnceLock`) burada birden fazla
+    // çağrılması (ör. testlerde her `build_router` çağrısı) zararsız.
+    telemetry::prometheus_handle();
+
     let cfg = state.config().server.clone();
     let request_id = HeaderName::from_static(crate::telemetry::REQUEST_ID_HEADER);
 
@@ -68,6 +96,27 @@ pub fn build(state: AppState) -> Router {
         )
         .layer(PropagateRequestIdLayer::new(request_id))
         .layer(CatchPanicLayer::new())
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("referrer-policy"),
+            HeaderValue::from_static(REFERRER_POLICY),
+        ))
+        // `if_not_present`, `overriding` değil: `/docs` kendi (gevşek) CSP'sini
+        // `crate::routes::router`'da, bu katmandan **önce** (yanıt daha içteyken,
+        // ServiceBuilder onion modelinde) kendi rotasına özel bir katmanla
+        // zaten koyuyor. Bu katman burada koşulsuz `overriding` olsaydı,
+        // dıştaki (daha geç çalışan, çünkü yanıt dıştan-içe değil içten-dışa
+        // akıyor) bu global katman `/docs`'un değerini ezip herkese aynı katı
+        // politikayı dayatırdı. `if_not_present` tam olarak "başka biri zaten
+        // karar verdiyse dokunma" anlamına geliyor — bkz. `crate::routes::router`
+        // dokümanındaki `/docs` bölümü.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(DEFAULT_CSP),
+        ))
         .layer(SetSensitiveRequestHeadersLayer::new([
             axum::http::header::AUTHORIZATION,
             axum::http::header::COOKIE,
@@ -86,6 +135,35 @@ pub fn build(state: AppState) -> Router {
 
     routes::router().layer(middleware).with_state(state)
 }
+
+/// `Referrer-Policy` seçimi: `no-referrer`.
+///
+/// Actos'ta okuma uçlarının çoğu kaynak-özel path segmentleri (`/posts/{id}`,
+/// `/actors/{username}`) ya da sorgu string'i (`/search?q=...`) taşıyor —
+/// `q` özellikle hassas olabilir (bir kullanıcının ne aradığı). `GET
+/// /docs`'un gömdüğü spec metninde de üçüncü taraf bağlantılar var (GitHub,
+/// scalar.com — bkz. `crate::routes::router`'daki `/docs` bölümü). Daha
+/// gevşek bir seçenek olan `strict-origin-when-cross-origin` cross-origin
+/// bir tıklamada en azından origin'i (şema+host) sızdırır; burada üçüncü
+/// tarafların "bu isteğin actos'tan geldiğini" bilmesinin hiçbir operasyonel
+/// faydası yok, `no-referrer` ile bu bilgi hiç gitmiyor.
+const REFERRER_POLICY: &str = "no-referrer";
+
+/// Varsayılan (API/JSON) `Content-Security-Policy`.
+///
+/// Bu servis `/docs` dışında **hiçbir yerde** HTML/JS üretmiyor — her yanıt
+/// ya `application/problem+json` ya da düz `application/json`. Bir CSP'nin
+/// koruduğu şey "bu sayfa çalışırken tarayıcı neyi yükleyip çalıştırabilir"
+/// sorusu; JSON'un kendisi hiçbir şey yüklemediği için burada mümkün olan en
+/// katı politika (`'none'`) güvenlik açısından bedelsiz — kırılacak hiçbir
+/// meşru davranış yok. Yine de header'ı koymamızın nedeni savunma
+/// derinliği: bir yanıt yanlışlıkla `Content-Type` sniffing ile HTML olarak
+/// yorumlanırsa (`X-Content-Type-Options: nosniff` bunu zaten engellemeli,
+/// ama iki bağımsız katman bir tekinden daha güvenli) ya da API'nin önüne
+/// ileride statik bir şey (ör. bir hata sayfası) eklenirse, varsayılan katı
+/// kalmaya devam eder — yalnızca `/docs` bilerek gevşetiliyor (bkz.
+/// `crate::routes::router`).
+const DEFAULT_CSP: &str = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
 /// CORS politikası.
 ///

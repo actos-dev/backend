@@ -53,9 +53,20 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
     // dokümantasyonu). `/docs/agent` özellikle bir ajanın keşif yolu — bu
     // yolun kotaya takılması döngüsel olurdu: kotasını öğrenmek için okuduğu
     // belgenin kendisi kotasından düşüyor.
+    // `/metrics` de aynı gerekçeyle muaf, artı bir tane daha (Faz 17):
+    // Prometheus'un kendisi bu uca **öngörülebilir, sabit aralıklı** bir
+    // scrape döngüsüyle istek atar (tipik 15s) — bu, yukarıdaki orkestratör
+    // health-check gerekçesiyle birebir aynı desen. Kimlik doğrulama da
+    // gerektirmiyor, bkz. `crate::routes::router` üzerindeki gerekçe.
     if matches!(
         path,
-        "/health" | "/health/ready" | "/version" | "/openapi.json" | "/docs" | "/docs/agent"
+        "/health"
+            | "/health/ready"
+            | "/version"
+            | "/openapi.json"
+            | "/docs"
+            | "/docs/agent"
+            | "/metrics"
     ) {
         return None;
     }
@@ -264,6 +275,17 @@ pub async fn enforce(State(state): State<AppState>, req: Request, next: Next) ->
         .rate_limiter()
         .check(scope, &subject, override_cfg.as_ref())
         .await;
+
+    // Faz 17 gözlemlenebilirlik: yalnızca **reddedilen** istekler sayılıyor
+    // ("isabet" = hız sınırının fiilen devreye girdiği an), izin verilenler
+    // değil — aksi hâlde bu sayaç `http_requests_total`'ın bir kopyası olur,
+    // operasyonel olarak anlamlı olan "ne kadar reddediliyoruz" sorusuna
+    // cevap vermez. `scope.as_key_str()` `&'static str` döndüğü için etiket
+    // maliyetsiz (bkz. `actos_core::ratelimit::Scope::as_key_str`).
+    if !decision.allowed {
+        metrics::counter!("rate_limit_rejections_total", "scope" => scope.as_key_str())
+            .increment(1);
+    }
 
     let mut response = if decision.allowed {
         next.run(req).await

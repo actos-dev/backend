@@ -76,6 +76,53 @@
 //! sonucu kaydedemedik diye **başarılı** bir isteği düşürmenin hiçbir anlamı
 //! yok; bir sonraki tekrarda yalnızca dedup koruması kaybolur, o kadar.
 //!
+//! ## Faz 17 incelemesi: bu fail-open dal gerçekten ulaşılabiliyor mu?
+//!
+//! PLAN.md'nin Faz 8 notu şunu soruyor: `POST /posts` `Scope::Post`
+//! kovasında ve hız sınırlama yazmalarda (bkz.
+//! `actos_core::ratelimit::RateLimiter::fallback_decision` — `fail_open`
+//! yalnızca `Scope::Read` için `true`) **fail-closed** — yani Redis'e hiç
+//! ulaşılamadığında istek `crates/actos-api/src/middleware/ratelimit.rs`
+//! içinde `429` ile reddediliyor, [`IdempotencyStore::begin`]'e hiç
+//! ulaşmıyor. Bu doğruysa yukarıdaki fail-open dallar ölü kod mu?
+//!
+//! **Ölçülen sonuç: hayır, tam ölü değil — ama ulaşılabilirliği tek bir dar
+//! yarış penceresine sıkışıyor ve o pencerede bile zarar sınırlı.**
+//! `crate::ratelimit::RateLimiter` ve bu modül **aynı** `deadpool_redis::
+//! Pool`'u (bkz. `main.rs`'te `redis.clone()`) ayrı ayrı kullanıyor — hız
+//! sınırlama kontrolü (`RateLimiter::check_with_clock`'taki `pool.get()` +
+//! Lua script çağrısı) ve idempotency kontrolü (`Self::begin`'deki
+//! `pool.get()` + `SET NX`) **aynı istek içinde art arda, iki ayrı Redis
+//! round-trip'i**. Redis, birinci round-trip başarılı olduktan (istek hız
+//! sınırını geçtikten) **sonra ama ikinci round-trip'ten önceki birkaç
+//! milisaniyelik pencerede** düşerse (ör. bir failover/restart tam o anda
+//! gerçekleşirse), hız sınırlama katmanı isteği zaten kabul etmiş olur ve
+//! [`Self::begin`] gerçekten Redis'e ulaşamayan dallara düşer.
+//!
+//! Bu, kaldırılması gereken bir "ölü kod" değil, çünkü:
+//! 1. **Gerçekten tetiklenebilir** — yukarıdaki yarışın kendisi nadir ama
+//!    olanaksız değil; kaldırmak bu ender durumda `begin`'i bir hataya
+//!    (`Err`) çevirmek anlamına gelir, bu da `POST /posts`'un çağrı zinciri
+//!    boyunca yeni bir hata kolu eklemesini gerektirirdi — Redis'in yarım
+//!    saniyelik bir kesintisi için orantısız bir karmaşıklık.
+//! 2. **Zararı kategorik olarak farklı** — modülün başındaki gerekçeyle
+//!    aynı: bu yarışa yakalanan tek bir istek en kötü ihtimalle bir dedup
+//!    koruması kaybeder (aynı isteği tekrar eden bir ajan iki post
+//!    oluşturabilir, `DELETE /posts/{id}` ile geri alınabilir). Hız
+//!    sınırlamanın fail-open'ının önlediği şey (sınırsız yazma/spam) ile
+//!    aynı şey **değil** — o yüzden "yazmaları fail-open yapmak kabul
+//!    edilebilir değil" ilkesi burada ihlal edilmiyor: hız sınırlama zaten
+//!    kendi (fail-closed) kontrolünü bağımsız olarak uyguladı, bu modülün
+//!    fail-open'ı yalnızca *ikinci, isteğe bağlı bir güvenlik ağının*
+//!    kaybı, birincil savunmanın (spam/DoS önleme) değil.
+//!
+//! **Karar: dallar korunuyor, kaldırılmıyor.** Faz 6/8'in "yazma fail-open
+//! olamaz" ilkesi hız sınırlama katmanı için geçerliğini koruyor (orada
+//! hiçbir şey değişmedi); bu modülün fail-open'ı ondan bağımsız, isteğe
+//! bağlı bir kolaylık katmanı için ayrı ve zaten belgelenmiş bir karardı —
+//! Faz 17'nin katkısı yalnızca bu dalın *tam olarak ne zaman* tetiklendiğini
+//! netleştirmek oldu.
+//!
 //! ## TTL: 24 saat, `begin`'de başlar
 //!
 //! `SET ... NX EX 86400` yer tutucuyu koyarken TTL'i başlatır.

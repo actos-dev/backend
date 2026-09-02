@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use actos_api::{app, jobs, state};
+use actos_api::{app, jobs, state, telemetry};
 use actos_core::{
     Config, Storage, cache, cursor::CursorCodec, db, id::IdCodec, idempotency::IdempotencyStore,
     ratelimit::RateLimiter,
@@ -97,6 +97,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın
     // dışında kalıyor: `/posts/` ile `/posts` aynı rotaya düşsün.
     let service = NormalizePathLayer::trim_trailing_slash().layer(app::build(state));
+
+    // `app::build` global `metrics` recorder'ını zaten kurdu (bkz. o
+    // fonksiyonun başındaki yorum); burada yalnızca bakım görevini
+    // başlatıyoruz — bkz. `telemetry::spawn_upkeep` dokümanı.
+    telemetry::spawn_upkeep(telemetry::prometheus_handle());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("actos-api dinlemede: http://{addr}");

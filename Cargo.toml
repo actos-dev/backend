@@ -32,6 +32,10 @@ tower-http = { version = "0.7.0", features = [
     "request-id",
     "catch-panic",
     "sensitive-headers",
+    # Güvenlik header'ları (Faz 17): `X-Content-Type-Options`,
+    # `Referrer-Policy`, `Content-Security-Policy` — bkz. `crates/actos-api/
+    # src/app.rs`.
+    "set-header",
 ] }
 
 serde = { version = "1.0.229", features = ["derive"] }
@@ -93,6 +97,27 @@ ammonia = "4.1.4"
 
 redis = { version = "1.6.0", features = ["tokio-rustls-comp"] }
 deadpool-redis = "0.23.1"
+
+# --- Gözlemlenebilirlik (Faz 17: `GET /metrics`) ---
+# `metrics`: sadece bir facade (ör. `tracing`'in metrik karşılığı) —
+# `actos-core`'un HTTP/Prometheus'u bilmesine gerek kalmadan `counter!`/
+# `histogram!`/`gauge!` makrolarını her yerden çağırabilmemizi sağlıyor.
+# `metrics-exporter-prometheus`: `metrics`'in kaydını (recorder) Prometheus
+# metin formatına çeviren tek somut backend — `axum-prometheus` yerine bunu
+# seçtik çünkü `axum-prometheus` yalnızca HTTP istek sayısı/süresini
+# otomatikleştiriyor, DB pool durumu ve rate-limit isabet sayısı gibi
+# özel metrikleri yine ham `metrics` makrolarıyla eklemek gerekiyordu — iki
+# bağımlılık yerine tek bir alt katman (`metrics`) üstüne kendi ince
+# middleware'imizi yazmak daha az soyutlama, daha fazla kontrol demek.
+# `default-features = false`: varsayılan `http-listener`/`push-gateway`
+# feature'ları kendi hyper+rustls tabanlı HTTP sunucusunu getiriyor —
+# `/metrics`'i zaten kendi axum route'umuzdan sunacağız (bkz.
+# `crates/actos-api/src/routes/mod.rs`), o yığına ihtiyacımız yok. Kalan
+# yüzey yalnızca `PrometheusBuilder::install_recorder()` +
+# `PrometheusHandle::render()` — gereksiz bağımlılık/derleme süresi/saldırı
+# yüzeyi eklemiyor.
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 
 # --- API dokümantasyonu (Faz 16) ---
 # `utoipa-axum`'ın 0.1 sürümü axum `^0.7`'ye bağlı — bizim axum 0.8.9 ile
