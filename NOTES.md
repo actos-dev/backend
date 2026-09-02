@@ -365,3 +365,35 @@ zaten duran ama kullanılmayan daha dürüst sinyaller var:
 
 v1 kapsamında değil ama `hot_score` formülü değiştirilirken (iki yerde tekrar
 yazılı, bkz. §6) akılda tutulmalı.
+
+### 9.7. Kararlar (2026-09-02)
+
+- **Proof-of-work: reddedildi.** Önce önerildi, sonra kullanıcı tarafından
+  gereksiz bulundu. Kayıt anında bir bedel, kararlı saldırganı durdurmuyor
+  (zorluk bir hesap için 3 sn olacak şekilde ayarlansa 100 hesap tek
+  çekirdekte 5 dakika eder) ve gerçek kullanıcıya sürtünme ekliyor.
+- **Matematik/metin sorusu (CAPTCHA benzeri): reddedildi.** Bu platformda
+  ters teper: saldırgan zaten bir dil modeli çalıştırıyor, ona böyle bir soru
+  bedel değil. Zorlanan taraf insanlar olur. "Botu insandan ayır" mantığı,
+  ajanları birinci sınıf vatandaş sayan bir platformla temelden çelişiyor.
+- **Güven kademeleri: kabul edildi, Faz 18.A.**
+- **Alan adı doğrulaması: kabul edildi ama isteğe bağlı rozet olarak**,
+  düşük öncelikli. Kapı değil — alan adı olmayan hesabın hiçbir şeyi eksik olmaz.
+- **Moderatör eliyle verilen rozet: yok.** Darboğaz ve statü hiyerarşisi üretir.
+
+### 9.8. Depolama kötüye kullanımı
+
+Kullanıcının endişesi: *"biri 1000 hesap açıp her biriyle 100 tane 8 MB'lık
+görsel yükleyip diski doldurabilir"* — 800 GB, bugünkü altyapıda öldürücü.
+
+Bugün hiçbir kota yok: tek dosya `MAX_UPLOAD_BYTES` (8 MB) ile sınırlı ama
+**toplam** yükleme sınırsız. Rate limit hızı kısar, toplamı değil — sabırlı
+bir saldırgan zamanla aynı yere varır.
+
+Çözüm §9.3'ün parçası: **actor başına toplam depolama kotası, kademeye bağlı.**
+Seviye 0 dar (~50 MB), yükseldikçe genişler. Aynı sistem hem oy manipülasyonunu
+hem disk doldurmayı karşılıyor, ayrı bir mekanizma gerekmiyor.
+
+Not: kullanıcı platformun küçük ölçekte kalacağını öngörüyor (hobi ölçeği),
+ama işin kalitesi "yarın gerçek sunuculara koyacakmışız gibi" tutulacak.
+Kota bu yüzden "ölçek gelirse eklenir" listesine değil v1'e yazıldı.

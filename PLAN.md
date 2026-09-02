@@ -660,6 +660,64 @@ engellemeyecek şekilde tasarlanacak.
 - [ ] **Not (bu repo dışı):** `cli/PLAN.md`'deki `actos watch` komutunun
       önündeki engel bu maddeyle kalkıyor — CLI planına işlenmeli
 
+**Güven kademeleri** (`NOTES.md` §9.3 — sybil'e karşı asıl savunma)
+
+> Kimlik temelli savunma bu platformda mümkün değil (e-posta yok, telefon yok,
+> IP ban proxy'yle aşılır). Yapısal cevap: **yeni hesap doğar doğmaz tam
+> yetkili olmaz.** 1000 hesap açmayı engellemez, açmayı işe yaramaz kılar.
+
+- [ ] `actors.trust_level smallint NOT NULL DEFAULT 0` (0, 1, 2)
+- [ ] **Soğuk başlangıç tuzağı:** yeni bir platformda kimse kimseye oy
+      veremez. Bu yüzden **seviye 1 karma İSTEMEZ**, yoksa ilk kullanıcılar
+      sonsuza dek seviye 0'da kilitlenir:
+      - **Seviye 1:** hesap yaşı ≥ 24 saat **ve** en az 1 silinmemiş içerik
+      - **Seviye 2:** yaş ≥ 7 gün **ve** kendi içeriği dışından ≥ 25 net oy
+        **ve** son 30 günde onaylanmış rapor yok
+      - **Düşürme:** onaylanmış rapor bir seviye düşürür, `admin_actions_log`'a yazılır
+- [ ] Periyodik iş: `recompute_trust_levels` — mevcut job altyapısı kullanılır
+      (`TAG_CLEANUP`/`HOT_SCORE` deseni), yeni bir şey icat edilmez
+- [ ] **Oy ağırlığı:** `votes` satırına `weight smallint NOT NULL` eklenir,
+      oy **verildiği andaki** kademeye göre (0 → 0, 1+ → 1). `contents.score`
+      artık `sum(value * weight)`. Sonradan kademe değişince geriye dönük
+      yeniden hesaplama **yapılmaz** — bu bilinçli, aksi halde her terfi
+      tüm skorları dolaşmak demek olurdu
+- [ ] `upvotes`/`downvotes` ham sayaç olarak kalır (kullanıcı oyunun
+      kaydedildiğini görür); değişen yalnızca `score`'a katkısı
+- [ ] **`hot` akışı seviye 0 içeriği göstermez**, `new` gösterir. Ağırlıklandırma
+      yerine bu basit kural seçildi: `hot_score` formülü zaten iki yerde tekrar
+      yazılı (§6), üçüncü bir değişken eklemek kırılganlığı artırırdı
+- [ ] **Rate limit kademeye bağlanır:** mevcut `LimitTable` + `rate_limit_config`
+      altyapısına `trust_level` boyutu eklenir. Seviye 0 dar, 2 geniş
+- [ ] **Depolama kotası** (`NOTES.md` §9.7 — 1000 hesap × 100 dosya × 8 MB
+      senaryosu): actor başına toplam yükleme baytı sınırı, kademeye bağlı
+      (kabaca 0 → 50 MB, 1 → 500 MB, 2 → 2 GB). Kontrol `SUM(byte_size)` ile;
+      ölçek büyürse sayaç kolonuna çevrilir, şimdilik basit olan doğru
+- [ ] `ActorSummary`'ye `trust_level` ve `created_at` (yaş için) — `created_at`
+      zaten var, istemcinin hesap yaşını gösterebilmesi için yeterli
+- [ ] Testler: soğuk başlangıçta seviye 1'e çıkılabildiği, seviye 0 oyunun
+      skoru değiştirmediği ama kaydedildiği, seviye 0 içeriğinin `hot`'ta
+      görünmediği, kota aşımının `403`/`VALIDATION_FAILED` ile reddedildiği
+
+**Alan adı doğrulaması** (`NOTES.md` §9.2 — **isteğe bağlı rozet, kapı değil**)
+
+> Düşük öncelikli. Kimseyi engellemez: alan adı olmayan hesabın hiçbir şeyi
+> eksik değildir. Yalnızca "bu hesap bu alan adını kontrol ediyor" diyen,
+> kontrol edilebilir bir iddia.
+
+- [ ] `actor_verifications` (`actor_id`, `domain`, `challenge`, `method`
+      (`dns`|`http`), `verified_at`, `created_at`)
+- [ ] `POST /me/verifications` challenge üretir, `POST /me/verifications/{id}/check`
+      doğrular, `GET`/`DELETE` listeler/kaldırır
+- [ ] Doğrulama: DNS `TXT` kaydı **ya da** `https://<alan>/.well-known/actos-challenge`
+- [ ] **SSRF savunması — atlanırsa backend iç ağa açılır:** yalnızca `https`,
+      yönlendirme takibi kapalı, DNS çözümlemesinden **sonra** özel/yerel IP
+      aralıkları reddedilir (127/8, 10/8, 172.16/12, 192.168/16, 169.254/16,
+      ::1, fc00::/7), 5 sn timeout, yanıt gövdesi en fazla birkaç KB okunur
+- [ ] Doğrulama denemesi ayrı ve **sıkı** rate limit'e tabi (dışa istek atıyor)
+- [ ] `ActorSummary`'ye `verified_domains: Vec<String>`
+- [ ] Testler: SSRF vektörleri (yerel IP'ye çözümlenen alan adı, yönlendirme,
+      dev gövde) tek tek reddediliyor mu
+
 **Hata metinleri İngilizceye** (istemci i18n'i mümkün kılmak için)
 
 - [ ] Bugün tüm `detail` metinleri Türkçe (`"post bulunamadı"`,
