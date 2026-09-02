@@ -763,6 +763,14 @@ engellemeyecek şekilde tasarlanacak.
 - [ ] Auth matrisi testi: her endpoint × (anon / normal / sahip / mod / admin / banlı)
       — **18.A'da eklenen uçlar dahil**
 - [ ] Rate limit testleri
+- [ ] **`record_key_use_ve_drain_key_uses` izolasyon hatası** (`crates/actos-core/
+      tests/ratelimit.rs:508`). Test `drain_key_uses()` sonucunun tam 2 olmasını
+      bekliyor, yani global `KEY_TOUCH_HASH` anahtarının tek sahibi olduğunu
+      varsayıyor. Aynı Redis'i kullanan bir dev sunucusu ayaktayken (`cargo run`)
+      test **başarısız oluyor** — 2026-09-03'te doğrulandı: tek başına geçiyor,
+      tam koşuda düşüyor. Kod hatası değil, test izolasyon hatası.
+      Düzeltme: test kendi anahtar alanını kullanmalı ya da ayrı bir Redis
+      DB indeksine bağlanmalı
 - [ ] `cargo llvm-cov` ile örtü raporu; kritik yollarda hedef %80+
 - [ ] Commit
 
