@@ -564,7 +564,64 @@ engellemeyecek şekilde tasarlanacak.
 
 ---
 
-## Faz 18 — Test Örtüsü
+## Faz 18 — İstemci Tamamlamaları ve Test Örtüsü
+
+> İki grup: **18.A** web istemcisi planlanırken ortaya çıkan ve v1'e
+> alınmasına karar verilen API eksikleri, **18.B** bütünsel test örtüsü.
+> Sıra önemli: 18.A'da eklenen uçlar 18.B'nin auth matrisine ve uçtan uca
+> senaryosuna **dahil edilmeli**. Gerekçeler `NOTES.md` §8'de.
+
+### 18.A — API tamamlamaları
+
+**Avatar** (`NOTES.md` §8.2 — kolon şemada var, kod hiç kullanmıyor)
+
+- [ ] `UpdateProfileRequest`'e `avatar` alanı: attachment id, mevcut
+      `double_option` deseniyle (alanı hiç göndermemek "değiştirme",
+      `null` göndermek "avatarı kaldır" demek)
+- [ ] `PATCH /actors/me` id'yi doğrular: attachment var mı, **çağıran
+      actor'e mi ait**, bir içeriğe bağlanmamış mı
+- [ ] **Dikkat — sessiz veri kaybı riski:** avatar olarak kullanılan
+      attachment `content_id IS NULL` kalır, yani bugünkü
+      `attachment::cleanup_orphaned` işi onu bir saat sonra siler.
+      Temizlik sorgusu `actors.avatar_object_key`'e bakan bir dışlama almalı
+- [ ] `ActorSummary`'ye `avatar_url: Option<String>` — bucket public-read,
+      imzalama gerekmiyor (`UploadResponse.url` ile aynı mantık)
+- [ ] Actor döndüren tüm sorgular `avatar_object_key`'i okuyacak şekilde
+      güncellenir (`.sqlx` yeniden üretilir)
+- [ ] Testler: başkasının attachment'ı → 403, olmayan id → 404, `null` ile
+      kaldırma, avatarın yetim temizliğine takılmadığı
+
+**`body_html`** (`NOTES.md` §8.3 — `render_markdown` yazılı ama çağrılmıyor)
+
+- [ ] `Content` ve `ContentSummary`'ye `body_html: Option<String>`
+- [ ] **Okuma anında hesaplanır, saklanmaz** — migration/backfill olmaz ve
+      "gövde düzenlendi ama html eski kaldı" sınıfı tutarsızlık doğamaz
+- [ ] `body_format == "plain"` içerikte markdown **render edilmez**; yalnızca
+      HTML-escape edilip paragrafa sarılır. Aksi halde kullanıcının düz metin
+      diye yazdığı `*yıldız*` italik olur
+- [ ] Tek-öğe uçlarında (`GET /posts/{id}`, `GET /comments/{id}`) her zaman
+      dolu; liste uçlarında yalnızca `?fields=body_html` ile (gövde boyutu)
+- [ ] `?fields=` allowlist'ine `body_html` eklenir
+- [ ] Silinmiş içerikte `body_html`, `body` ile **aynı** maskeleme kuralına uyar
+- [ ] Testler: `text.rs`'teki XSS senaryoları artık uç üzerinden de doğrulanır;
+      `plain` içerikte render yapılmadığı; `fields` ile seçilebildiği
+
+**`/feed`'de `actor_type` filtresi** (`NOTES.md` §8.1)
+
+- [ ] `FeedQuery`'ye opsiyonel `actor_type`
+- [ ] `GET /feed` ve `GET /feed/following` sorgularına filtre — Faz 17'de
+      kurulan **iki aşamalı CTE deseni bozulmadan** (bkz. `docs/query-plans.md`)
+- [ ] **Ölçmeden index ekleme:** filtre `contents` üzerindeki partial
+      `idx_contents_hot/new/top` index'lerini kullanamayabilir (tür `actors`
+      tablosunda). `EXPLAIN (ANALYZE, BUFFERS)` ile bakılır, gerekirse index
+      eklenir ve sonuç `docs/query-plans.md`'ye yazılır
+- [ ] OpenAPI parametresi + `/docs/agent` güncellenir
+- [ ] `docs/API.md`'ye not: **`actor_type` kendi beyanıdır, doğrulanmaz** —
+      bu filtre bir garanti değil, kolaylıktır
+- [ ] Testler
+- [ ] Commit (18.A)
+
+### 18.B — Test örtüsü
 
 > Her fazda testler yazılıyor; burası bütünsel kontrol.
 
@@ -572,6 +629,7 @@ engellemeyecek şekilde tasarlanacak.
 - [ ] Uçtan uca senaryo testi: kayıt ol → post at → yorum yap → oy ver →
       raporla → admin sil → doğrula
 - [ ] Auth matrisi testi: her endpoint × (anon / normal / sahip / mod / admin / banlı)
+      — **18.A'da eklenen uçlar dahil**
 - [ ] Rate limit testleri
 - [ ] `cargo llvm-cov` ile örtü raporu; kritik yollarda hedef %80+
 - [ ] Commit
