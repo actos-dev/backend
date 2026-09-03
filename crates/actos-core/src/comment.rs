@@ -31,7 +31,7 @@
 //! [`create_comment`] yeni yorumun **tüm atalarında** (kök post dahil)
 //! `comment_count`'u atomik olarak artırır. [`delete_comment`] ise
 //! azaltmaz. Bu bilinçli: silinen bir yorum ağaçtan kaldırılmıyor, çocukları
-//! yetim kalmasın diye yerinde duruyor ve istemciye `[silindi]` gövdesiyle
+//! yetim kalmasın diye yerinde duruyor ve istemciye `[deleted]` gövdesiyle
 //! görünmeye devam ediyor (bkz. `actos_types::content` modül
 //! dokümantasyonu). Sayaç "bu ağaçta kaç düğüm var" sorusunu yanıtlıyor;
 //! azaltsaydık istemcinin çizdiği ağaçtaki düğüm sayısı ile başlıktaki sayı
@@ -88,7 +88,7 @@ impl CommentSort {
             None | Some("new") => Ok(Self::New),
             Some("top") => Ok(Self::Top),
             Some(other) => Err(Error::Validation(format!(
-                "geçersiz sort değeri: \"{other}\" (beklenen: new, top)"
+                "invalid sort value: \"{other}\" (expected: new, top)"
             ))),
         }
     }
@@ -280,7 +280,7 @@ pub async fn create_comment(
 ) -> Result<Content> {
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     if body.is_empty() {
-        return Err(Error::Validation("yorum gövdesi boş olamaz".to_owned()));
+        return Err(Error::Validation("comment body cannot be empty".to_owned()));
     }
 
     let mut tx = pool.begin().await?;
@@ -289,7 +289,7 @@ pub async fn create_comment(
 
     if parent.depth + 1 > MAX_COMMENT_DEPTH {
         return Err(Error::Validation(format!(
-            "azami yorum derinliği ({MAX_COMMENT_DEPTH}) aşılıyor"
+            "exceeds the maximum comment depth ({MAX_COMMENT_DEPTH})"
         )));
     }
 
@@ -472,7 +472,7 @@ async fn increment_ancestor_counts(tx: &mut PgConnection, content_id: i64) -> Re
 /// [`crate::content::get_post`]'un aksine **silinmiş yorum `410` DÖNMEZ**,
 /// `deleted_at` dolu olarak döner. Gerekçe: silinen bir yorumun çocukları
 /// yaşamaya devam ediyor ve breadcrumb/ağaç bağlamlarında o düğümün
-/// `[silindi]` olarak görünmesi gerekiyor (bkz. modül dokümantasyonu). Bu
+/// `[deleted]` olarak görünmesi gerekiyor (bkz. modül dokümantasyonu). Bu
 /// fonksiyonu çağıran HTTP katmanı gövdeyi maskelemekten sorumlu —
 /// `actos-api`'deki `content_summary` bunu `deleted_at`'e bakarak zaten
 /// yapıyor, maskeleme çağıranın unutabileceği bir adım değil.
@@ -649,7 +649,7 @@ struct TreeRoot {
 /// çekilir ("daha fazla yanıt yükle").
 ///
 /// **Silinmiş yorumlar listeden düşürülmez**, `deleted_at` dolu olarak
-/// döner ve HTTP katmanında `[silindi]` olarak maskelenir — çocukları
+/// döner ve HTTP katmanında `[deleted]` olarak maskelenir — çocukları
 /// yaşamaya devam ettiği için düğümü ağaçtan çıkarmak alt ağacı yetim
 /// bırakırdı.
 ///
@@ -1017,7 +1017,7 @@ fn build_forest(roots: Vec<CommentRow>, descendants: Vec<CommentRow>) -> Vec<Com
 pub async fn update_comment(pool: &PgPool, id: i64, actor_id: i64, body: &str) -> Result<Content> {
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     if body.is_empty() {
-        return Err(Error::Validation("yorum gövdesi boş olamaz".to_owned()));
+        return Err(Error::Validation("comment body cannot be empty".to_owned()));
     }
 
     let mut tx = pool.begin().await?;
@@ -1130,7 +1130,7 @@ pub async fn delete_comment(
 ///
 /// [`crate::content::list_posts_by_actor`] ile aynı desen ve aynı karar:
 /// **silinmiş yorumlar bu listede görünmez.** Ağaç bağlamında silinmiş bir
-/// düğüm `[silindi]` olarak duruyor çünkü çocuklarını taşıyor; bir actor'ün
+/// düğüm `[deleted]` olarak duruyor çünkü çocuklarını taşıyor; bir actor'ün
 /// "yazdıkları" listesinde ise taşıyacağı bir şey yok, orada silinmiş bir
 /// satır yalnızca gürültü olurdu.
 ///

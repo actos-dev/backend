@@ -445,7 +445,7 @@ pub async fn update_profile(
 
     let row = row.ok_or_else(|| {
         Error::Internal(format!(
-            "profil güncellenemedi: actor {actor_id} bulunamadı (authenticate() sonrası olmamalı)"
+            "could not update profile: actor {actor_id} not found (should not happen after authenticate())"
         ))
     })?;
 
@@ -515,7 +515,7 @@ where
 ///
 /// Username **serbest bırakılmaz** — `actors` satırı silinmez, yalnızca
 /// işaretlenir (bkz. `migrations/0002_actors.up.sql`). İçeriklerin
-/// `[silindi]` görünmesi bu fonksiyonun işi değil (okuma tarafı, Faz 8).
+/// `[deleted]` görünmesi bu fonksiyonun işi değil (okuma tarafı, Faz 8).
 ///
 /// # Errors
 /// Kod yanlışsa/tükenmişse [`Error::InvalidKey`]; veritabanı hatası

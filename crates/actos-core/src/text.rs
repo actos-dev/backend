@@ -122,41 +122,41 @@ pub fn normalize_text(raw: &str) -> String {
 
 /// Metin doğrulama/normalizasyonu sırasında oluşan hatalar.
 ///
-/// Mesajlar kullanıcıya doğrudan gösterilir: Türkçe ve eyleme
+/// Mesajlar kullanıcıya doğrudan gösterilir: İngilizce ve eyleme
 /// dönüştürülebilir olacak şekilde yazıldı ("geçersiz" değil, hangi kuralın
 /// ihlal edildiği).
 #[derive(Debug, thiserror::Error)]
 pub enum TextError {
     #[error(
-        "kullanıcı adı {USERNAME_MIN}-{USERNAME_MAX} karakter olmalı ve yalnızca küçük harf, \
-         rakam ve alt çizgi (_) içerebilir"
+        "username must be {USERNAME_MIN}-{USERNAME_MAX} characters and may only contain \
+         lowercase letters, digits, and underscore (_)"
     )]
     InvalidUsername,
 
-    #[error("\"{0}\" rezerve edilmiş bir kullanıcı adı, başka bir tane seç")]
+    #[error("\"{0}\" is a reserved username, pick another one")]
     ReservedUsername(String),
 
     #[error(
-        "etiket adı 1-{TAG_NAME_MAX} karakter olmalı, küçük harf veya rakamla başlamalı ve \
-         yalnızca küçük harf, rakam, tire (-) içerebilir"
+        "tag name must be 1-{TAG_NAME_MAX} characters, must start with a lowercase letter or \
+         digit, and may only contain lowercase letters, digits, and hyphen (-)"
     )]
     InvalidTagName,
 
-    #[error("başlık en fazla {TITLE_MAX} karakter olabilir (gönderilen: {actual} karakter)")]
+    #[error("title can be at most {TITLE_MAX} characters (received: {actual} characters)")]
     TitleTooLong { actual: usize },
 
-    #[error("gövde boş olamaz")]
+    #[error("body cannot be empty")]
     EmptyBody,
 
-    #[error("gövde en fazla {BODY_MAX} karakter olabilir (gönderilen: {actual} karakter)")]
+    #[error("body can be at most {BODY_MAX} characters (received: {actual} characters)")]
     BodyTooLong { actual: usize },
 
     #[error(
-        "görünen ad en fazla {DISPLAY_NAME_MAX} karakter olabilir (gönderilen: {actual} karakter)"
+        "display name can be at most {DISPLAY_NAME_MAX} characters (received: {actual} characters)"
     )]
     DisplayNameTooLong { actual: usize },
 
-    #[error("biyografi en fazla {BIO_MAX} karakter olabilir (gönderilen: {actual} karakter)")]
+    #[error("bio can be at most {BIO_MAX} characters (received: {actual} characters)")]
     BioTooLong { actual: usize },
 }
 

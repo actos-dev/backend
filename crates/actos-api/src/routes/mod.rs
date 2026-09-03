@@ -251,5 +251,5 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 /// (özellikle ajanların) her hatayı tek bir şemayla ayrıştırabilmesi için
 /// burada da `application/problem+json` üretiyoruz.
 async fn not_found(headers: HeaderMap) -> ApiError {
-    ApiError::new(actos_core::Error::NotFound("rota")).with_request_id(&headers)
+    ApiError::new(actos_core::Error::NotFound("route")).with_request_id(&headers)
 }

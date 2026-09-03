@@ -65,7 +65,7 @@ fn parse_unread(raw: Option<String>, headers: &HeaderMap) -> Result<bool, ApiErr
     match raw {
         None => Ok(false),
         Some(s) => s.trim().parse::<bool>().map_err(|_| {
-            ApiError::new(Error::Validation(format!("geçersiz unread: \"{s}\"")))
+            ApiError::new(Error::Validation(format!("invalid unread: \"{s}\"")))
                 .with_request_id(headers)
         }),
     }
@@ -88,7 +88,7 @@ fn encode_target_id(
         "content" => Ok(id_codec.encode::<ContentIdKind>(target_id)?),
         "actor" => Ok(id_codec.encode::<ActorIdKind>(target_id)?),
         other => Err(Error::Internal(format!(
-            "notifications: tanınmayan target_type: \"{other}\""
+            "notifications: unrecognized target_type: \"{other}\""
         ))),
     }
 }

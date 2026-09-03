@@ -69,7 +69,7 @@ fn parse_target_type(raw: &str) -> Result<ReportTargetType, Error> {
         "post" => Ok(ReportTargetType::Post),
         "comment" => Ok(ReportTargetType::Comment),
         other => Err(Error::Validation(format!(
-            "geçersiz target_type: \"{other}\" (beklenen: post, comment)"
+            "invalid target_type: \"{other}\" (expected: post, comment)"
         ))),
     }
 }
@@ -350,9 +350,7 @@ async fn create_ban(
             chrono::DateTime::parse_from_rfc3339(raw)
                 .map(|t| t.with_timezone(&chrono::Utc))
                 .map_err(|_| {
-                    Error::Validation(format!(
-                        "geçersiz expires_at: \"{raw}\" (RFC 3339 bekleniyor)"
-                    ))
+                    Error::Validation(format!("invalid expires_at: \"{raw}\" (expected RFC 3339)"))
                 })
         })
         .transpose()
@@ -448,7 +446,7 @@ async fn set_role(
         Some("moderator") => Some(AdminRole::Moderator),
         Some(other) => {
             return Err(ApiError::new(Error::Validation(format!(
-                "geçersiz role: \"{other}\" (beklenen: admin, moderator veya null)"
+                "invalid role: \"{other}\" (expected: admin, moderator, or null)"
             )))
             .with_request_id(&headers));
         }

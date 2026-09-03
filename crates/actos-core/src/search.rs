@@ -191,7 +191,7 @@
 //! `contents.deleted_at IS NULL` ve `actors.deleted_at IS NULL` filtreleri
 //! her iki fonksiyonda da var — `crate::content::list_posts_by_actor` ile
 //! aynı karar (bkz. o fonksiyonun dokümantasyonu): bu bir *liste* ucu,
-//! silinmiş bir öğeyi satır içinde `[silindi]` göstermek bu görevin
+//! silinmiş bir öğeyi satır içinde `[deleted]` göstermek bu görevin
 //! kapsamında değil, PLAN.md yalnızca "arama sonuçlarında silinmiş içerik
 //! çıkmasın" diyor.
 
@@ -242,10 +242,10 @@ impl SearchTarget {
             Some("comment") => Ok(Self::Comment),
             Some("actor") => Ok(Self::Actor),
             None => Err(Error::Validation(
-                "type parametresi zorunlu (beklenen: post, comment, actor)".to_owned(),
+                "the type parameter is required (expected: post, comment, actor)".to_owned(),
             )),
             Some(other) => Err(Error::Validation(format!(
-                "geçersiz type değeri: \"{other}\" (beklenen: post, comment, actor)"
+                "invalid type value: \"{other}\" (expected: post, comment, actor)"
             ))),
         }
     }

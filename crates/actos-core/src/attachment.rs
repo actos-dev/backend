@@ -169,7 +169,7 @@ pub async fn create_attachment(
     // saklanan şey bu, bütünlük doğrulaması da bunun üzerinden anlamlı.
     let checksum = sha256_hex(&islenmis.data);
     let byte_size = i64::try_from(islenmis.data.len())
-        .map_err(|_| Error::Internal("dosya boyutu i64'e sığmadı".to_owned()))?;
+        .map_err(|_| Error::Internal("file size does not fit in i64".to_owned()))?;
 
     let mevcut_kullanim = total_storage_bytes(pool, actor_id).await?;
     // Taşma savunması: `mevcut_kullanim` ve `byte_size` ayrı ayrı makul
@@ -179,9 +179,9 @@ pub async fn create_attachment(
     // asla sessizce izin vermez.
     if mevcut_kullanim.saturating_add(byte_size) > quota_bytes {
         return Err(Error::Validation(format!(
-            "depolama kotası aşıldı: şu an {mevcut_kullanim} bayt kullanıyorsun, \
-             kademe sınırın {quota_bytes} bayt, bu yükleme {byte_size} bayt daha \
-             ekleyecekti — önce bazı eklerini silmen gerekebilir"
+            "storage quota exceeded: you are currently using {mevcut_kullanim} bytes, \
+             your tier limit is {quota_bytes} bytes, and this upload would add {byte_size} \
+             more bytes — you may need to delete some of your attachments first"
         )));
     }
 
@@ -340,7 +340,9 @@ pub async fn attach_to_content(
     let beklenen = u64::try_from(attachment_ids.len()).unwrap_or(u64::MAX);
     if sonuc.rows_affected() != beklenen {
         return Err(Error::Validation(
-            "eklerden biri bulunamadı, sana ait değil ya da zaten bir içeriğe bağlı".to_owned(),
+            "one of the attachments was not found, does not belong to you, or is already \
+             attached to a content item"
+                .to_owned(),
         ));
     }
 
@@ -398,7 +400,9 @@ pub async fn resolve_as_avatar(
 
     if kayit.content_id.is_some() {
         return Err(Error::Conflict(
-            "bu ek zaten bir içeriğe bağlı, avatar olarak kullanılamaz".to_owned(),
+            "this attachment is already attached to a content item and cannot be used as an \
+             avatar"
+                .to_owned(),
         ));
     }
 

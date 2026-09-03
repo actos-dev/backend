@@ -95,7 +95,7 @@ fn parse_depth(raw: Option<String>, headers: &HeaderMap) -> Result<i32, ApiError
     match raw {
         None => Ok(core_comment::DEFAULT_TREE_DEPTH),
         Some(s) => s.trim().parse::<i32>().map_err(|_| {
-            ApiError::new(Error::Validation(format!("geçersiz depth: \"{s}\"")))
+            ApiError::new(Error::Validation(format!("invalid depth: \"{s}\"")))
                 .with_request_id(headers)
         }),
     }
@@ -113,7 +113,7 @@ fn parse_body_html(raw: Option<String>, headers: &HeaderMap) -> Result<bool, Api
     match raw {
         None => Ok(false),
         Some(s) => s.trim().parse::<bool>().map_err(|_| {
-            ApiError::new(Error::Validation(format!("geçersiz body_html: \"{s}\"")))
+            ApiError::new(Error::Validation(format!("invalid body_html: \"{s}\"")))
                 .with_request_id(headers)
         }),
     }
@@ -354,7 +354,7 @@ async fn list_comments(
 
 /// `GET /comments/{id}` → `200` (yorum + ata zinciri), `404`.
 ///
-/// **Silinmiş yorum `410` DÖNMEZ**, `deleted: true` ve `[silindi]` gövdesi
+/// **Silinmiş yorum `410` DÖNMEZ**, `deleted: true` ve `[deleted]` gövdesi
 /// ile `200` döner — `GET /posts/{id}`'in aksine. Gerekçe
 /// `actos_core::comment::get_comment` dokümanında: silinen yorumun
 /// çocukları yaşamaya devam ediyor, dolayısıyla düğümün kendisi de
@@ -364,7 +364,7 @@ async fn list_comments(
     path = "/comments/{id}",
     tag = "comments",
     summary = "Tekil bir yorumu, ata zinciriyle birlikte oku",
-    description = "Silinmiş bir yorum `410` DÖNMEZ, `deleted: true` ve `[silindi]` gövdesiyle `200` döner — \
+    description = "Silinmiş bir yorum `410` DÖNMEZ, `deleted: true` ve `[deleted]` gövdesiyle `200` döner — \
         çocukları yaşamaya devam ettiği için düğümün kendisi erişilebilir kalmalı.",
     params(
         ("id" = String, Path, description = "Yorumun dış id'si (`c_...`)"),

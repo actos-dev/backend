@@ -157,7 +157,7 @@ fn allowlist_disi_bicim_reddediliyor() {
     match hata {
         Error::UnsupportedMedia(mesaj) => {
             assert!(
-                mesaj.contains("pdf") || mesaj.contains("tanınmadı"),
+                mesaj.contains("pdf") || mesaj.contains("not recognized"),
                 "hata mesajı biçimi belirtmeli: {mesaj}"
             );
         }
@@ -195,7 +195,7 @@ fn sikistirma_bombasi_kod_cozmeden_reddediliyor() {
     match hata {
         Error::Validation(mesaj) => {
             assert!(
-                mesaj.contains("piksel"),
+                mesaj.contains("pixels"),
                 "hata piksel sınırını belirtmeli: {mesaj}"
             );
             assert!(
@@ -215,7 +215,7 @@ fn piksel_siniri_hemen_ustunde_de_calisiyor() {
     let bomba = sikistirma_bombasi(8_000, 8_000);
     let hata = media::process_image(&bomba, MAX).expect_err("sınır üstü reddedilmeli");
     assert!(
-        matches!(hata, Error::Validation(ref m) if m.contains("piksel")),
+        matches!(hata, Error::Validation(ref m) if m.contains("pixels")),
         "{hata:?}"
     );
 }

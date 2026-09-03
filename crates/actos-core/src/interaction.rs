@@ -107,7 +107,7 @@ pub async fn set_vote(
 ) -> Result<VoteOutcome> {
     if !matches!(value, -1..=1) {
         return Err(Error::Validation(
-            "oy değeri yalnızca -1, 0 veya 1 olabilir".to_owned(),
+            "vote value must be -1, 0, or 1".to_owned(),
         ));
     }
 
@@ -286,7 +286,7 @@ pub async fn follow(pool: &PgPool, follower_id: i64, username: &str) -> Result<(
 
     if followed_id == follower_id {
         return Err(Error::Validation(
-            "bir actor kendini takip edemez".to_owned(),
+            "an actor cannot follow itself".to_owned(),
         ));
     }
 
@@ -425,7 +425,7 @@ pub async fn unsave(pool: &PgPool, actor_id: i64, content_id: i64) -> Result<()>
 ///
 /// **Silinmiş içerikler listeden düşürülüyor.** Kaydın kendisi duruyor
 /// (bkz. [`unsave`] — kullanıcı isterse kaldırabilsin), ama silinmiş bir
-/// içeriği yer imi listesinde `[silindi]` olarak göstermenin bir değeri
+/// içeriği yer imi listesinde `[deleted]` olarak göstermenin bir değeri
 /// yok: `crate::comment`'teki ağaç bağlamının aksine burada o düğümün
 /// taşıdığı bir çocuk yok.
 ///

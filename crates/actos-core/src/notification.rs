@@ -236,24 +236,24 @@ fn row_into_notification(row: NotificationRow) -> Result<Notification> {
             id,
             username: row.actor_username.ok_or_else(|| {
                 Error::Internal(format!(
-                    "notifications: actor_id={id} dolu ama actor_username NULL"
+                    "notifications: actor_id={id} is set but actor_username is NULL"
                 ))
             })?,
             actor_type: row.actor_actor_type.ok_or_else(|| {
                 Error::Internal(format!(
-                    "notifications: actor_id={id} dolu ama actor_type NULL"
+                    "notifications: actor_id={id} is set but actor_type is NULL"
                 ))
             })?,
             display_name: row.actor_display_name,
             bio: row.actor_bio,
             created_at: row.actor_created_at.ok_or_else(|| {
                 Error::Internal(format!(
-                    "notifications: actor_id={id} dolu ama actor_created_at NULL"
+                    "notifications: actor_id={id} is set but actor_created_at is NULL"
                 ))
             })?,
             trust_level: row.actor_trust_level.ok_or_else(|| {
                 Error::Internal(format!(
-                    "notifications: actor_id={id} dolu ama actor_trust_level NULL"
+                    "notifications: actor_id={id} is set but actor_trust_level is NULL"
                 ))
             })?,
         }),

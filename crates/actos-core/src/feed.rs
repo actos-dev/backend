@@ -92,7 +92,7 @@ impl FeedWindow {
             Some("week") => Ok(Self::Week),
             Some("month") => Ok(Self::Month),
             Some(other) => Err(Error::Validation(format!(
-                "geçersiz window değeri: \"{other}\" (beklenen: day, week, month, all)"
+                "invalid window value: \"{other}\" (expected: day, week, month, all)"
             ))),
         }
     }

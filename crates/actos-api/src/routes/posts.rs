@@ -109,7 +109,7 @@ const fn body_format_str(f: core_content::BodyFormat) -> &'static str {
 /// `GET /actors/{username}` zaten `410 Gone` dönüyor (profile hiç
 /// ulaşılamaz durumda) — içerik yanıtında aynı username'i sanki hâlâ
 /// gidilebilir bir profilmiş gibi göstermek yanıltıcı olurdu. Sabit
-/// `"[silindi]"` metni istemciye "bu yazarın profili artık yok" sinyalini
+/// `"[deleted]"` metni istemciye "bu yazarın profili artık yok" sinyalini
 /// tek bakışta veriyor; ayrıca `ContentSummary.author_deleted` aynı bilgiyi
 /// programatik olarak da taşıyor, istemcinin string'i ayrıştırmasına gerek
 /// yok.
@@ -123,7 +123,7 @@ const fn body_format_str(f: core_content::BodyFormat) -> &'static str {
 fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<ActorSummary, Error> {
     Ok(ActorSummary {
         id: encode_actor_id(id_codec, actor.id)?,
-        username: "[silindi]".to_owned(),
+        username: "[deleted]".to_owned(),
         actor_type: actor_type_str(actor.actor_type).to_owned(),
         display_name: None,
         bio: None,
@@ -153,7 +153,7 @@ fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<Actor
 /// kontrol ediliyor (yalnızca çağıranların — bkz. `get_post`/`update_post`/
 /// `create_post` — zaten hep canlı içerik vermesine güvenmek yerine),
 /// çünkü [`ContentSummary`] genel bir tip ve ileride (Faz 9/12) silinmiş
-/// bir öğeyi listede satır içinde `[silindi]` göstermek isteyen bir
+/// bir öğeyi listede satır içinde `[deleted]` göstermek isteyen bir
 /// çağıran bu fonksiyonu doğrudan kullanabilsin diye (bkz.
 /// `actos_types::content` modül dokümantasyonu).
 pub(crate) fn content_summary(
@@ -233,7 +233,7 @@ fn content_summary_full(
 /// gibi bir gövdeyi markdown sözdizimi sanıp italikleştirmemek için.
 ///
 /// Silinmiş içerik için ayrı bir dal YOK: `body` çağıran tarafından zaten
-/// maskelenmiş (`"[silindi]"`) olarak geliyor (bkz.
+/// maskelenmiş (`"[deleted]"`) olarak geliyor (bkz.
 /// `content_summary_inner`) — bu fonksiyon her zaman aynı iki yoldan
 /// birini işlettiği için `body_html`'in `body` ile birebir aynı maskeleme
 /// kuralına tabi olması otomatik garanti ediliyor, özel bir "silinmişse"
@@ -292,12 +292,12 @@ fn content_summary_inner(
     let deleted = content.deleted_at.is_some();
     // `title`/`body` ile aynı gerekçe: `metadata` de gerçek gövdenin bir
     // parçası — bir link post'unun URL önizlemesi gibi veri taşıyabilir.
-    // Silinmiş bir içerik `[silindi]` gövdesiyle görünürken `metadata`'yı
+    // Silinmiş bir içerik `[deleted]` gövdesiyle görünürken `metadata`'yı
     // olduğu gibi bırakmak, maskelemeyi yarım bırakan bir yan kanal olurdu.
     let (title, body, metadata) = if deleted {
         (
             None,
-            "[silindi]".to_owned(),
+            "[deleted]".to_owned(),
             serde_json::Value::Object(serde_json::Map::new()),
         )
     } else {
@@ -452,7 +452,7 @@ async fn create_post(
             }
             IdempotencyBegin::InProgress => {
                 return Err(ApiError::new(Error::Conflict(
-                    "aynı Idempotency-Key ile bir istek hâlâ işleniyor".to_owned(),
+                    "a request with the same Idempotency-Key is still being processed".to_owned(),
                 ))
                 .with_request_id(&headers));
             }

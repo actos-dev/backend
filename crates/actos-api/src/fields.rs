@@ -107,7 +107,7 @@ pub fn apply_fields<T: Serialize>(
     // `serde_json::Value`'nun genel API'si `Result` döndürdüğü için
     // savunmacı olarak ele alınıyor.
     let json = serde_json::to_value(value).map_err(|err| {
-        ApiError::new(Error::Internal(format!("DTO serialize edilemedi: {err}")))
+        ApiError::new(Error::Internal(format!("could not serialize DTO: {err}")))
             .with_request_id(headers)
     })?;
 
@@ -130,7 +130,7 @@ pub fn apply_fields<T: Serialize>(
             }
             None => {
                 return Err(ApiError::new(Error::Validation(format!(
-                    "bilinmeyen alan: \"{field}\""
+                    "unknown field: \"{field}\""
                 )))
                 .with_request_id(headers));
             }

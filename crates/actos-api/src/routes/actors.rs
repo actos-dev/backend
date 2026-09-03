@@ -81,7 +81,7 @@ pub(crate) fn parse_limit(raw: Option<String>, headers: &HeaderMap) -> Result<i6
         None => None,
         Some(s) => {
             let value: i64 = s.trim().parse().map_err(|_| {
-                ApiError::new(Error::Validation(format!("geçersiz limit: \"{s}\"")))
+                ApiError::new(Error::Validation(format!("invalid limit: \"{s}\"")))
                     .with_request_id(headers)
             })?;
             Some(value)
@@ -390,7 +390,7 @@ async fn list_directory(
         && sort != "new"
     {
         return Err(ApiError::new(Error::Validation(format!(
-            "desteklenmeyen sort değeri: \"{sort}\" (yalnızca \"new\" destekleniyor)"
+            "unsupported sort value: \"{sort}\" (only \"new\" is supported)"
         )))
         .with_request_id(&headers));
     }

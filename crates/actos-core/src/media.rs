@@ -97,11 +97,11 @@ fn decode_limits() -> Limits {
 /// [`Error::UnsupportedMedia`] veya [`Error::Validation`].
 pub fn process_image(bytes: &[u8], max_bytes: usize) -> Result<ProcessedImage> {
     if bytes.is_empty() {
-        return Err(Error::Validation("dosya boş".to_owned()));
+        return Err(Error::Validation("file is empty".to_owned()));
     }
     if bytes.len() > max_bytes {
         return Err(Error::Validation(format!(
-            "dosya çok büyük: {} bayt, sınır {max_bytes} bayt",
+            "file too large: {} bytes, limit {max_bytes} bytes",
             bytes.len()
         )));
     }
@@ -118,12 +118,12 @@ pub fn process_image(bytes: &[u8], max_bytes: usize) -> Result<ProcessedImage> {
     // dokunmuyor.
     let (genislik, yukseklik) = boyut_okuyucu
         .into_dimensions()
-        .map_err(|_| Error::UnsupportedMedia("görsel boyutları okunamadı".to_owned()))?;
+        .map_err(|_| Error::UnsupportedMedia("could not read image dimensions".to_owned()))?;
 
     let piksel = u64::from(genislik) * u64::from(yukseklik);
     if piksel > MAX_PIXELS {
         return Err(Error::Validation(format!(
-            "görsel çok büyük: {genislik}x{yukseklik} = {piksel} piksel, sınır {MAX_PIXELS}"
+            "image too large: {genislik}x{yukseklik} = {piksel} pixels, limit {MAX_PIXELS}"
         )));
     }
 
@@ -132,7 +132,7 @@ pub fn process_image(bytes: &[u8], max_bytes: usize) -> Result<ProcessedImage> {
 
     let gorsel = kod_okuyucu
         .decode()
-        .map_err(|_| Error::UnsupportedMedia(format!("{mime} dosyası çözülemedi")))?;
+        .map_err(|_| Error::UnsupportedMedia(format!("could not decode {mime} file")))?;
 
     let normalize = kucult(&gorsel, MAX_DIMENSION);
     let onizleme = kucult(&normalize, THUMBNAIL_DIMENSION);
@@ -155,7 +155,7 @@ pub fn process_image(bytes: &[u8], max_bytes: usize) -> Result<ProcessedImage> {
 fn yeni_okuyucu(bytes: &[u8]) -> Result<ImageReader<std::io::Cursor<&[u8]>>> {
     ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|_| Error::UnsupportedMedia("dosya biçimi okunamadı".to_owned()))
+        .map_err(|_| Error::UnsupportedMedia("could not read file format".to_owned()))
 }
 
 /// Magic byte'lardan gerçek MIME tipini tespit eder ve allowlist'e bakar.
@@ -166,7 +166,7 @@ fn yeni_okuyucu(bytes: &[u8]) -> Result<ImageReader<std::io::Cursor<&[u8]>>> {
 fn detect_mime(bytes: &[u8]) -> Result<&'static str> {
     let Some(kind) = infer::get(bytes) else {
         return Err(Error::UnsupportedMedia(
-            "dosya biçimi tanınmadı (magic byte eşleşmesi yok)".to_owned(),
+            "file format not recognized (no magic byte match)".to_owned(),
         ));
     };
 
@@ -176,7 +176,7 @@ fn detect_mime(bytes: &[u8]) -> Result<&'static str> {
         .copied()
         .ok_or_else(|| {
             Error::UnsupportedMedia(format!(
-                "desteklenmeyen biçim: {} (izin verilenler: {})",
+                "unsupported format: {} (allowed: {})",
                 kind.mime_type(),
                 ALLOWED_MIME_TYPES.join(", ")
             ))
@@ -205,6 +205,6 @@ fn webp_kodla(gorsel: &DynamicImage) -> Result<Vec<u8>> {
     let mut cikti = std::io::Cursor::new(Vec::new());
     gorsel
         .write_to(&mut cikti, ImageFormat::WebP)
-        .map_err(|e| Error::Internal(format!("webp kodlaması başarısız: {e}")))?;
+        .map_err(|e| Error::Internal(format!("webp encoding failed: {e}")))?;
     Ok(cikti.into_inner())
 }

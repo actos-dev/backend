@@ -113,7 +113,7 @@ pub struct Content {
     /// [`Content`] tek başına genel bir tip olduğu için (bkz. modül
     /// dokümantasyonu) burada taşınıyor: ileride bir liste bağlamında
     /// (Faz 9 yorum ağacı, Faz 12 feed) silinmiş bir öğeyi satır içinde
-    /// `[silindi]` olarak göstermek isteyen bir çağıran buna ihtiyaç
+    /// `[deleted]` olarak göstermek isteyen bir çağıran buna ihtiyaç
     /// duyacak.
     pub deleted_at: Option<DateTime<Utc>>,
 }
@@ -191,7 +191,7 @@ impl From<ContentRow> for Content {
 fn normalize_tags(raw: &[String]) -> Result<Vec<String>> {
     if raw.len() > MAX_TAGS_PER_POST {
         return Err(Error::Validation(format!(
-            "en fazla {MAX_TAGS_PER_POST} etiket eklenebilir (gönderilen: {})",
+            "at most {MAX_TAGS_PER_POST} tags can be added (received: {})",
             raw.len()
         )));
     }
@@ -217,7 +217,7 @@ fn normalize_metadata(raw: Option<JsonValue>) -> Result<JsonValue> {
         None => Ok(JsonValue::Object(serde_json::Map::new())),
         Some(JsonValue::Object(map)) => Ok(JsonValue::Object(map)),
         Some(_) => Err(Error::Validation(
-            "metadata bir JSON nesnesi olmalı".to_owned(),
+            "metadata must be a JSON object".to_owned(),
         )),
     }
 }
@@ -309,7 +309,7 @@ pub async fn create_post(
 ) -> Result<Content> {
     let title = text::validate_title(title).map_err(|e| Error::Validation(e.to_string()))?;
     if title.is_empty() {
-        return Err(Error::Validation("post başlığı boş olamaz".to_owned()));
+        return Err(Error::Validation("post title cannot be empty".to_owned()));
     }
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     let tags = normalize_tags(tags)?;
@@ -478,7 +478,7 @@ pub async fn update_post(
 ) -> Result<Content> {
     if title.is_none() && body.is_none() {
         return Err(Error::Validation(
-            "güncellemek için title veya body alanlarından en az biri gönderilmeli".to_owned(),
+            "at least one of title or body must be provided to update".to_owned(),
         ));
     }
 
@@ -488,7 +488,7 @@ pub async fn update_post(
     if let Some(t) = &title
         && t.is_empty()
     {
-        return Err(Error::Validation("post başlığı boş olamaz".to_owned()));
+        return Err(Error::Validation("post title cannot be empty".to_owned()));
     }
     let body = body
         .map(|b| text::validate_body(&b).map_err(|e| Error::Validation(e.to_string())))
@@ -612,7 +612,7 @@ pub async fn delete_post(pool: &PgPool, id: i64, actor_id: i64, roles: &[AdminRo
 /// **Silinmiş postlar listede hiç görünmez** — `get_post`'un tersine
 /// (satırı `410` ile ama var olarak taşıyan tekil okuma), burada
 /// `contents.deleted_at IS NULL` filtresi SQL seviyesinde uygulanıyor:
-/// bu bir liste ucu, silinmiş bir öğeyi `[silindi]` olarak satır içinde
+/// bu bir liste ucu, silinmiş bir öğeyi `[deleted]` olarak satır içinde
 /// göstermek (bkz. `actos_types::content` modül dokümantasyonundaki Faz 9/12
 /// senaryosu) bu görevin kapsamında değil — PLAN.md bu uç için yalnızca "cursor'lu,
 /// ContentSummary döndürür" diyor, silinmiş postu maskeli göstermeyi değil.
@@ -757,7 +757,7 @@ impl PostSort {
             Some("top") => Ok(Self::Top),
             Some("hot") => Ok(Self::Hot),
             Some(other) => Err(Error::Validation(format!(
-                "geçersiz sort değeri: \"{other}\" (beklenen: new, top, hot)"
+                "invalid sort value: \"{other}\" (expected: new, top, hot)"
             ))),
         }
     }

@@ -92,7 +92,7 @@ async fn create_upload(
     let mut bytes: Option<Vec<u8>> = None;
 
     while let Some(alan) = multipart.next_field().await.map_err(|e| {
-        ApiError::new(Error::Validation(format!("multipart okunamadı: {e}")))
+        ApiError::new(Error::Validation(format!("could not read multipart: {e}")))
             .with_request_id(&headers)
     })? {
         // Yalnızca beklenen alan okunuyor; diğerleri sessizce atlanıyor
@@ -102,13 +102,13 @@ async fn create_upload(
         }
 
         let veri = alan.bytes().await.map_err(|e| {
-            ApiError::new(Error::Validation(format!("dosya okunamadı: {e}")))
+            ApiError::new(Error::Validation(format!("could not read file: {e}")))
                 .with_request_id(&headers)
         })?;
 
         if veri.len() > max_bytes {
             return Err(ApiError::new(Error::Validation(format!(
-                "dosya çok büyük: {} bayt, sınır {max_bytes} bayt",
+                "file too large: {} bytes, limit {max_bytes} bytes",
                 veri.len()
             )))
             .with_request_id(&headers));
@@ -120,7 +120,7 @@ async fn create_upload(
 
     let Some(bytes) = bytes else {
         return Err(ApiError::new(Error::Validation(format!(
-            "multipart gövdesinde \"{FILE_FIELD}\" alanı yok"
+            "multipart body is missing the \"{FILE_FIELD}\" field"
         )))
         .with_request_id(&headers));
     };

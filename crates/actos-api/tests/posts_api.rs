@@ -736,7 +736,7 @@ async fn silinmis_yazarin_postu_maskeli_gorunur(pool: PgPool) {
         "post kendisi silinmedi, 200 dönmeli: {body}"
     );
     assert_eq!(body["author_deleted"], true);
-    assert_eq!(body["author"]["username"], "[silindi]");
+    assert_eq!(body["author"]["username"], "[deleted]");
     assert!(body["author"]["display_name"].is_null());
     assert!(body["author"]["bio"].is_null());
     assert!(

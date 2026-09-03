@@ -532,7 +532,7 @@ async fn parent_ile_alt_agac_ayrica_cekilebilir(pool: PgPool) {
     assert_eq!(ust[0]["body"], "üç");
 }
 
-/// Silinen yorum ağaçtan düşmüyor: `[silindi]` gövdesiyle yerinde kalıyor ve
+/// Silinen yorum ağaçtan düşmüyor: `[deleted]` gövdesiyle yerinde kalıyor ve
 /// çocuğu erişilebilir olmaya devam ediyor. Planın "silinen yorumun
 /// çocukları yaşamaya devam eder" maddesi.
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
@@ -557,7 +557,7 @@ async fn silinen_yorumun_cocuklari_yasamaya_devam_eder(pool: PgPool) {
 
     let dugum = &tree["comments"][0];
     assert_eq!(dugum["deleted"], true, "{tree}");
-    assert_eq!(dugum["body"], "[silindi]", "{tree}");
+    assert_eq!(dugum["body"], "[deleted]", "{tree}");
     assert!(
         !tree.to_string().contains("ebeveyn gövdesi"),
         "silinmiş yorumun gerçek gövdesi sızmamalı: {tree}"
@@ -717,7 +717,7 @@ async fn get_comment_breadcrumb_kokten_baslar(pool: PgPool) {
 }
 
 /// `GET /posts/{id}` silinmiş post için `410` dönerken, `GET /comments/{id}`
-/// silinmiş yorum için `200` + `[silindi]` döner — çocukları erişilebilir
+/// silinmiş yorum için `200` + `[deleted]` döner — çocukları erişilebilir
 /// kalmalı diye (bkz. `actos_core::comment::get_comment`).
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
 async fn silinmis_yorum_200_ile_maskeli_doner(pool: PgPool) {
@@ -737,7 +737,7 @@ async fn silinmis_yorum_200_ile_maskeli_doner(pool: PgPool) {
     let (status, body, _) = send(&router, empty_req("GET", &format!("/comments/{c1}"))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["comment"]["deleted"], true, "{body}");
-    assert_eq!(body["comment"]["body"], "[silindi]", "{body}");
+    assert_eq!(body["comment"]["body"], "[deleted]", "{body}");
     assert!(
         !body.to_string().contains("gizli gövde"),
         "silinmiş yorumun gövdesi sızmamalı: {body}"
@@ -910,7 +910,7 @@ async fn get_comment_body_html_her_zaman_dolu(pool: PgPool) {
     assert!(html.contains("<strong>kalın</strong>"), "{html}");
 }
 
-/// Bugün silinmiş yorum `body = "[silindi]"` ile `200` dönüyor (bkz.
+/// Bugün silinmiş yorum `body = "[deleted]"` ile `200` dönüyor (bkz.
 /// `silinmis_yorum_200_ile_maskeli_doner`) — `body_html` de aynı maskeleme
 /// kuralına uymalı: ham gövde hiçbir şekilde sızmamalı (görev tanımı
 /// madde 6).
@@ -935,7 +935,7 @@ async fn silinmis_yorum_body_html_de_maskeli(pool: PgPool) {
         .as_str()
         .expect("body_html string olmalı");
     assert!(
-        html.contains("[silindi]"),
+        html.contains("[deleted]"),
         "body_html body ile aynı maskeyi taşımalı: {html}"
     );
     assert!(
@@ -1062,7 +1062,7 @@ async fn agac_body_html_true_ile_ic_ice_dugumlerde_de_dolar(pool: PgPool) {
 }
 
 /// Ağaçta silinmiş bir düğüm için `?body_html=true` de aynı maskeleme
-/// kuralına uymalı: `body_html` `"[silindi]"` gövdesinden türer, ham gövde
+/// kuralına uymalı: `body_html` `"[deleted]"` gövdesinden türer, ham gövde
 /// hiçbir şekilde sızmaz (bkz. `silinmis_yorum_body_html_de_maskeli` —
 /// tekil uçtaki aynı iddianın ağaç ucundaki karşılığı).
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
@@ -1091,7 +1091,7 @@ async fn agac_body_html_true_silinen_dugumde_maskeli(pool: PgPool) {
         .as_str()
         .expect("silinmiş düğümde de body_html string olmalı (maskelenmiş içerikle)");
     assert!(
-        html.contains("[silindi]"),
+        html.contains("[deleted]"),
         "body_html body ile aynı maskeyi taşımalı: {html}"
     );
     assert!(

@@ -153,18 +153,18 @@ impl IntoResponse for ApiError {
 
 const fn title_for(code: ErrorCode) -> &'static str {
     match code {
-        ErrorCode::ValidationFailed => "Girdi doğrulamadan geçmedi",
-        ErrorCode::MissingCredentials => "Kimlik bilgisi sunulmadı",
-        ErrorCode::InvalidKey => "API anahtarı geçersiz",
-        ErrorCode::Forbidden => "Yetki yok",
-        ErrorCode::Banned => "Hesap askıya alınmış",
-        ErrorCode::NotFound => "Bulunamadı",
-        ErrorCode::Gone => "Silinmiş",
-        ErrorCode::Conflict => "Çakışma",
-        ErrorCode::RateLimited => "Hız limiti aşıldı",
-        ErrorCode::UnsupportedMedia => "Dosya kabul edilmedi",
-        ErrorCode::InvalidCursor => "Sayfalama cursor'ı geçersiz",
-        ErrorCode::Internal => "Sunucu hatası",
+        ErrorCode::ValidationFailed => "Input failed validation",
+        ErrorCode::MissingCredentials => "No credentials provided",
+        ErrorCode::InvalidKey => "API key is invalid",
+        ErrorCode::Forbidden => "Not authorized",
+        ErrorCode::Banned => "Account is suspended",
+        ErrorCode::NotFound => "Not found",
+        ErrorCode::Gone => "Deleted",
+        ErrorCode::Conflict => "Conflict",
+        ErrorCode::RateLimited => "Rate limit exceeded",
+        ErrorCode::UnsupportedMedia => "File not accepted",
+        ErrorCode::InvalidCursor => "Invalid pagination cursor",
+        ErrorCode::Internal => "Server error",
     }
 }
 
@@ -196,12 +196,12 @@ mod tests {
 
     #[tokio::test]
     async fn istemci_hatasi_detay_icerir() {
-        let (status, body, headers) = body_of(ApiError::new(Error::NotFound("gönderi"))).await;
+        let (status, body, headers) = body_of(ApiError::new(Error::NotFound("post"))).await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["code"], "NOT_FOUND");
         assert_eq!(body["status"], 404);
-        assert_eq!(body["detail"], "gönderi bulunamadı");
+        assert_eq!(body["detail"], "post not found");
         assert_eq!(body["type"], "https://docs.actos.dev/errors/not-found");
         assert_eq!(
             headers
@@ -215,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn ic_hata_detay_sizdirmaz() {
         let (status, body, _) = body_of(ApiError::new(Error::Internal(
-            "postgres://kullanici:parola@host/db bağlanamadı".to_owned(),
+            "could not connect to postgres://user:password@host/db".to_owned(),
         )))
         .await;
 
@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(body["code"], "INTERNAL");
         assert!(body.get("detail").is_none(), "iç hata detayı sızdı: {body}");
         let raw = body.to_string();
-        assert!(!raw.contains("parola"), "sır sızdı: {raw}");
+        assert!(!raw.contains("password"), "sır sızdı: {raw}");
     }
 
     #[tokio::test]

@@ -154,7 +154,7 @@ async fn list_votes(
 
     if dis_idler.len() > MAX_VOTE_LOOKUP {
         return Err(ApiError::new(Error::Validation(format!(
-            "tek istekte en fazla {MAX_VOTE_LOOKUP} içerik sorulabilir"
+            "at most {MAX_VOTE_LOOKUP} content items can be queried per request"
         )))
         .with_request_id(&headers));
     }

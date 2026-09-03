@@ -178,28 +178,28 @@ impl IdKind for Notification {
 /// istemciden gelen bozuk bir ID, bu tiplerden biriyle geri döner.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IdError {
-    #[error("ID boş olamaz")]
+    #[error("ID cannot be empty")]
     Empty,
 
-    #[error("ID önekini tanımıyorum (\"{expected}_\" bekleniyordu)")]
+    #[error("unrecognized ID prefix (expected \"{expected}_\")")]
     InvalidPrefix { expected: &'static str },
 
-    #[error("ID yapısı geçersiz: önek ve gövde tek bir `_` ile ayrılmalı")]
+    #[error("invalid ID structure: prefix and body must be separated by a single `_`")]
     MalformedStructure,
 
-    #[error("ID çok uzun (en fazla {max} karakter olmalı)")]
+    #[error("ID too long (must be at most {max} characters)")]
     TooLong { max: usize },
 
-    #[error("ID gövdesi base62 olarak çözülemedi: {0}")]
+    #[error("ID body could not be decoded as base62: {0}")]
     InvalidEncoding(String),
 
-    #[error("ID aralık dışı")]
+    #[error("ID out of range")]
     OutOfRange,
 
-    #[error("iç değer negatif olamaz: {0}")]
+    #[error("internal value cannot be negative: {0}")]
     NegativeInternal(i64),
 
-    #[error("ID kodlama anahtarı boş olamaz")]
+    #[error("ID encoding key cannot be empty")]
     EmptyKey,
 }
 

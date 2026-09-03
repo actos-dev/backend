@@ -179,8 +179,8 @@ async fn kota_aşılınca_yükleme_reddediliyor_mesaj_kullanım_bilgisi_taşıyo
                 "mesaj kademe kotasını içermeli: {mesaj}"
             );
             assert!(
-                mesaj.contains("kota"),
-                "mesaj 'kota' kelimesini içermeli: {mesaj}"
+                mesaj.contains("quota"),
+                "mesaj 'quota' kelimesini içermeli: {mesaj}"
             );
         }
         diğer => panic!("beklenen Error::Validation: {diğer:?}"),

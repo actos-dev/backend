@@ -56,7 +56,7 @@ pub(crate) fn parse_actor_type(raw: &str) -> Result<ActorType, Error> {
         "system_bot" => Ok(ActorType::SystemBot),
         "organization" => Ok(ActorType::Organization),
         other => Err(Error::Validation(format!(
-            "geçersiz actor_type: \"{other}\" (human, ai_agent, system_bot, organization olmalı)"
+            "invalid actor_type: \"{other}\" (must be human, ai_agent, system_bot, or organization)"
         ))),
     }
 }
@@ -87,7 +87,7 @@ const fn admin_role_str(r: AdminRole) -> &'static str {
 pub(crate) fn encode_actor_id(id_codec: &IdCodec, internal: i64) -> Result<String, Error> {
     id_codec
         .encode::<ActorIdKind>(internal)
-        .map_err(|e| Error::Internal(format!("actor id kodlanamadı: {e}")))
+        .map_err(|e| Error::Internal(format!("could not encode actor id: {e}")))
 }
 
 /// `actor`'ü `ActorSummary`'e çevirir.
@@ -215,7 +215,7 @@ async fn whoami(
         .find(|k| k.id == current.key_id)
         .ok_or_else(|| {
             ApiError::new(Error::Internal(
-                "doğrulanan key, actor'ün key listesinde bulunamadı".to_owned(),
+                "authenticated key not found in actor's key list".to_owned(),
             ))
             .with_request_id(&headers)
         })?;

@@ -65,7 +65,7 @@ impl ReportStatus {
             "resolved" => Ok(Self::Resolved),
             "dismissed" => Ok(Self::Dismissed),
             other => Err(Error::Validation(format!(
-                "geçersiz status: \"{other}\" (beklenen: pending, resolved, dismissed)"
+                "invalid status: \"{other}\" (expected: pending, resolved, dismissed)"
             ))),
         }
     }
@@ -121,11 +121,11 @@ const MAX_REASON_LEN: usize = 1000;
 fn dogrula_gerekce(raw: &str, alan: &str) -> Result<String> {
     let normalized = text::normalize_text(raw);
     if normalized.is_empty() {
-        return Err(Error::Validation(format!("{alan} boş olamaz")));
+        return Err(Error::Validation(format!("{alan} cannot be empty")));
     }
     if normalized.chars().count() > MAX_REASON_LEN {
         return Err(Error::Validation(format!(
-            "{alan} en fazla {MAX_REASON_LEN} karakter olabilir"
+            "{alan} can be at most {MAX_REASON_LEN} characters"
         )));
     }
     Ok(normalized)
@@ -191,7 +191,7 @@ pub async fn create_report(
     target_id: i64,
     reason: &str,
 ) -> Result<Report> {
-    let reason = dogrula_gerekce(reason, "gerekçe")?;
+    let reason = dogrula_gerekce(reason, "reason")?;
 
     let hedef = sqlx::query!(
         r#"SELECT content_type::text AS "content_type!", deleted_at FROM contents WHERE id = $1"#,
@@ -213,7 +213,7 @@ pub async fn create_report(
     };
     if hedef.content_type != beklenen {
         return Err(Error::Validation(format!(
-            "hedef bir {} , {beklenen} değil",
+            "target is a {}, not {beklenen}",
             hedef.content_type
         )));
     }
@@ -239,9 +239,9 @@ pub async fn create_report(
 
     match sonuc {
         Ok(rapor) => Ok(rapor),
-        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-            Err(Error::Conflict("bu hedefi zaten şikayet ettin".to_owned()))
-        }
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(Error::Conflict(
+            "you have already reported this target".to_owned(),
+        )),
         Err(e) => Err(Error::from(e)),
     }
 }
@@ -323,7 +323,7 @@ pub async fn update_report(
     status: ReportStatus,
     notes: Option<&str>,
 ) -> Result<Report> {
-    let notes = notes.map(|n| dogrula_gerekce(n, "not")).transpose()?;
+    let notes = notes.map(|n| dogrula_gerekce(n, "notes")).transpose()?;
 
     let mut tx = pool.begin().await?;
 
@@ -394,7 +394,7 @@ pub async fn moderate_delete_content(
     content_id: i64,
     reason: &str,
 ) -> Result<()> {
-    let reason = dogrula_gerekce(reason, "gerekçe")?;
+    let reason = dogrula_gerekce(reason, "reason")?;
 
     let mut tx = pool.begin().await?;
 
@@ -465,13 +465,13 @@ pub async fn ban_actor(
     reason: &str,
     expires_at: Option<DateTime<Utc>>,
 ) -> Result<Ban> {
-    let reason = dogrula_gerekce(reason, "gerekçe")?;
+    let reason = dogrula_gerekce(reason, "reason")?;
 
     if let Some(bitis) = expires_at
         && bitis <= Utc::now()
     {
         return Err(Error::Validation(
-            "ban bitiş zamanı gelecekte olmalı".to_owned(),
+            "ban expiration time must be in the future".to_owned(),
         ));
     }
 
@@ -610,7 +610,7 @@ pub async fn set_role(
 
     if hedef_id == admin_actor_id {
         return Err(Error::Validation(
-            "bir admin kendi rolünü değiştiremez".to_owned(),
+            "an admin cannot change their own role".to_owned(),
         ));
     }
 

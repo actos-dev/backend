@@ -148,7 +148,7 @@ pub async fn register(
     // (ve dolayısıyla tuttuğu satır kilitlerini) gereksiz uzatmayalım.
     let generated_key = secret::generate_api_key();
     let recovery_codes = secret::generate_recovery_codes(RECOVERY_CODE_COUNT)
-        .map_err(|e| Error::Internal(format!("kurtarma kodları üretilemedi: {e}")))?;
+        .map_err(|e| Error::Internal(format!("could not generate recovery codes: {e}")))?;
 
     let mut tx = pool.begin().await?;
 
@@ -173,7 +173,7 @@ pub async fn register(
         // harf farkı gözetmeksizin çakışmayı yakalar.
         Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
             return Err(Error::Conflict(format!(
-                "\"{username}\" kullanıcı adı zaten alınmış"
+                "username \"{username}\" is already taken"
             )));
         }
         Err(e) => return Err(Error::from(e)),
@@ -806,7 +806,7 @@ pub async fn consume_recovery_code(tx: &mut sqlx::PgConnection, code_row_id: i64
 /// olmayan bir iç hata dışında) başarısız olursa [`Error::Internal`].
 pub async fn regenerate_recovery_codes(pool: &PgPool, actor_id: i64) -> Result<Vec<String>> {
     let new_codes = secret::generate_recovery_codes(RECOVERY_CODE_COUNT)
-        .map_err(|e| Error::Internal(format!("kurtarma kodları üretilemedi: {e}")))?;
+        .map_err(|e| Error::Internal(format!("could not generate recovery codes: {e}")))?;
 
     let mut tx = pool.begin().await?;
 

@@ -7,44 +7,44 @@ use actos_types::ErrorCode;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("doğrulama başarısız: {0}")]
+    #[error("validation failed: {0}")]
     Validation(String),
 
-    #[error("kimlik bilgisi sunulmadı")]
+    #[error("no credentials provided")]
     MissingCredentials,
 
-    #[error("API anahtarı geçersiz veya iptal edilmiş")]
+    #[error("API key is invalid or revoked")]
     InvalidKey,
 
-    #[error("bu eylem için yetkin yok")]
+    #[error("you are not authorized to perform this action")]
     Forbidden,
 
-    #[error("hesap askıya alınmış")]
+    #[error("account is suspended")]
     Banned,
 
-    #[error("{0} bulunamadı")]
+    #[error("{0} not found")]
     NotFound(&'static str),
 
-    #[error("{0} silinmiş")]
+    #[error("{0} has been deleted")]
     Gone(&'static str),
 
-    #[error("çakışma: {0}")]
+    #[error("conflict: {0}")]
     Conflict(String),
 
-    #[error("hız limiti aşıldı")]
+    #[error("rate limit exceeded")]
     RateLimited { retry_after_secs: u64 },
 
-    #[error("kabul edilmeyen dosya: {0}")]
+    #[error("unsupported file: {0}")]
     UnsupportedMedia(String),
 
-    #[error("sayfalama cursor'ı geçersiz")]
+    #[error("invalid pagination cursor")]
     InvalidCursor,
 
     // --- Aşağıdakiler istemciye asla detaylandırılmaz, sadece loglanır ---
-    #[error("veritabanı hatası")]
+    #[error("database error")]
     Database(#[from] sqlx::Error),
 
-    #[error("iç hata: {0}")]
+    #[error("internal error: {0}")]
     Internal(String),
 }
 
@@ -56,7 +56,7 @@ impl From<crate::storage::StorageError> for Error {
     /// yani MinIO'nun iç adresleri ya da hata ayrıntıları istemciye
     /// sızmıyor.
     fn from(err: crate::storage::StorageError) -> Self {
-        Self::Internal(format!("depolama: {err}"))
+        Self::Internal(format!("storage: {err}"))
     }
 }
 

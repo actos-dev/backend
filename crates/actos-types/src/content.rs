@@ -23,9 +23,9 @@
 //! `actos_core::content::get_post`) — yani bu DTO'nun `deleted: true`
 //! hâli o uçtan asla çıkmaz. Ama bu DTO tek başına "bir içeriği tarif eden
 //! genel şekil"; Faz 9'un yorum ağacı listelemesi ("silinen yorumun
-//! çocukları yaşamaya devam eder, `[silindi]` gövdesiyle") ve Faz 12'nin
+//! çocukları yaşamaya devam eder, `[deleted]` gövdesiyle") ve Faz 12'nin
 //! feed'i gibi *liste* bağlamlarında silinmiş bir öğe listenin geri
-//! kalanını bozmadan satır içinde `[silindi]` olarak görünmek zorunda —
+//! kalanını bozmadan satır içinde `[deleted]` olarak görünmek zorunda —
 //! tüm sayfayı 410'a düşürmek orada yanlış olurdu. `deleted` + maskelenmiş
 //! `title`/`body` bu ileriki kullanım için şimdiden burada.
 //!

@@ -289,7 +289,7 @@ impl IdempotencyStore {
     pub async fn begin(&self, actor_id: i64, key: &str) -> crate::Result<Begin> {
         if key.is_empty() || key.chars().count() > MAX_KEY_LEN {
             return Err(crate::Error::Validation(format!(
-                "Idempotency-Key 1-{MAX_KEY_LEN} karakter arasında olmalı"
+                "Idempotency-Key must be between 1 and {MAX_KEY_LEN} characters"
             )));
         }
 
