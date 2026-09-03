@@ -703,6 +703,18 @@ async fn silinmis_yazarin_postu_maskeli_gorunur(pool: PgPool) {
     .await;
     let id = created["id"].as_str().expect("id olmalı").to_owned();
 
+    // Avatar gerçekten set edilmiş bir hesap silinsin ki aşağıdaki
+    // `avatar_url` iddiası "zaten hep None'du" değil, gerçek bir maskeleme
+    // sınasın (bkz. Faz 18.A — `crate::routes::posts::masked_actor_summary`
+    // dokümanı: silinmiş bir hesabın avatarı görünmeye devam etmemeli).
+    sqlx::query!(
+        r#"UPDATE actors SET avatar_object_key = 'silinecek/avatar.webp' WHERE id = $1"#,
+        author_id,
+    )
+    .execute(&raw_pool)
+    .await
+    .expect("avatar_object_key yazılabilmeli");
+
     // Actor'ü doğrudan domain katmanından soft-delete ediyoruz (kurtarma
     // kodu akışını burada tekrar test etmeye gerek yok, bkz.
     // `actors_api.rs`'teki ilgili test).
@@ -724,6 +736,10 @@ async fn silinmis_yazarin_postu_maskeli_gorunur(pool: PgPool) {
     assert_eq!(body["author"]["username"], "[silindi]");
     assert!(body["author"]["display_name"].is_null());
     assert!(body["author"]["bio"].is_null());
+    assert!(
+        body["author"]["avatar_url"].is_null(),
+        "silinmiş yazarın avatarı maskelenmeli: {body}"
+    );
     // Post'un kendi gövdesi/başlığı yazarın silinmesinden etkilenmemeli.
     assert_eq!(body["title"], "yazarı silinecek post");
     assert_eq!(body["deleted"], false);

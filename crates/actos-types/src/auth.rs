@@ -40,6 +40,27 @@ pub struct ActorSummary {
     /// `created_at`'ten türetilebildiği için ayrı bir "yaş" alanı yok; bu
     /// alan yalnızca sunucunun periyodik olarak hesapladığı kademeyi taşıyor.
     pub trust_level: i16,
+    /// Avatarın herkese açık URL'i — `actors.avatar_object_key` set
+    /// değilse (hiç avatar seçilmemişse) `None`. Bucket public-read olduğu
+    /// için (bkz. `crate::upload::UploadResponse.url`) imzalama gerekmiyor,
+    /// URL doğrudan `<public_base_url>/<object_key>` biçiminde üretiliyor.
+    ///
+    /// **Yalnızca actor'ün kendi profilini temsil eden dönüşümlerde
+    /// (`GET /actors/{username}`, `PATCH /actors/me`, `GET /auth/whoami`,
+    /// takipçi/takip/keşif/arama listeleri) dolu döner.** Bir içeriğin
+    /// (post/yorum) yazarını özetleyen `ActorSummary`'lerde (bkz.
+    /// `actos-api/src/routes/posts.rs`) her zaman `None`'dur — o yol
+    /// `Content.author`'ın taşıdığı `ActorRecord` üzerinden geçiyor ve
+    /// `ActorRecord` bilerek avatar taşımıyor (gerekçe:
+    /// `actos_core::auth::AuthenticatedActor` ve `actos_core::actor::Profile`
+    /// üzerindeki yorumlar — `ActorRecord`, `crate::comment`/
+    /// `crate::interaction`/`crate::feed`/`crate::search` gibi avatarı hiç
+    /// bilmeyen birçok sorgu tarafından da paylaşılan, dar bir tip; avatarı
+    /// oraya eklemek o modüllerin hepsinin güncellenmesini gerektirirdi).
+    /// Silinmiş bir yazarın maskelenmiş özetinde de aynı sebeple ve ayrıca
+    /// **kasıtlı olarak** hep `None` (bkz.
+    /// `actos-api/src/routes/posts.rs::masked_actor_summary`).
+    pub avatar_url: Option<String>,
 }
 
 /// `POST /auth/register` yanıt gövdesi.

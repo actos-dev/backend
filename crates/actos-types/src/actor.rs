@@ -51,6 +51,20 @@ pub struct UpdateProfileRequest {
     pub display_name: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     pub bio: Option<Option<String>>,
+    /// Yeni avatar olarak kullanılacak yüklemenin **dış** id'si (`f_...` —
+    /// `POST /uploads`'un döndürdüğü `id`). `display_name`/`bio` ile aynı
+    /// `Option<Option<T>>` deseni: alan hiç gönderilmezse avatara dokunulmaz,
+    /// `null` gönderilirse avatar kaldırılır (`actors.avatar_object_key`
+    /// `NULL` olur), bir id gönderilirse o yükleme avatar yapılır.
+    ///
+    /// Sunucu bu id'yi kabul etmeden önce üç şeyi doğrular (bkz.
+    /// `actos_core::attachment::resolve_as_avatar`): yükleme var mı (`404`),
+    /// **çağıran actor'e mi ait** (`403`), ve henüz bir içeriğe **bağlanmamış
+    /// mı** (`409` — bir posta/yoruma zaten iliştirilmiş bir dosya avatar
+    /// olarak yeniden kullanılamaz, iki farklı yaşam döngüsü aynı satırda
+    /// çakışırdı).
+    #[serde(default, deserialize_with = "double_option")]
+    pub avatar: Option<Option<String>>,
 }
 
 fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>

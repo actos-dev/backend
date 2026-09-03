@@ -241,6 +241,9 @@ pub fn clamp_page_size(raw: Option<i64>) -> i64 {
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub actor: ActorRecord,
+    /// `actors.avatar_object_key` — bkz. `ActorRecord`'un neden bunu
+    /// taşımadığı üzerine `actos_core::auth::AuthenticatedActor` dokümanı.
+    pub avatar_object_key: Option<String>,
     pub post_count: i64,
     pub comment_count: i64,
     pub total_score: i64,
@@ -254,6 +257,7 @@ struct ProfileRow {
     bio: Option<String>,
     created_at: DateTime<Utc>,
     trust_level: i16,
+    avatar_object_key: Option<String>,
     deleted_at: Option<DateTime<Utc>>,
     post_count: i64,
     comment_count: i64,
@@ -294,6 +298,7 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
             actors.bio,
             actors.created_at,
             actors.trust_level,
+            actors.avatar_object_key,
             actors.deleted_at,
             COUNT(contents.id) FILTER (
                 WHERE contents.content_type = 'post' AND contents.deleted_at IS NULL
@@ -331,6 +336,7 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
             created_at: row.created_at,
             trust_level: row.trust_level,
         },
+        avatar_object_key: row.avatar_object_key,
         post_count: row.post_count,
         comment_count: row.comment_count,
         total_score: row.total_score,
@@ -339,18 +345,29 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
 
 // --- Profil güncelleme ---------------------------------------------------
 
-/// `PATCH /actors/me`: `display_name`/`bio`'yu kısmi günceller.
+/// `PATCH /actors/me`: `display_name`/`bio`/`avatar`'ı kısmi günceller.
 ///
-/// Her iki parametre de `Option<Option<String>>`: dış `None` "bu alana
-/// dokunma", `Some(None)` "temizle (NULL yap)", `Some(Some(v))` "`v`'ye
-/// güncelle" anlamına gelir — HTTP katmanı JSON'daki alan var/yok ayrımını
-/// buraya kadar aynen taşıyor (bkz.
-/// `actos_types::actor::UpdateProfileRequest` üzerindeki yorum).
+/// Üç parametre de `Option<Option<T>>`: dış `None` "bu alana dokunma",
+/// `Some(None)` "temizle (NULL yap)", `Some(Some(v))` "`v`'ye güncelle"
+/// anlamına gelir — HTTP katmanı JSON'daki alan var/yok ayrımını buraya
+/// kadar aynen taşıyor (bkz. `actos_types::actor::UpdateProfileRequest`
+/// üzerindeki yorum).
+///
+/// `avatar_attachment_id`'nin iç (`bigint`) bir id olması bilinçli: `IdCodec`
+/// yalnızca HTTP katmanında kullanılıyor kuralı burada da geçerli (bkz.
+/// `actos-api/src/routes/actors.rs` — dış `f_...` id'sini çözen taraf o).
 ///
 /// **Tek statik SQL, dinamik `UPDATE` string birleştirmesi yok:** `CASE
 /// WHEN $touch THEN $value ELSE mevcut_kolon END` kalıbı, sqlx'in derleme
 /// zamanı doğruladığı sabit bir sorguyla "dokunma/temizle/güncelle" üçlü
-/// mantığını ifade ediyor.
+/// mantığını ifade ediyor — `avatar_object_key` de aynı kalıba katıldı.
+///
+/// **Neden transaction:** avatar `Some(Some(id))` ise, asıl `UPDATE`'ten
+/// önce [`crate::attachment::resolve_as_avatar`] ile o ekin çağırana ait ve
+/// henüz bir içeriğe bağlanmamış olduğu doğrulanmalı. Doğrulama başarısız
+/// olursa (404/403/409) `display_name`/`bio` için istenen değişiklikler de
+/// **uygulanmamalı** — `PATCH` tek bir atomik istek, "avatar reddedildi ama
+/// bio güncellendi" gibi yarım bir sonuç istemciyi şaşırtırdı.
 ///
 /// `actors.updated_at`'e burada elle dokunulmuyor:
 /// `migrations/0017_triggers.up.sql`'deki `trg_actors_set_updated_at`
@@ -362,16 +379,25 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
 /// tutarsızlığı sayıp [`Error::Internal`] dönüyoruz (bkz. `routes/auth.rs`
 /// `whoami`'deki aynı gerekçe).
 ///
+/// Dönüş: `(güncellenmiş actor, güncel avatar_object_key)` — ikincisi ayrı
+/// çünkü `ActorRecord` avatar taşımıyor (bkz. `crate::auth::
+/// AuthenticatedActor` üzerindeki gerekçe). Avatar bu çağrıda hiç
+/// dokunulmamışsa bile mevcut değeri (varsa) taşır — `RETURNING` her zaman
+/// satırın güncel hâlini verir.
+///
 /// # Errors
-/// `display_name`/`bio` doğrulamadan geçmezse [`Error::Validation`];
-/// yukarıdaki tutarsızlık durumunda [`Error::Internal`]; veritabanı hatası
-/// [`Error::Database`].
+/// `display_name`/`bio` doğrulamadan geçmezse [`Error::Validation`]; avatar
+/// olarak verilen ek yoksa [`Error::NotFound`], çağırana ait değilse
+/// [`Error::Forbidden`], zaten bir içeriğe bağlıysa [`Error::Conflict`]
+/// (bkz. [`crate::attachment::resolve_as_avatar`]); yukarıdaki tutarsızlık
+/// durumunda [`Error::Internal`]; veritabanı hatası [`Error::Database`].
 pub async fn update_profile(
     pool: &PgPool,
     actor_id: i64,
     display_name: Option<Option<String>>,
     bio: Option<Option<String>>,
-) -> Result<ActorRecord> {
+    avatar_attachment_id: Option<Option<i64>>,
+) -> Result<(ActorRecord, Option<String>)> {
     let display_name = validate_optional_update(display_name, text::validate_display_name)?;
     let bio = validate_optional_update(bio, text::validate_bio)?;
 
@@ -380,30 +406,74 @@ pub async fn update_profile(
     let touch_bio = bio.is_some();
     let new_bio = bio.flatten();
 
-    let actor = sqlx::query_as!(
-        ActorRecord,
+    let touch_avatar = avatar_attachment_id.is_some();
+
+    let mut tx = pool.begin().await?;
+
+    // `Some(Some(id))` → doğrulanmış `object_key`; `Some(None)` (temizleme)
+    // ve `None` (dokunmama) → `None` (ilkinde CASE WHEN NULL yazar, ikincisinde
+    // `touch_avatar=false` olduğu için CASE WHEN mevcut değeri zaten korur,
+    // bu `None` hiç kullanılmaz).
+    let new_avatar_object_key: Option<String> = match avatar_attachment_id.flatten() {
+        Some(attachment_id) => {
+            Some(crate::attachment::resolve_as_avatar(&mut tx, attachment_id, actor_id).await?)
+        }
+        None => None,
+    };
+
+    let row = sqlx::query_as!(
+        UpdateProfileRow,
         r#"
         UPDATE actors
         SET
             display_name = CASE WHEN $2 THEN $3 ELSE display_name END,
-            bio = CASE WHEN $4 THEN $5 ELSE bio END
+            bio = CASE WHEN $4 THEN $5 ELSE bio END,
+            avatar_object_key = CASE WHEN $6 THEN $7 ELSE avatar_object_key END
         WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, trust_level
+        RETURNING id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, trust_level, avatar_object_key
         "#,
         actor_id,
         touch_display_name,
         new_display_name,
         touch_bio,
         new_bio,
+        touch_avatar,
+        new_avatar_object_key,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    actor.ok_or_else(|| {
+    let row = row.ok_or_else(|| {
         Error::Internal(format!(
             "profil güncellenemedi: actor {actor_id} bulunamadı (authenticate() sonrası olmamalı)"
         ))
-    })
+    })?;
+
+    tx.commit().await?;
+
+    Ok((
+        ActorRecord {
+            id: row.id,
+            username: row.username,
+            actor_type: row.actor_type,
+            display_name: row.display_name,
+            bio: row.bio,
+            created_at: row.created_at,
+            trust_level: row.trust_level,
+        },
+        row.avatar_object_key,
+    ))
+}
+
+struct UpdateProfileRow {
+    id: i64,
+    username: String,
+    actor_type: ActorType,
+    display_name: Option<String>,
+    bio: Option<String>,
+    created_at: DateTime<Utc>,
+    trust_level: i16,
+    avatar_object_key: Option<String>,
 }
 
 /// [`update_profile`]'ın "dokunma/temizle/güncelle" alanlarından biri için
@@ -598,6 +668,9 @@ pub(crate) async fn resolve_live_actor_id(pool: &PgPool, username: &str) -> Resu
 #[derive(Debug, Clone)]
 pub struct FollowEntry {
     pub actor: ActorRecord,
+    /// Bkz. [`Profile::avatar_object_key`] üzerindeki gerekçe — aynı sebeple
+    /// `ActorRecord`'un değil, bu satıra özel bir alan.
+    pub avatar_object_key: Option<String>,
     pub followed_at: DateTime<Utc>,
 }
 
@@ -609,6 +682,7 @@ struct FollowRow {
     bio: Option<String>,
     created_at: DateTime<Utc>,
     trust_level: i16,
+    avatar_object_key: Option<String>,
     followed_at: DateTime<Utc>,
 }
 
@@ -624,6 +698,7 @@ impl FollowRow {
                 created_at: self.created_at,
                 trust_level: self.trust_level,
             },
+            avatar_object_key: self.avatar_object_key,
             followed_at: self.followed_at,
         }
     }
@@ -659,6 +734,7 @@ pub async fn list_followers(
             actors.bio,
             actors.created_at,
             actors.trust_level,
+            actors.avatar_object_key,
             follows.created_at AS followed_at
         FROM follows
         JOIN actors ON actors.id = follows.follower_actor_id
@@ -715,6 +791,7 @@ pub async fn list_following(
             actors.bio,
             actors.created_at,
             actors.trust_level,
+            actors.avatar_object_key,
             follows.created_at AS followed_at
         FROM follows
         JOIN actors ON actors.id = follows.followed_actor_id
@@ -748,6 +825,17 @@ pub async fn list_following(
 
 // --- Keşif dizini ------------------------------------------------------
 
+/// [`list_directory`]'nin bir sayfasındaki tek öğe: actor + avatar.
+///
+/// Ayrı bir struct (`ActorRecord`'u doğrudan döndürmek yerine): bkz.
+/// [`Profile::avatar_object_key`] üzerindeki gerekçe — `ActorRecord`
+/// bilerek avatar taşımıyor.
+#[derive(Debug, Clone)]
+pub struct DirectoryEntry {
+    pub actor: ActorRecord,
+    pub avatar_object_key: Option<String>,
+}
+
 struct DirectoryRow {
     id: i64,
     username: String,
@@ -756,6 +844,7 @@ struct DirectoryRow {
     bio: Option<String>,
     created_at: DateTime<Utc>,
     trust_level: i16,
+    avatar_object_key: Option<String>,
 }
 
 /// `GET /actors?type=...&sort=new`: keşif dizini, en yeni kayıt önce.
@@ -777,13 +866,13 @@ pub async fn list_directory(
     actor_type: Option<ActorType>,
     cursor: Option<Cursor>,
     limit: i64,
-) -> Result<Page<ActorRecord>> {
+) -> Result<Page<DirectoryEntry>> {
     let (cursor_created_at, cursor_id) = split_new_cursor(cursor);
 
     let rows = sqlx::query_as!(
         DirectoryRow,
         r#"
-        SELECT id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, trust_level
+        SELECT id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, trust_level, avatar_object_key
         FROM actors
         WHERE deleted_at IS NULL
           AND ($1::actor_type IS NULL OR actor_type = $1)
@@ -809,14 +898,17 @@ pub async fn list_directory(
         |row| SortKey::New {
             created_at: row.created_at,
         },
-        |row| ActorRecord {
-            id: row.id,
-            username: row.username,
-            actor_type: row.actor_type,
-            display_name: row.display_name,
-            bio: row.bio,
-            created_at: row.created_at,
-            trust_level: row.trust_level,
+        |row| DirectoryEntry {
+            actor: ActorRecord {
+                id: row.id,
+                username: row.username,
+                actor_type: row.actor_type,
+                display_name: row.display_name,
+                bio: row.bio,
+                created_at: row.created_at,
+                trust_level: row.trust_level,
+            },
+            avatar_object_key: row.avatar_object_key,
         },
     ))
 }

@@ -152,7 +152,12 @@ async fn search(
         .items
         .iter()
         .map(|actor| {
-            let summary = actor_summary(actor, state.id_codec())
+            // `actos_core::search::search_actors` düz `ActorRecord` döndürüyor
+            // (avatar taşımıyor, bkz. `actos_core::auth::AuthenticatedActor`
+            // dokümanındaki gerekçe) — `crate::routes::posts::
+            // content_summary_inner`'daki aynı bilinçli kapsam dışı bırakma,
+            // burada da `None`.
+            let summary = actor_summary(actor, None, state.id_codec())
                 .map_err(|e: Error| ApiError::new(e).with_request_id(&headers))?;
             fields::apply_fields(&summary, selected_fields.as_deref(), &headers)
         })

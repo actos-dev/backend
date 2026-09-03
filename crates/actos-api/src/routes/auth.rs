@@ -90,8 +90,20 @@ pub(crate) fn encode_actor_id(id_codec: &IdCodec, internal: i64) -> Result<Strin
         .map_err(|e| Error::Internal(format!("actor id kodlanamadı: {e}")))
 }
 
+/// `actor`'ü `ActorSummary`'e çevirir.
+///
+/// `avatar_url` **çağıran tarafından hazır** veriliyor (`Option<String>`,
+/// zaten `storage.public_url(...)` ile üretilmiş) — bu fonksiyon `Storage`'a
+/// bağımlı olmasın diye. Gerekçe: `ActorRecord` bilerek avatar taşımıyor
+/// (bkz. `actos_core::auth::AuthenticatedActor` dokümanı), yani avatar her
+/// çağıranda farklı bir kaynaktan geliyor (`AuthenticatedActor`,
+/// `actos_core::actor::Profile`/`FollowEntry`/`DirectoryEntry`, ya da içerik
+/// yazarları için hiç — bkz. `crate::routes::posts::content_summary_inner`)
+/// — tek bir ortak imza yerine çağırana bırakmak bu çeşitliliği en az
+/// sürtünmeyle karşılıyor.
 pub(crate) fn actor_summary(
     actor: &ActorRecord,
+    avatar_url: Option<String>,
     id_codec: &IdCodec,
 ) -> Result<ActorSummary, Error> {
     Ok(ActorSummary {
@@ -102,6 +114,7 @@ pub(crate) fn actor_summary(
         bio: actor.bio.clone(),
         created_at: actor.created_at.to_rfc3339(),
         trust_level: actor.trust_level,
+        avatar_url,
     })
 }
 
@@ -151,7 +164,11 @@ async fn register(
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let actor = actor_summary(&registration.actor, state.id_codec())
+    // Yeni kaydolan bir actor'ün avatarı olamaz: `avatar_object_key` yalnızca
+    // `PATCH /actors/me` ile, kayıttan sonra ayrı bir adımda set edilebiliyor
+    // (bkz. `actos_core::actor::update_profile`) — burada sorgu bile atmadan
+    // `None`.
+    let actor = actor_summary(&registration.actor, None, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let location = format!("/actors/{}", actor.username);
@@ -203,7 +220,11 @@ async fn whoami(
             .with_request_id(&headers)
         })?;
 
-    let actor = actor_summary(&current.actor, state.id_codec())
+    let avatar_url = current
+        .avatar_object_key
+        .as_deref()
+        .map(|key| state.storage().public_url(key));
+    let actor = actor_summary(&current.actor, avatar_url, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let roles = current

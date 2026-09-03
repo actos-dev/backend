@@ -129,6 +129,17 @@ fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<Actor
         bio: None,
         created_at: actor.created_at.to_rfc3339(),
         trust_level: actor.trust_level,
+        // Bilerek her zaman `None` — `display_name`/`bio` gibi girdiden
+        // türetilmiyor: silinmiş bir hesabın avatarı da diğer kişisel
+        // alanlar gibi görünmeye devam etmemeli (bkz. `actos_types::
+        // auth::ActorSummary::avatar_url` dokümanındaki gerekçe). Bu satır,
+        // içerik yazarları için avatar zaten hiç taşınmadığından (aşağıdaki
+        // `content_summary_inner`'daki `None` — bkz. o çağrıdaki not)
+        // bugün pratikte hep-zaten-`None`'ı maskeliyor; yine de sabit
+        // `None` bırakıldı ki ileride içerik yazarlarına avatar eklenirse
+        // (bkz. o notta anlatılan kapsam dışı bırakma) maskeleme
+        // otomatik/garantili kalsın, "unutma"ya bağlı olmasın.
+        avatar_url: None,
     })
 }
 
@@ -263,10 +274,19 @@ fn content_summary_inner(
 ) -> Result<ContentSummary, Error> {
     let id = id_codec.encode::<ContentIdKind>(content.id)?;
 
+    // `avatar_url` burada bilerek her zaman `None`: `content.author`
+    // (`ActorRecord`) avatar taşımıyor — bkz. `actos_core::auth::
+    // AuthenticatedActor` dokümanındaki gerekçe (`ActorRecord`,
+    // `crate::comment`/`crate::interaction`/`crate::feed`/`crate::search`
+    // gibi avatarı hiç bilmeyen birçok sorgu tarafından da paylaşılıyor).
+    // Yani bir içeriğin yazarının avatarını göstermek bu görevin kapsamı
+    // dışında bırakıldı; profil odaklı uçlar (`GET /actors/{username}`,
+    // `GET /auth/whoami`, takipçi/takip/keşif listeleri) avatarı doğru
+    // taşıyor.
     let author = if content.author_deleted {
         masked_actor_summary(&content.author, id_codec)?
     } else {
-        actor_summary(&content.author, id_codec)?
+        actor_summary(&content.author, None, id_codec)?
     };
 
     let deleted = content.deleted_at.is_some();

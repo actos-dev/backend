@@ -29,10 +29,13 @@
 //! bir anahtar önekiyle kurulur — her test kendi izole anahtar uzayında
 //! çalışır, üretim anahtar şemasına dokunulmaz.
 //!
-//! Storage/S3 hâlâ bu testlerde kullanılmıyor (auth uçları `state.storage()`
-//! çağırmıyor), bu yüzden o kısım hâlâ bilerek erişilemez bir adrese
-//! ayarlanıyor — `actos_core::Storage::new`'in tembel oluşu bunu güvenli
-//! kılıyor (bkz. `test_config`).
+//! Storage/S3'e hâlâ gerçekten **bağlanılmıyor** (o kısım hâlâ bilerek
+//! erişilemez bir adrese ayarlanıyor — `actos_core::Storage::new`'in tembel
+//! oluşu bunu güvenli kılıyor, bkz. `test_config`), ama Faz 18.A'dan beri
+//! `whoami` `state.storage()` **çağırıyor**: avatar set edilmişse
+//! `Storage::public_url` ile URL üretiyor. Bu saf bir string birleştirmesi
+//! (ağa çıkmıyor), yani erişilemez adrese rağmen güvenli — bkz. `whoami_
+//! avatar_url_set_edilmisse_dogru_url_doner`.
 
 use actos_api::{app, state::AppState};
 use actos_core::{
@@ -453,6 +456,46 @@ async fn kayittan_donen_key_ile_whoami_dogru_kullaniciyi_doner(pool: PgPool) {
     assert!(body["key"]["id"].as_str().is_some());
     // Doğrulamada kullanılan key'in özeti dönüyor olmalı, secret değil.
     assert!(body.get("secret_hash").is_none());
+    // Avatar hiç set edilmemiş — `avatar_url` `null` olmalı (bkz.
+    // `whoami_avatar_url_set_edilmisse_dogru_url_doner` set edilmiş hâli
+    // için).
+    assert!(body["actor"]["avatar_url"].is_null());
+}
+
+/// Faz 18.A: `whoami`'nin `AuthenticatedActor::avatar_object_key`'i doğru
+/// okuyup `Storage::public_url` ile URL'e çevirdiğini sınar.
+///
+/// `actors.avatar_object_key` burada **doğrudan `UPDATE` ile** yazılıyor,
+/// `PATCH /actors/me` üzerinden değil: bu testin konusu `whoami`'nin okuma
+/// tarafı (`actos_core::auth::authenticate`'in yeni `avatar_object_key`
+/// alanı) — yazma tarafının kendi doğrulama testleri (`crates/actos-api/
+/// tests/actors_api.rs`'teki `patch_me_avatar_*`) zaten ayrı.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn whoami_avatar_url_set_edilmisse_dogru_url_doner(pool: PgPool) {
+    let router = build_router(pool.clone());
+    let reg = register(&router, "whoami_avatarli").await;
+    let api_key = reg["api_key"].as_str().expect("api_key olmalı").to_owned();
+    let actor_id =
+        sqlx::query_scalar!(r#"SELECT id FROM actors WHERE username = 'whoami_avatarli'"#)
+            .fetch_one(&pool)
+            .await
+            .expect("actor bulunabilmeli");
+
+    sqlx::query!(
+        r#"UPDATE actors SET avatar_object_key = 'abc/some-key.webp' WHERE id = $1"#,
+        actor_id,
+    )
+    .execute(&pool)
+    .await
+    .expect("avatar_object_key yazılabilmeli");
+
+    let (status, body, _) = send(&router, auth_req("GET", "/auth/whoami", &api_key)).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["actor"]["avatar_url"],
+        "http://127.0.0.1:1/test-bucket/abc/some-key.webp"
+    );
 }
 
 // --- Key yönetimi ------------------------------------------------------

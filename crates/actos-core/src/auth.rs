@@ -94,6 +94,18 @@ pub struct AuthenticatedActor {
     /// extractor'ı: güvenli olmayan HTTP metotlarında bu bayrağa bakıp
     /// `403` döndürüyor, böylece kural handler başına elle yazılmıyor.
     pub banned: bool,
+    /// Doğrulanan actor'ün avatarının object key'i (`actors.avatar_object_key`)
+    /// — set değilse `None`.
+    ///
+    /// **Bilerek `ActorRecord`'un değil, `AuthenticatedActor`'ın bir
+    /// alanı:** `ActorRecord`, `crate::comment`/`crate::interaction`/
+    /// `crate::feed`/`crate::search`'ün `Content.author`'ı doldurmak için
+    /// de kullandığı paylaşılan, dar bir tip — avatarı oraya eklemek o
+    /// modüllerin hepsindeki her satır ayracı (`ActorRecord { ... }`)
+    /// güncellemeyi gerektirirdi. `AuthenticatedActor` ise yalnızca burada,
+    /// istek başına bir kez [`authenticate`]'in ürettiği bir sonuç —
+    /// paylaşımı yok, avatarı taşımak güvenli.
+    pub avatar_object_key: Option<String>,
 }
 
 /// [`register`] çağrısının sonucu. `api_key` ve `recovery_codes` **ham**
@@ -217,6 +229,7 @@ struct AuthRow {
     bio: Option<String>,
     created_at: DateTime<Utc>,
     trust_level: i16,
+    avatar_object_key: Option<String>,
     deleted_at: Option<DateTime<Utc>>,
     is_banned: bool,
 }
@@ -260,6 +273,7 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
             actors.bio,
             actors.created_at,
             actors.trust_level,
+            actors.avatar_object_key,
             actors.deleted_at,
             (
                 bans.actor_id IS NOT NULL
@@ -314,6 +328,7 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
         key_id: parsed.key_id,
         roles,
         banned: row.is_banned,
+        avatar_object_key: row.avatar_object_key,
     })
 }
 

@@ -32,7 +32,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::{
     auth::CurrentActor,
     error::ApiError,
-    openapi::{Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
+    openapi::{Conflict, Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::auth::{actor_summary, parse_actor_type},
     state::AppState,
 };
@@ -158,7 +158,11 @@ async fn get_profile(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let actor = actor_summary(&profile.actor, state.id_codec())
+    let avatar_url = profile
+        .avatar_object_key
+        .as_deref()
+        .map(|key| state.storage().public_url(key));
+    let actor = actor_summary(&profile.actor, avatar_url, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(Json(ActorProfileResponse {
@@ -171,22 +175,31 @@ async fn get_profile(
     }))
 }
 
-/// `PATCH /actors/me` → `200`. Kısmi güncelleme: `req.display_name`/`req.bio`
-/// `Option<Option<String>>` olarak aynen `actos_core::actor::update_profile`'a
-/// geçiriliyor (bkz. `actos_types::actor::UpdateProfileRequest` dokümanı).
+/// `PATCH /actors/me` → `200`, `404` (avatar için verilen ek yok), `403`
+/// (ek başkasına ait), `409` (ek zaten bir içeriğe bağlı). Kısmi güncelleme:
+/// `req.display_name`/`req.bio`/`req.avatar` `Option<Option<T>>` olarak
+/// aynen `actos_core::actor::update_profile`'a geçiriliyor (bkz.
+/// `actos_types::actor::UpdateProfileRequest` dokümanı) — `avatar` yalnızca
+/// dış `f_...` id'sinin iç `bigint`'e çözülmesi burada, HTTP katmanında
+/// yapılıyor (`IdCodec` kuralı, bkz. modül dokümantasyonu).
 #[utoipa::path(
     patch,
     path = "/actors/me",
     tag = "actors",
     summary = "Kendi profilini kısmen güncelle",
     description = "Alan JSON'da hiç yoksa dokunulmaz; `null` gönderilirse temizlenir; değer \
-        gönderilirse güncellenir (bkz. `actos_types::actor::UpdateProfileRequest`).",
+        gönderilirse güncellenir (bkz. `actos_types::actor::UpdateProfileRequest`). `avatar` \
+        için verilen id `POST /uploads`'un döndürdüğü bir yükleme id'si olmalı; başkasına \
+        aitse `403`, yoksa `404`, zaten bir içeriğe bağlıysa `409` döner.",
     security(("api_key" = [])),
     request_body = UpdateProfileRequest,
     responses(
         (status = 200, description = "Güncellenmiş profil", body = UpdateProfileResponse),
         Unauthorized,
         ValidationFailed,
+        Forbidden,
+        NotFound,
+        Conflict,
         RateLimited,
     )
 )]
@@ -196,12 +209,42 @@ async fn update_profile(
     headers: HeaderMap,
     Json(req): Json<UpdateProfileRequest>,
 ) -> Result<Json<UpdateProfileResponse>, ApiError> {
-    let updated =
-        core_actor::update_profile(state.db(), current.actor.id, req.display_name, req.bio)
-            .await
-            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    // Dış `f_...` id'sini iç `bigint`'e çözüyoruz — `req.avatar`'ın
+    // `Option<Option<String>>` şeklini (dokunma/temizle/güncelle)
+    // `Option<Option<i64>>`'a birebir taşıyarak. Çözülemeyen bir id
+    // (yanlış prefix, bozuk base62, ya da hiç var olmayan bir attachment)
+    // burada `404` olur — `crate::routes::uploads::delete_upload`'daki aynı
+    // gerekçe: "biçim geçerli ama böyle bir kayıt yok" ile "biçim bozuk"
+    // ayrımı saldırgana bilgi verirdi, ikisi de aynı hataya çöküyor.
+    let avatar_attachment_id = req
+        .avatar
+        .map(|inner| {
+            inner
+                .map(|id| {
+                    state
+                        .id_codec()
+                        .decode::<actos_core::id::Attachment>(&id)
+                        .map_err(|_| Error::NotFound("attachment"))
+                })
+                .transpose()
+        })
+        .transpose()
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let actor = actor_summary(&updated, state.id_codec())
+    let (updated, avatar_object_key) = core_actor::update_profile(
+        state.db(),
+        current.actor.id,
+        req.display_name,
+        req.bio,
+        avatar_attachment_id,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let avatar_url = avatar_object_key
+        .as_deref()
+        .map(|key| state.storage().public_url(key));
+    let actor = actor_summary(&updated, avatar_url, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(Json(UpdateProfileResponse { actor }))
@@ -268,7 +311,9 @@ async fn list_followers(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    render_page(&state, page, &headers, |entry| &entry.actor)
+    render_page(&state, page, &headers, |entry| {
+        (&entry.actor, entry.avatar_object_key.as_deref())
+    })
 }
 
 /// `GET /actors/{username}/following` → `200`. `username`'in takip ettikleri.
@@ -302,7 +347,9 @@ async fn list_following(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    render_page(&state, page, &headers, |entry| &entry.actor)
+    render_page(&state, page, &headers, |entry| {
+        (&entry.actor, entry.avatar_object_key.as_deref())
+    })
 }
 
 /// `GET /actors?type=...&sort=new` → `200`. Keşif dizini.
@@ -355,28 +402,37 @@ async fn list_directory(
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    render_page(&state, page, &headers, |actor| actor)
+    render_page(&state, page, &headers, |entry| {
+        (&entry.actor, entry.avatar_object_key.as_deref())
+    })
 }
 
 // --- Ortak yanıt kurulumu ----------------------------------------------
 
 /// Bir [`core_actor::Page`]'i (öğe türü `T` — `list_followers`/
 /// `list_following` için `core_actor::FollowEntry`, `list_directory` için
-/// doğrudan `ActorRecord`) HTTP yanıtına çevirir: her öğeyi
+/// `core_actor::DirectoryEntry`) HTTP yanıtına çevirir: her öğeyi
 /// [`actor_summary`] ile özetler, cursor'ı [`CursorCodec::encode`] ile
-/// string'e kodlar. `actor_of` öğeden `ActorRecord` referansını çıkarır —
-/// iki çağıran şeklinin ortak tek noktası bu (bkz. `FollowEntry.actor` vs.
-/// doğrudan `ActorRecord`).
+/// string'e kodlar. `actor_of` öğeden `(&ActorRecord, avatar_object_key)`
+/// çiftini çıkarır — üç çağıran şeklinin ortak tek noktası bu
+/// (`FollowEntry`/`DirectoryEntry` ayrı ayrı `actor` + `avatar_object_key`
+/// alanları taşıyor, ikisi de `ActorRecord`'un kendisine avatar
+/// eklemiyor — bkz. `actos_core::auth::AuthenticatedActor` dokümanındaki
+/// gerekçe).
 fn render_page<T>(
     state: &AppState,
     page: core_actor::Page<T>,
     headers: &HeaderMap,
-    actor_of: impl Fn(&T) -> &ActorRecord,
+    actor_of: impl Fn(&T) -> (&ActorRecord, Option<&str>),
 ) -> Result<Json<ActorListResponse>, ApiError> {
     let actors = page
         .items
         .iter()
-        .map(|item| actor_summary(actor_of(item), state.id_codec()))
+        .map(|item| {
+            let (actor, avatar_object_key) = actor_of(item);
+            let avatar_url = avatar_object_key.map(|key| state.storage().public_url(key));
+            actor_summary(actor, avatar_url, state.id_codec())
+        })
         .collect::<Result<Vec<_>, Error>>()
         .map_err(|e| ApiError::new(e).with_request_id(headers))?;
 

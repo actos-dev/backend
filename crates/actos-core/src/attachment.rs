@@ -247,6 +247,64 @@ pub async fn attach_to_content(
     Ok(())
 }
 
+/// `PATCH /actors/me`'nin `avatar` alanı için: bir ekin **çağıranın kendi**
+/// ve **henüz bir içeriğe bağlanmamış** bir yüklemesi olduğunu doğrular,
+/// doğrularsa `object_key`'ini döner — bu değer doğrudan
+/// `actors.avatar_object_key`'e yazılır (bkz. `crate::actor::update_profile`).
+///
+/// **Neden burada, `crate::actor`'de değil:** bu, [`attach_to_content`] ile
+/// aynı aile — ikisi de `attachments` tablosunun "sahiplik + henüz
+/// bağlanmamışlık" kuralını uyguluyor, tek fark hedefin bir içerik değil
+/// `actors.avatar_object_key` olması. `attachments`'a dair kurallar bu
+/// modülde toplu kalsın diye `actor.rs`'e taşınmadı.
+///
+/// **`FOR UPDATE` ile satır kilitleniyor:** çağıran zaten bir transaction
+/// içinde ([`crate::actor::update_profile`]) — kilit, bu fonksiyonun
+/// `SELECT`'i ile çağıranın asıl `UPDATE actors ...`'ı arasındaki küçük
+/// pencerede aynı ekin eşzamanlı bir [`attach_to_content`] çağrısıyla bir
+/// içeriğe bağlanmasını engelliyor. Kilit yalnızca çağıranın transaction'ı
+/// commit/rollback olana kadar tutulur — [`attach_to_content`] de kendi
+/// transaction'ı içinde çalıştığı için burada çıkmaza (deadlock) yol açmaz,
+/// yalnızca kısa bir bekleme olur.
+///
+/// **`content_id IS NOT NULL` neden `404`/`403` değil `409`:** istek
+/// biçimsel olarak geçerli ve ek gerçekten var/çağırana ait — sorun
+/// kaynağın (attachment satırının) **şu anki durumunun** istenen işlemle
+/// çakışması (zaten başka bir yaşam döngüsüne, bir içeriğe, girmiş). Bu tam
+/// olarak HTTP `409 Conflict`'in tanımı; `400 Validation` istekteki
+/// biçimsel bir hata olduğunda daha doğru olurdu (id formatı bozuk gibi),
+/// burada öyle değil.
+///
+/// # Errors
+/// Ek yoksa [`Error::NotFound`]; çağırana ait değilse [`Error::Forbidden`];
+/// zaten bir içeriğe bağlıysa [`Error::Conflict`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn resolve_as_avatar(
+    tx: &mut PgConnection,
+    attachment_id: i64,
+    actor_id: i64,
+) -> Result<String> {
+    let kayit = sqlx::query!(
+        r#"SELECT actor_id, content_id, object_key FROM attachments WHERE id = $1 FOR UPDATE"#,
+        attachment_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound("attachment"))?;
+
+    if kayit.actor_id != actor_id {
+        return Err(Error::Forbidden);
+    }
+
+    if kayit.content_id.is_some() {
+        return Err(Error::Conflict(
+            "bu ek zaten bir içeriğe bağlı, avatar olarak kullanılamaz".to_owned(),
+        ));
+    }
+
+    Ok(kayit.object_key)
+}
+
 /// Bir içeriğe bağlı ekleri döner.
 ///
 /// # Errors
@@ -331,6 +389,24 @@ async fn nesneleri_sil(storage: &Storage, object_key: &str) {
 /// `idx_attachments_orphaned` (kısmi index, `WHERE content_id IS NULL`)
 /// tam bu sorgu için var — bkz. `migrations/0008_attachments.up.sql`.
 ///
+/// **⚠️ Avatar olarak kullanılan ekler bilerek dışlanıyor.** Bir avatar
+/// hiçbir zaman bir içeriğe bağlanmaz — `crate::actor::update_profile` onu
+/// yalnızca `actors.avatar_object_key`'e yazar, `attachments.content_id`
+/// hep `NULL` kalır (bkz. [`resolve_as_avatar`]). Bu filtre olmadan, bir
+/// actor avatarını ayarladıktan [`ORPHAN_MAX_AGE_HOURS`] saat sonra bu iş
+/// onu "hiçbir içeriğe bağlanmamış yükleme" sanıp **hem depolamadan hem
+/// veritabanından siler** — avatar sessizce kırık bir bağlantıya döner, ne
+/// istemciye ne loga bir hata düşer (silme başarıyla tamamlanır, sadece
+/// yanlış satırı hedef alır). Dışlama `NOT EXISTS` ile: `attachments.
+/// object_key`'i `actors.avatar_object_key`'e eşit olan hiçbir satır
+/// (yaşı ne olursa olsun) bu iş tarafından adaya alınmaz.
+///
+/// Performans notu: `actors` üzerinde `avatar_object_key`'e bir index yok
+/// (bu görev bir migration eklemedi); Postgres `NOT EXISTS`'i tipik olarak
+/// tek bir anti-join'e çeviriyor (satır başına ayrı bir tarama değil), yani
+/// bugünkü ölçekte sorun değil — `actors` tablosu büyüdükçe `avatar_object_key
+/// IS NOT NULL` üzerinde kısmi bir index eklemek gerekebilir.
+///
 /// # Errors
 /// Veritabanı hatası [`Error::Database`].
 pub async fn cleanup_orphaned(pool: &PgPool, storage: &Storage) -> Result<u64> {
@@ -357,9 +433,15 @@ pub async fn cleanup_orphaned(pool: &PgPool, storage: &Storage) -> Result<u64> {
         r#"
         DELETE FROM attachments
         WHERE id IN (
-            SELECT id FROM attachments
-            WHERE content_id IS NULL AND created_at < $1
-            ORDER BY created_at
+            SELECT attachments.id
+            FROM attachments
+            WHERE attachments.content_id IS NULL
+              AND attachments.created_at < $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM actors
+                  WHERE actors.avatar_object_key = attachments.object_key
+              )
+            ORDER BY attachments.created_at
             LIMIT $2
         )
         RETURNING object_key

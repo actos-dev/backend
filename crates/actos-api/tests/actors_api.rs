@@ -28,7 +28,7 @@ use actos_core::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
     },
     cursor::CursorCodec,
-    id::IdCodec,
+    id::{Attachment as AttachmentIdKind, IdCodec},
     idempotency::IdempotencyStore,
     ratelimit::RateLimiter,
 };
@@ -287,6 +287,64 @@ async fn seed_comment(pool: &PgPool, actor_id: i64, parent_id: i64, score: i32) 
     .id
 }
 
+/// `attachments` tablosuna doğrudan bir satır ekler (gerçek depolamaya hiç
+/// dokunmadan) — `test_config`'teki `Storage` bilerek erişilemez bir adrese
+/// (`http://127.0.0.1:1`) işaret ediyor, `POST /uploads`'un gerçek akışını
+/// (`actos_core::attachment::create_attachment`) buradan tetiklemenin bir
+/// anlamı yok; PATCH /actors/me'nin avatar doğrulaması yalnızca satırın
+/// varlığına/sahipliğine/`content_id`'sine bakıyor, gerçek bir S3 nesnesine
+/// değil. `content_id` verilmişse (bir posta/yoruma "bağlı" senaryosu)
+/// dolu, `None` ise (henüz bağlanmamış — avatar için geçerli durum) `NULL`.
+/// Döner: iç `attachment_id`.
+#[allow(clippy::expect_used)]
+async fn seed_attachment(pool: &PgPool, actor_id: i64, content_id: Option<i64>) -> i64 {
+    let object_key = format!("{actor_id}/{}.webp", uuid::Uuid::new_v4());
+    // `ck_attachments_checksum_sha256_format`: 64 karakter küçük harf hex —
+    // gerçek bir dosya hiç yok, sabit bir değer format kısıtını karşılıyor.
+    let checksum = "0".repeat(64);
+
+    sqlx::query!(
+        r#"
+        INSERT INTO attachments
+            (actor_id, content_id, object_key, byte_size, mime_type, width, height, checksum_sha256)
+        VALUES ($1, $2, $3, 1024, 'image/webp', 10, 10, $4)
+        RETURNING id
+        "#,
+        actor_id,
+        content_id,
+        object_key,
+        checksum,
+    )
+    .fetch_one(pool)
+    .await
+    .expect("attachment eklenebilmeli")
+    .id
+}
+
+/// `actos_core::auth::register`'ı doğrudan çağırır (bkz. `seed_actor`
+/// üzerindeki gerekçe — HTTP'nin hız sınırını görmeden) ama hem iç id'yi
+/// hem ham `api_key`'i döner: PATCH /actors/me testleri kimliği doğrulamak
+/// için gerçek bir key'e, avatar hedefini seed'lemek için de iç id'ye
+/// ihtiyaç duyuyor — `register` (HTTP) + ayrı bir "actor_id_by_username"
+/// sorgusu yerine tek fonksiyon.
+#[allow(clippy::expect_used)]
+async fn register_direct(pool: &PgPool, username: &str) -> (i64, String) {
+    let reg = core_auth::register(pool, username, ActorType::Human, None)
+        .await
+        .expect("fixture actor oluşturulabilmeli");
+    (reg.actor.id, reg.api_key)
+}
+
+/// `test_config`'in `id_obfuscation_key`'iyle kurulmuş bir `IdCodec` —
+/// `build_router`'ın içindekiyle **aynı anahtar**, yani burada üretilen
+/// dış id'ler `send`'e verilen router tarafından doğru çözülebiliyor.
+/// Avatar testleri, seed'lenen iç `attachment_id`'yi `PATCH /actors/me`
+/// gövdesine yazabilmek için dış (`f_...`) biçime çevirmek zorunda.
+#[allow(clippy::expect_used)]
+fn test_id_codec() -> IdCodec {
+    IdCodec::new(&test_config().security.id_obfuscation_key).expect("geçerli anahtar")
+}
+
 // --- Profil ----------------------------------------------------------------
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
@@ -453,6 +511,143 @@ async fn patch_me_gecersiz_bio_400_validation_failed_doner(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "VALIDATION_FAILED");
+}
+
+// --- PATCH /actors/me — avatar --------------------------------------------
+//
+// Faz 18.A "Avatar": `req.avatar` üç doğrulamadan geçiyor
+// (`actos_core::attachment::resolve_as_avatar`) — sırasıyla aşağıdaki dört
+// test bunları ve başarılı set/kaldırma yolunu kapsıyor.
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn patch_me_avatar_baskasinin_ekiyle_403_forbidden_doner(pool: PgPool) {
+    let router = build_router(pool.clone());
+    let (_, api_key) = register_direct(&pool, "avatar_sahibi_degil").await;
+    let (baskasi_id, _) = register_direct(&pool, "avatar_baskasi").await;
+    let baskasinin_eki = seed_attachment(&pool, baskasi_id, None).await;
+    let ek_dis_id = test_id_codec()
+        .encode::<AttachmentIdKind>(baskasinin_eki)
+        .expect("kodlanabilmeli");
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/actors/me",
+            &api_key,
+            json!({ "avatar": ek_dis_id }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "FORBIDDEN");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn patch_me_avatar_olmayan_id_404_not_found_doner(pool: PgPool) {
+    let router = build_router(pool.clone());
+    let (_, api_key) = register_direct(&pool, "avatar_olmayan_id").await;
+    // Hiç eklenmemiş, uydurma bir iç id — `encode` kendisi asla başarısız
+    // olmuyor (bkz. `IdCodec` dokümantasyonu), yalnızca çözüldüğünde
+    // veritabanında karşılığı olmayan bir `f_...` üretiyor.
+    let ek_dis_id = test_id_codec()
+        .encode::<AttachmentIdKind>(999_999_999)
+        .expect("kodlanabilmeli");
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/actors/me",
+            &api_key,
+            json!({ "avatar": ek_dis_id }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "NOT_FOUND");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn patch_me_avatar_icerige_bagli_ek_409_conflict_doner(pool: PgPool) {
+    let router = build_router(pool.clone());
+    let (actor_id, api_key) = register_direct(&pool, "avatar_bagli_ek").await;
+    let post_id = seed_post(&pool, actor_id, 0, false).await;
+    // Ek kendi postuna bağlı — `content_id IS NOT NULL` — avatar olarak
+    // reddedilmeli (bkz. `actos_core::attachment::resolve_as_avatar`
+    // dokümanındaki `409` seçim gerekçesi).
+    let bagli_ek = seed_attachment(&pool, actor_id, Some(post_id)).await;
+    let ek_dis_id = test_id_codec()
+        .encode::<AttachmentIdKind>(bagli_ek)
+        .expect("kodlanabilmeli");
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/actors/me",
+            &api_key,
+            json!({ "avatar": ek_dis_id }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "CONFLICT");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn patch_me_avatar_set_edilir_gorunur_null_ile_kaldirilir(pool: PgPool) {
+    let router = build_router(pool.clone());
+    let (actor_id, api_key) = register_direct(&pool, "avatar_set_kaldir").await;
+    let ek_id = seed_attachment(&pool, actor_id, None).await;
+    let ek_dis_id = test_id_codec()
+        .encode::<AttachmentIdKind>(ek_id)
+        .expect("kodlanabilmeli");
+
+    // 1) Set: `200` + yanıttaki `avatar_url` beklenen `public_base_url` +
+    //    `object_key` birleşimi olmalı (bkz. `Storage::public_url`).
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/actors/me",
+            &api_key,
+            json!({ "avatar": ek_dis_id }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let avatar_url = body["actor"]["avatar_url"]
+        .as_str()
+        .expect("avatar_url string olmalı: {body}")
+        .to_owned();
+    assert!(
+        avatar_url.starts_with("http://127.0.0.1:1/test-bucket/"),
+        "beklenmeyen avatar_url: {avatar_url}"
+    );
+
+    // 2) `GET /actors/{username}` da aynı avatar_url'i taşımalı — `PATCH`
+    //    yanıtına özel bir kısayol değil, `actors.avatar_object_key` gerçekten
+    //    yazıldı.
+    let (status, profile_body, _) =
+        send(&router, empty_req("GET", "/actors/avatar_set_kaldir")).await;
+    assert_eq!(status, StatusCode::OK, "{profile_body}");
+    assert_eq!(profile_body["actor"]["avatar_url"], avatar_url);
+
+    // 3) `avatar: null` → kaldırılmalı.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req("PATCH", "/actors/me", &api_key, json!({ "avatar": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["actor"]["avatar_url"].is_null(),
+        "null gönderilince avatar kaldırılmalı: {body}"
+    );
 }
 
 // --- DELETE /actors/me ---------------------------------------------------
