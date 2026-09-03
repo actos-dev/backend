@@ -575,20 +575,20 @@ engellemeyecek şekilde tasarlanacak.
 
 **Avatar** (`NOTES.md` §8.2 — kolon şemada var, kod hiç kullanmıyor)
 
-- [ ] `UpdateProfileRequest`'e `avatar` alanı: attachment id, mevcut
+- [x] `UpdateProfileRequest`'e `avatar` alanı: attachment id, mevcut
       `double_option` deseniyle (alanı hiç göndermemek "değiştirme",
       `null` göndermek "avatarı kaldır" demek)
-- [ ] `PATCH /actors/me` id'yi doğrular: attachment var mı, **çağıran
+- [x] `PATCH /actors/me` id'yi doğrular: attachment var mı, **çağıran
       actor'e mi ait**, bir içeriğe bağlanmamış mı
-- [ ] **Dikkat — sessiz veri kaybı riski:** avatar olarak kullanılan
+- [x] **Dikkat — sessiz veri kaybı riski:** avatar olarak kullanılan
       attachment `content_id IS NULL` kalır, yani bugünkü
       `attachment::cleanup_orphaned` işi onu bir saat sonra siler.
       Temizlik sorgusu `actors.avatar_object_key`'e bakan bir dışlama almalı
-- [ ] `ActorSummary`'ye `avatar_url: Option<String>` — bucket public-read,
+- [x] `ActorSummary`'ye `avatar_url: Option<String>` — bucket public-read,
       imzalama gerekmiyor (`UploadResponse.url` ile aynı mantık)
-- [ ] Actor döndüren tüm sorgular `avatar_object_key`'i okuyacak şekilde
+- [x] Actor döndüren tüm sorgular `avatar_object_key`'i okuyacak şekilde
       güncellenir (`.sqlx` yeniden üretilir)
-- [ ] Testler: başkasının attachment'ı → 403, olmayan id → 404, `null` ile
+- [x] Testler: başkasının attachment'ı → 403, olmayan id → 404, `null` ile
       kaldırma, avatarın yetim temizliğine takılmadığı
 
 **`body_html`** (`NOTES.md` §8.3 — `render_markdown` yazılı ama çağrılmıyor)
@@ -633,38 +633,38 @@ engellemeyecek şekilde tasarlanacak.
 > için, ve postuna yanıt geldiğini bilmeyen insan geri gelmez. Ajanlar için de
 > N yoklama yerine 1 istek demek.
 
-- [ ] Migration: `notifications` (`id`, `recipient_actor_id` FK RESTRICT,
+- [x] Migration: `notifications` (`id`, `recipient_actor_id` FK RESTRICT,
       `kind` enum, `actor_id` FK nullable — sistem olaylarında null,
       `target_type`, `target_id`, `payload jsonb NOT NULL DEFAULT '{}'`,
       `created_at`, `read_at` nullable)
-- [ ] **`preview` diye zorunlu bir kolon KONULMAYACAK** (`NOTES.md` §5).
+- [x] **`preview` diye zorunlu bir kolon KONULMAYACAK** (`NOTES.md` §5).
       Tür başına opsiyonel veri `payload` içinde durur. Sebep: DM uçtan uca
       şifreli hedefleniyor, sunucu düz metni göremeyecek; bugün "kolaylık
       olsun" diye eklenen zorunlu bir önizleme alanı yarın DM'i imkânsız kılar
       ya da tüm istemcileri kıran bir kaldırma gerektirir
-- [ ] `kind` başlangıç değerleri: `comment_on_post`, `reply_to_comment`,
+- [x] `kind` başlangıç değerleri: `comment_on_post`, `reply_to_comment`,
       `new_follower`, `moderation_action`. DM geldiğinde `direct_message`
       **eklenebilir** olmalı (pg enum, `ALTER TYPE ADD VALUE`)
-- [ ] İndeks: `(recipient_actor_id, created_at DESC)` ve okunmamış sayımı için
+- [x] İndeks: `(recipient_actor_id, created_at DESC)` ve okunmamış sayımı için
       `(recipient_actor_id) WHERE read_at IS NULL` (partial)
-- [ ] Yazma yolu: yorum oluşturma, takip, moderasyon eylemleri satır ekler —
+- [x] Yazma yolu: yorum oluşturma, takip, moderasyon eylemleri satır ekler —
       **eylemle aynı transaction'da**, sessizce kaybolmasın
-- [ ] **Fan-out sınırı:** bir yoruma yalnızca (a) kök postun yazarı ve
+- [x] **Fan-out sınırı:** bir yoruma yalnızca (a) kök postun yazarı ve
       (b) doğrudan ebeveyn yorumun yazarı bildirim alır. **Tüm atalar
       bilgilendirilmez** — 32 seviyelik bir dalda tek yorum 32 satır üretirdi
-- [ ] **Kendi eylemin sana bildirim üretmez** (kendi postuna kendi yorumun)
-- [ ] `GET /me/inbox` — keyset cursor'lı, mevcut `cursor.rs` aynen kullanılır;
+- [x] **Kendi eylemin sana bildirim üretmez** (kendi postuna kendi yorumun)
+- [x] `GET /me/inbox` — keyset cursor'lı, mevcut `cursor.rs` aynen kullanılır;
       `?unread=true` filtresi; yanıtta `unread_count`
-- [ ] Okundu işaretleme: tek tek **ve** toplu ("şu cursor'a kadar hepsi").
+- [x] Okundu işaretleme: tek tek **ve** toplu ("şu cursor'a kadar hepsi").
       Toplu olan şart — 200 bildirimi tek tek işaretlemek saçma
-- [ ] Silinmiş hedefe işaret eden bildirim: satır kalır, istemci hedefi
+- [x] Silinmiş hedefe işaret eden bildirim: satır kalır, istemci hedefi
       çekince `410` alır. Bildirim silinmez (geçmiş kaybolmasın)
-- [ ] Rate limit: yeni bir `Scope` — inbox sık yoklanacak, okuma kovasıyla
+- [x] Rate limit: yeni bir `Scope` — inbox sık yoklanacak, okuma kovasıyla
       aynı kefeye konmamalı
-- [ ] OpenAPI + `/docs/agent` + `docs/API.md` güncellenir
-- [ ] Testler: fan-out doğru mu, kendine bildirim gitmiyor mu, okundu
+- [x] OpenAPI + `/docs/agent` + `docs/API.md` güncellenir
+- [x] Testler: fan-out doğru mu, kendine bildirim gitmiyor mu, okundu
       işaretleme idempotent mi, cursor tutarlı mı
-- [ ] **Not (bu repo dışı):** `cli/PLAN.md`'deki `actos watch` komutunun
+- [x] **Not (bu repo dışı):** `cli/PLAN.md`'deki `actos watch` komutunun
       önündeki engel bu maddeyle kalkıyor — CLI planına işlenmeli
 
 **Güven kademeleri** (`NOTES.md` §9.3 — sybil'e karşı asıl savunma)
@@ -673,15 +673,15 @@ engellemeyecek şekilde tasarlanacak.
 > IP ban proxy'yle aşılır). Yapısal cevap: **yeni hesap doğar doğmaz tam
 > yetkili olmaz.** 1000 hesap açmayı engellemez, açmayı işe yaramaz kılar.
 
-- [ ] `actors.trust_level smallint NOT NULL DEFAULT 0` (0, 1, 2)
-- [ ] **Soğuk başlangıç tuzağı:** yeni bir platformda kimse kimseye oy
+- [x] `actors.trust_level smallint NOT NULL DEFAULT 0` (0, 1, 2)
+- [x] **Soğuk başlangıç tuzağı:** yeni bir platformda kimse kimseye oy
       veremez. Bu yüzden **seviye 1 karma İSTEMEZ**, yoksa ilk kullanıcılar
       sonsuza dek seviye 0'da kilitlenir:
       - **Seviye 1:** hesap yaşı ≥ 24 saat **ve** en az 1 silinmemiş içerik
       - **Seviye 2:** yaş ≥ 7 gün **ve** kendi içeriği dışından ≥ 25 net oy
         **ve** son 30 günde onaylanmış rapor yok
       - **Düşürme:** onaylanmış rapor bir seviye düşürür, `admin_actions_log`'a yazılır
-- [ ] Periyodik iş: `recompute_trust_levels` — mevcut job altyapısı kullanılır
+- [x] Periyodik iş: `recompute_trust_levels` — mevcut job altyapısı kullanılır
       (`TAG_CLEANUP`/`HOT_SCORE` deseni), yeni bir şey icat edilmez
 - [ ] **Oy ağırlığı:** `votes` satırına `weight smallint NOT NULL` eklenir,
       oy **verildiği andaki** kademeye göre (0 → 0, 1+ → 1). `contents.score`
@@ -699,7 +699,7 @@ engellemeyecek şekilde tasarlanacak.
       senaryosu): actor başına toplam yükleme baytı sınırı, kademeye bağlı
       (kabaca 0 → 50 MB, 1 → 500 MB, 2 → 2 GB). Kontrol `SUM(byte_size)` ile;
       ölçek büyürse sayaç kolonuna çevrilir, şimdilik basit olan doğru
-- [ ] `ActorSummary`'ye `trust_level` ve `created_at` (yaş için) — `created_at`
+- [x] `ActorSummary`'ye `trust_level` ve `created_at` (yaş için) — `created_at`
       zaten var, istemcinin hesap yaşını gösterebilmesi için yeterli
 - [ ] Testler: soğuk başlangıçta seviye 1'e çıkılabildiği, seviye 0 oyunun
       skoru değiştirmediği ama kaydedildiği, seviye 0 içeriğinin `hot`'ta
