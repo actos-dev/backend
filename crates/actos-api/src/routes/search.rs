@@ -66,22 +66,22 @@ struct SearchQuery {
     get,
     path = "/search",
     tag = "search",
-    summary = "İçerik ya da actor ara",
-    description = "`type` zorunlu: `post`, `comment` ya da `actor`. `?type=post`/`?type=comment` \
-        için yanıt şekli `ContentSearchResponse` (aşağıda belgelenen), `?type=actor` için ise aynı \
-        sarmalayıcı (`{\"results\": [...], \"next_cursor\": ...}`) ama `results` içindeki öğeler \
-        `ActorSummary` — bkz. `actos_types::search::ActorSearchResponse`. `q` verilmemişse boş \
-        sonuç listesi döner, hata değil.",
+    summary = "Search content or actors",
+    description = "`type` is required: `post`, `comment`, or `actor`. `?type=post`/`?type=comment` \
+        return the `ContentSearchResponse` shape (documented below); `?type=actor` returns the same \
+        envelope (`{\"results\": [...], \"next_cursor\": ...}`) but the items inside `results` are \
+        `ActorSummary` — see `actos_types::search::ActorSearchResponse`. If `q` is omitted, an empty \
+        result list is returned, not an error.",
     params(
-        ("q" = Option<String>, Query, description = "Arama sorgusu"),
-        ("type" = String, Query, description = "`post`, `comment` ya da `actor` — zorunlu"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı (yalnızca aynı `q` ile anlamlı)"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("q" = Option<String>, Query, description = "Search query"),
+        ("type" = String, Query, description = "`post`, `comment`, or `actor` — required"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor` (only meaningful with the same `q`)"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
         ("fields" = Option<String>, Query,
-            description = "Virgülle ayrılmış alan adları; her sonuç öğesine uygulanır (yalnızca `post`/`comment` için)"),
+            description = "Comma-separated field names; applied to each result item (`post`/`comment` only)"),
     ),
     responses(
-        (status = 200, description = "Arama sonuçları, cursor'lu (bkz. üstteki `?type=actor` notu)", body = ContentSearchResponse),
+        (status = 200, description = "Search results, with a cursor (see the `?type=actor` note above)", body = ContentSearchResponse),
         ValidationFailed,
         RateLimited,
     )

@@ -68,13 +68,13 @@ struct UploadRequestBody {
     post,
     path = "/uploads",
     tag = "uploads",
-    summary = "Bir dosya yükle",
-    description = "Multipart gövdede `file` alanı bekler. Yanıttaki `id`, `POST /posts`/`POST \
-        /posts/{id}/comments`'ın `attachment_ids` alanına verilir.",
+    summary = "Upload a file",
+    description = "Expects a `file` field in the multipart body. The response's `id` is passed to \
+        `POST /posts`/`POST /posts/{id}/comments`'s `attachment_ids` field.",
     security(("api_key" = [])),
     request_body(content = inline(UploadRequestBody), content_type = "multipart/form-data"),
     responses(
-        (status = 201, description = "Yükleme kabul edildi, herkese açık URL ile birlikte", body = UploadResponse),
+        (status = 201, description = "Upload accepted, with its public URL", body = UploadResponse),
         ValidationFailed,
         Unauthorized,
         UnsupportedMedia,
@@ -158,13 +158,13 @@ async fn create_upload(
     delete,
     path = "/uploads/{id}",
     tag = "uploads",
-    summary = "Bir yüklemeyi sil",
+    summary = "Delete an upload",
     security(("api_key" = [])),
     params(
-        ("id" = String, Path, description = "Yüklemenin dış id'si"),
+        ("id" = String, Path, description = "The upload's external id"),
     ),
     responses(
-        (status = 204, description = "Silindi"),
+        (status = 204, description = "Deleted"),
         Unauthorized,
         Forbidden,
         NotFound,

@@ -79,13 +79,13 @@ struct TagPostsQuery {
     get,
     path = "/tags",
     tag = "tags",
-    summary = "Popülerlik sırasına göre etiketleri listele",
+    summary = "List tags ordered by popularity",
     params(
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
     ),
     responses(
-        (status = 200, description = "Etiket listesi, cursor'lu", body = TagListResponse),
+        (status = 200, description = "Tag list, with a cursor", body = TagListResponse),
         ValidationFailed,
         RateLimited,
     )
@@ -131,13 +131,13 @@ async fn list_tags(
     get,
     path = "/tags/search",
     tag = "tags",
-    summary = "Etiket otomatik tamamlama",
-    description = "`q` verilmezse ya da eşleşme yoksa boş liste döner, hata değil. Sayfalama yok.",
+    summary = "Tag autocomplete",
+    description = "Returns an empty list if `q` is omitted or nothing matches, not an error. No pagination.",
     params(
-        ("q" = Option<String>, Query, description = "Aranan etiket ön eki"),
+        ("q" = Option<String>, Query, description = "The tag prefix to search for"),
     ),
     responses(
-        (status = 200, description = "Eşleşen etiketler (üst sınır: `actos_core::tag::SEARCH_LIMIT`)", body = TagSearchResponse),
+        (status = 200, description = "Matching tags (capped at `actos_core::tag::SEARCH_LIMIT`)", body = TagSearchResponse),
         RateLimited,
     )
 )]
@@ -175,18 +175,18 @@ async fn search_tags(
     get,
     path = "/tags/{name}/posts",
     tag = "tags",
-    summary = "Bir etiketin post'larını listele",
-    description = "Var olup canlı post'u kalmamış bir etiket boş liste döner, `404` değil.",
+    summary = "List a tag's posts",
+    description = "A tag that exists but has no live posts left returns an empty list, not `404`.",
     params(
-        ("name" = String, Path, description = "Etiket adı"),
-        ("sort" = Option<String>, Query, description = "`new`, `top` ya da `hot`"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("name" = String, Path, description = "Tag name"),
+        ("sort" = Option<String>, Query, description = "`new`, `top`, or `hot`"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
         ("fields" = Option<String>, Query,
-            description = "Virgülle ayrılmış alan adları; her post öğesine uygulanır"),
+            description = "Comma-separated field names; applied to each post item"),
     ),
     responses(
-        (status = 200, description = "Post listesi, cursor'lu", body = PostListResponse),
+        (status = 200, description = "Post list, with a cursor", body = PostListResponse),
         ValidationFailed,
         NotFound,
         RateLimited,

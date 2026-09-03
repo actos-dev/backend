@@ -122,18 +122,18 @@ fn notification_summary(
     get,
     path = "/me/inbox",
     tag = "notifications",
-    summary = "Kendi gelen kutunu (bildirimlerini) listele",
-    description = "En yeni önce, keyset cursor'lu (bkz. `actos_core::cursor` — yeni bir sayfalama \
-        icat edilmedi). `?unread=true` yalnızca okunmamışları döner. `unread_count` her zaman \
-        TOPLAM okunmamış sayıdır, bu sayfadaki öğe sayısı değil.",
+    summary = "List your inbox (notifications)",
+    description = "Newest first, keyset-cursor paginated (see `actos_core::cursor` — no new pagination \
+        scheme was invented). `?unread=true` returns unread notifications only. `unread_count` is \
+        always the TOTAL unread count, not the number of items on this page.",
     security(("api_key" = [])),
     params(
-        ("unread" = Option<bool>, Query, description = "`true` ise yalnızca okunmamış bildirimler (varsayılan: `false`, hepsi)"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("unread" = Option<bool>, Query, description = "If `true`, unread notifications only (default: `false`, all)"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
     ),
     responses(
-        (status = 200, description = "Bildirim listesi, cursor'lu + okunmamış sayısı", body = InboxResponse),
+        (status = 200, description = "Notification list, with a cursor, plus the unread count", body = InboxResponse),
         ValidationFailed,
         Unauthorized,
         RateLimited,
@@ -177,15 +177,16 @@ async fn get_inbox(
     patch,
     path = "/me/inbox/{id}/read",
     tag = "notifications",
-    summary = "Tek bir bildirimi okundu işaretle",
-    description = "İdempotent: zaten okunmuş bir bildirime tekrar uygulanırsa `read_at` ileri \
-        atılmaz, yine `204` döner. Başka bir actor'ün bildirimi `404` döner (var/yok bilgisi sızmaz).",
+    summary = "Mark a single notification as read",
+    description = "Idempotent: applying it again to an already-read notification does not push \
+        `read_at` forward, and still returns `204`. Another actor's notification returns `404` \
+        (no existence information leaks).",
     security(("api_key" = [])),
     params(
-        ("id" = String, Path, description = "Bildirimin dış id'si (`n_...`)"),
+        ("id" = String, Path, description = "The notification's external id (`n_...`)"),
     ),
     responses(
-        (status = 204, description = "Okundu işaretlendi (zaten okunmuşsa da aynı)"),
+        (status = 204, description = "Marked as read (same result if already read)"),
         Unauthorized,
         NotFound,
         RateLimited,
@@ -220,17 +221,17 @@ async fn mark_read(
     post,
     path = "/me/inbox/read",
     tag = "notifications",
-    summary = "Bildirimleri topluca okundu işaretle",
-    description = "`cursor` verilmezse tüm okunmamış bildirimler, verilirse `GET /me/inbox`'ın \
-        döndürdüğü cursor'a kadar olanlar okundu işaretlenir. İdempotent.",
+    summary = "Bulk-mark notifications as read",
+    description = "If `cursor` is omitted, all unread notifications are marked read; if given, only \
+        those up to the cursor returned by `GET /me/inbox` are. Idempotent.",
     security(("api_key" = [])),
     params(
         ("cursor" = Option<String>, Query,
-            description = "Verilmezse TÜM okunmamışlar; verilirse `GET /me/inbox`'ın döndürdüğü \
-                cursor'a kadar olanlar okundu işaretlenir"),
+            description = "If omitted, ALL unread notifications; if given, only those up to the \
+                cursor returned by `GET /me/inbox` are marked read"),
     ),
     responses(
-        (status = 200, description = "Bu çağrıda yeni okundu işaretlenen sayı", body = MarkAllReadResponse),
+        (status = 200, description = "Number of notifications newly marked read by this call", body = MarkAllReadResponse),
         ValidationFailed,
         Unauthorized,
         RateLimited,

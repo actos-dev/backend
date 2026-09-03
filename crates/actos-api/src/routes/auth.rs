@@ -135,13 +135,13 @@ fn key_summary(key: &ApiKeyRecord) -> ApiKeySummary {
     post,
     path = "/auth/register",
     tag = "auth",
-    summary = "Yeni bir actor kaydı oluştur",
-    description = "Kimlik gerektirmez. Yanıt gövdesindeki `api_key` ve `recovery_codes` **yalnızca bu \
-        yanıtta** görünür, bir daha hiçbir uçtan geri alınamaz — istemci bunları o an saklamalı.",
+    summary = "Create a new actor registration",
+    description = "No authentication required. The `api_key` and `recovery_codes` in the response body \
+        appear **only in this response** and can never be retrieved from any endpoint again — the client must save them now.",
     request_body = RegisterRequest,
     responses(
-        (status = 201, description = "Actor oluşturuldu", body = RegisterResponse,
-            headers(("location" = String, description = "Yeni profilin yolu: /actors/{username}"))),
+        (status = 201, description = "Actor created", body = RegisterResponse,
+            headers(("location" = String, description = "Path of the new profile: /actors/{username}"))),
         ValidationFailed,
         Conflict,
         RateLimited,
@@ -190,10 +190,10 @@ async fn register(
     get,
     path = "/auth/whoami",
     tag = "auth",
-    summary = "Kimliğini doğrula ve kendi profilini/rollerini öğren",
+    summary = "Verify your identity and learn your own profile/roles",
     security(("api_key" = [])),
     responses(
-        (status = 200, description = "Doğrulanan actor, rolleri ve kullanılan key'in özeti", body = WhoamiResponse),
+        (status = 200, description = "The authenticated actor, their roles, and a summary of the key used", body = WhoamiResponse),
         Unauthorized,
         RateLimited,
     )
@@ -245,12 +245,12 @@ async fn whoami(
     post,
     path = "/auth/keys",
     tag = "auth",
-    summary = "Yeni bir API key oluştur",
-    description = "Ham key (`api_key`) yalnızca bu yanıtta görünür — bir daha geri alınamaz.",
+    summary = "Create a new API key",
+    description = "The raw key (`api_key`) appears only in this response — it can never be retrieved again.",
     security(("api_key" = [])),
     request_body = CreateKeyRequest,
     responses(
-        (status = 201, description = "Key oluşturuldu", body = CreateKeyResponse),
+        (status = 201, description = "Key created", body = CreateKeyResponse),
         Unauthorized,
         RateLimited,
     )
@@ -278,10 +278,10 @@ async fn create_key(
     get,
     path = "/auth/keys",
     tag = "auth",
-    summary = "Kendi API key'lerini listele",
+    summary = "List your own API keys",
     security(("api_key" = [])),
     responses(
-        (status = 200, description = "Secret'sız key özetleri", body = ListKeysResponse),
+        (status = 200, description = "Key summaries, without secrets", body = ListKeysResponse),
         Unauthorized,
         RateLimited,
     )
@@ -311,13 +311,13 @@ async fn list_keys(
     delete,
     path = "/auth/keys/{key_id}",
     tag = "auth",
-    summary = "Bir API key'i iptal et",
+    summary = "Revoke an API key",
     security(("api_key" = [])),
     params(
-        ("key_id" = String, Path, description = "İptal edilecek key'in ham UUID'si (`api_keys.id`)"),
+        ("key_id" = String, Path, description = "Raw UUID of the key to revoke (`api_keys.id`)"),
     ),
     responses(
-        (status = 204, description = "İptal edildi"),
+        (status = 204, description = "Revoked"),
         Unauthorized,
         NotFound,
         RateLimited,
@@ -344,11 +344,11 @@ async fn revoke_key(
     post,
     path = "/auth/recover",
     tag = "auth",
-    summary = "Kurtarma koduyla yeni bir API key al",
-    description = "Kimlik gerektirmez — kanıt zaten kurtarma kodunun kendisi. Kullanılan kod tüketilir.",
+    summary = "Get a new API key using a recovery code",
+    description = "No authentication required — the recovery code itself is the proof. The code used is consumed.",
     request_body = RecoverRequest,
     responses(
-        (status = 200, description = "Yeni ham key ve kalan kurtarma kodu sayısı", body = RecoverResponse),
+        (status = 200, description = "New raw key and the number of recovery codes remaining", body = RecoverResponse),
         ValidationFailed,
         NotFound,
         RateLimited,
@@ -375,11 +375,11 @@ async fn recover(
     post,
     path = "/auth/recovery-codes/regenerate",
     tag = "auth",
-    summary = "Kurtarma kodlarını yenile",
-    description = "Yeni 10 kod üretir; eskileri anında geçersiz olur. Yeni kodlar yalnızca bu yanıtta görünür.",
+    summary = "Regenerate recovery codes",
+    description = "Generates 10 new codes; the old ones become invalid immediately. The new codes appear only in this response.",
     security(("api_key" = [])),
     responses(
-        (status = 200, description = "Yeni kurtarma kodları", body = RegenerateRecoveryCodesResponse),
+        (status = 200, description = "New recovery codes", body = RegenerateRecoveryCodesResponse),
         Unauthorized,
         RateLimited,
     )

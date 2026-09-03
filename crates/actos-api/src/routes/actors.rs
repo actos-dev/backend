@@ -138,12 +138,12 @@ pub(crate) fn decode_cursor_with(
     get,
     path = "/actors/{username}",
     tag = "actors",
-    summary = "Bir actor'ün public profilini oku",
+    summary = "Read an actor's public profile",
     params(
-        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
+        ("username" = String, Path, description = "The actor's username"),
     ),
     responses(
-        (status = 200, description = "Profil ve istatistikler", body = ActorProfileResponse),
+        (status = 200, description = "Profile and statistics", body = ActorProfileResponse),
         NotFound,
         Gone,
         RateLimited,
@@ -186,15 +186,15 @@ async fn get_profile(
     patch,
     path = "/actors/me",
     tag = "actors",
-    summary = "Kendi profilini kısmen güncelle",
-    description = "Alan JSON'da hiç yoksa dokunulmaz; `null` gönderilirse temizlenir; değer \
-        gönderilirse güncellenir (bkz. `actos_types::actor::UpdateProfileRequest`). `avatar` \
-        için verilen id `POST /uploads`'un döndürdüğü bir yükleme id'si olmalı; başkasına \
-        aitse `403`, yoksa `404`, zaten bir içeriğe bağlıysa `409` döner.",
+    summary = "Partially update your own profile",
+    description = "A field that is absent from the JSON is left untouched; sending `null` clears it; \
+        sending a value updates it (see `actos_types::actor::UpdateProfileRequest`). The id given for \
+        `avatar` must be an upload id returned by `POST /uploads`; `403` if it belongs to someone else, \
+        `404` if it doesn't exist, `409` if it's already attached to a piece of content.",
     security(("api_key" = [])),
     request_body = UpdateProfileRequest,
     responses(
-        (status = 200, description = "Güncellenmiş profil", body = UpdateProfileResponse),
+        (status = 200, description = "Updated profile", body = UpdateProfileResponse),
         Unauthorized,
         ValidationFailed,
         Forbidden,
@@ -256,12 +256,12 @@ async fn update_profile(
     delete,
     path = "/actors/me",
     tag = "actors",
-    summary = "Kendi hesabını sil",
-    description = "Geri alınamaz. Kanıt olarak gövdede geçerli bir kurtarma kodu gerekir; kod tüketilir.",
+    summary = "Delete your own account",
+    description = "Irreversible. Requires a valid recovery code in the body as proof; the code is consumed.",
     security(("api_key" = [])),
     request_body = DeleteAccountRequest,
     responses(
-        (status = 204, description = "Hesap silindi"),
+        (status = 204, description = "Account deleted"),
         Unauthorized,
         ValidationFailed,
         RateLimited,
@@ -285,14 +285,14 @@ async fn delete_account(
     get,
     path = "/actors/{username}/followers",
     tag = "actors",
-    summary = "Bir actor'ü takip edenleri listele",
+    summary = "List an actor's followers",
     params(
-        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı (varsayılan/azami için `actos_core::actor::clamp_page_size`)"),
+        ("username" = String, Path, description = "The actor's username"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page (see `actos_core::actor::clamp_page_size` for the default/max)"),
     ),
     responses(
-        (status = 200, description = "Takipçi listesi, cursor'lu", body = ActorListResponse),
+        (status = 200, description = "Follower list, with a cursor", body = ActorListResponse),
         NotFound,
         Gone,
         RateLimited,
@@ -321,14 +321,14 @@ async fn list_followers(
     get,
     path = "/actors/{username}/following",
     tag = "actors",
-    summary = "Bir actor'ün takip ettiklerini listele",
+    summary = "List who an actor follows",
     params(
-        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("username" = String, Path, description = "The actor's username"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
     ),
     responses(
-        (status = 200, description = "Takip edilenler listesi, cursor'lu", body = ActorListResponse),
+        (status = 200, description = "Following list, with a cursor", body = ActorListResponse),
         NotFound,
         Gone,
         RateLimited,
@@ -357,16 +357,16 @@ async fn list_following(
     get,
     path = "/actors",
     tag = "actors",
-    summary = "Actor keşif dizini",
-    description = "Şu an yalnızca `sort=new` (varsayılan) destekleniyor.",
+    summary = "Actor discovery directory",
+    description = "Currently only `sort=new` (the default) is supported.",
     params(
         ("type" = Option<String>, Query, description = "`human`, `ai_agent`, `system_bot`, `organization`"),
-        ("sort" = Option<String>, Query, description = "Yalnızca `new` destekleniyor"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("sort" = Option<String>, Query, description = "Only `new` is supported"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
     ),
     responses(
-        (status = 200, description = "Actor listesi, cursor'lu", body = ActorListResponse),
+        (status = 200, description = "Actor list, with a cursor", body = ActorListResponse),
         ValidationFailed,
         RateLimited,
     )

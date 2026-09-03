@@ -163,16 +163,16 @@ fn comment_node(
     post,
     path = "/posts/{id}/comments",
     tag = "comments",
-    summary = "Bir post'a (ya da başka bir yoruma) yorum ekle",
-    description = "`parent_id` verilmezse yorum post'un doğrudan çocuğu olur; verilirse o yoruma yanıt olur.",
+    summary = "Add a comment to a post (or to another comment)",
+    description = "If `parent_id` is omitted, the comment becomes a direct child of the post; if given, it replies to that comment.",
     security(("api_key" = [])),
     params(
-        ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
+        ("id" = String, Path, description = "The post's external id (`c_...`)"),
     ),
     request_body = CreateCommentRequest,
     responses(
-        (status = 201, description = "Yorum oluşturuldu", body = ContentSummary,
-            headers(("location" = String, description = "Yeni yorumun yolu: /comments/{id}"))),
+        (status = 201, description = "Comment created", body = ContentSummary,
+            headers(("location" = String, description = "Path of the new comment: /comments/{id}"))),
         ValidationFailed,
         Unauthorized,
         Forbidden,
@@ -271,25 +271,25 @@ async fn create_comment(
     get,
     path = "/posts/{id}/comments",
     tag = "comments",
-    summary = "Bir post'un yorum ağacını listele",
-    description = "`?fields=` bu uçta **desteklenmiyor** (ağacın `replies` alanını bozardı). \
-        `body_html` bunun yerine ayrı bir `?body_html=true` bayrağıyla açılır — \
-        `?fields=body_html` değil, çünkü `?fields=` burada zaten yok.",
+    summary = "List a post's comment tree",
+    description = "`?fields=` is **not supported** on this endpoint (it would break the tree's `replies` \
+        field). `body_html` is instead opted into with a separate `?body_html=true` flag — not \
+        `?fields=body_html`, because `?fields=` doesn't exist here at all.",
     params(
-        ("id" = String, Path, description = "Post'un dış id'si (`c_...`)"),
-        ("sort" = Option<String>, Query, description = "`new` ya da `top`"),
-        ("depth" = Option<String>, Query, description = "Ağacın kaç seviye derine ineceği (varsayılan: `DEFAULT_TREE_DEPTH`)"),
-        ("parent" = Option<String>, Query, description = "Verilirse yalnızca bu yorumun alt ağacı döner"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı (yalnızca üst seviyeyi sayfalar)"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına üst seviye yorum sayısı"),
+        ("id" = String, Path, description = "The post's external id (`c_...`)"),
+        ("sort" = Option<String>, Query, description = "`new` or `top`"),
+        ("depth" = Option<String>, Query, description = "How many levels deep the tree should go (default: `DEFAULT_TREE_DEPTH`)"),
+        ("parent" = Option<String>, Query, description = "If given, only that comment's subtree is returned"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor` (paginates the top level only)"),
+        ("limit" = Option<String>, Query, description = "Top-level comments per page"),
         ("body_html" = Option<bool>, Query,
-            description = "`true` ise ağaçtaki her düğüm için `body_html` hesaplanır (varsayılan: `false`, hesaplanmaz). \
-                Ayrı bir parametre olma sebebi: bu uçta `?fields=` desteklenmiyor (yukarıya bkz.) — alan filtresi \
-                ağacın `replies` yapısını bozacağı için hiç yok, dolayısıyla `body_html`'i `?fields=body_html` ile \
-                değil, tek amaçlı bu bayrakla açıyoruz."),
+            description = "If `true`, `body_html` is computed for every node in the tree (default: `false`, not computed). \
+                It's a separate parameter because `?fields=` isn't supported on this endpoint (see above) — the field \
+                filter doesn't exist here since it would break the tree's `replies` structure, so `body_html` is opted \
+                into with this single-purpose flag instead of `?fields=body_html`."),
     ),
     responses(
-        (status = 200, description = "İç içe yorum ağacı, cursor'lu", body = CommentThreadResponse),
+        (status = 200, description = "Nested comment tree, with a cursor", body = CommentThreadResponse),
         ValidationFailed,
         NotFound,
         Gone,
@@ -363,14 +363,14 @@ async fn list_comments(
     get,
     path = "/comments/{id}",
     tag = "comments",
-    summary = "Tekil bir yorumu, ata zinciriyle birlikte oku",
-    description = "Silinmiş bir yorum `410` DÖNMEZ, `deleted: true` ve `[deleted]` gövdesiyle `200` döner — \
-        çocukları yaşamaya devam ettiği için düğümün kendisi erişilebilir kalmalı.",
+    summary = "Read a single comment, with its ancestor chain",
+    description = "A deleted comment does NOT return `410` — it returns `200` with `deleted: true` and \
+        a `[deleted]` body, because its children continue to live and the node itself must stay reachable.",
     params(
-        ("id" = String, Path, description = "Yorumun dış id'si (`c_...`)"),
+        ("id" = String, Path, description = "The comment's external id (`c_...`)"),
     ),
     responses(
-        (status = 200, description = "Yorum + kökten kendisine kadar ata zinciri", body = CommentDetailResponse),
+        (status = 200, description = "Comment plus the ancestor chain from the root down to it", body = CommentDetailResponse),
         NotFound,
         RateLimited,
     )
@@ -417,14 +417,14 @@ async fn get_comment(
     patch,
     path = "/comments/{id}",
     tag = "comments",
-    summary = "Bir yorumu düzenle",
+    summary = "Edit a comment",
     security(("api_key" = [])),
     params(
-        ("id" = String, Path, description = "Yorumun dış id'si (`c_...`)"),
+        ("id" = String, Path, description = "The comment's external id (`c_...`)"),
     ),
     request_body = UpdateCommentRequest,
     responses(
-        (status = 200, description = "Güncellenmiş yorum", body = ContentSummary),
+        (status = 200, description = "Updated comment", body = ContentSummary),
         Unauthorized,
         Forbidden,
         NotFound,
@@ -459,14 +459,14 @@ async fn update_comment(
     delete,
     path = "/comments/{id}",
     tag = "comments",
-    summary = "Bir yorumu sil (soft-delete)",
-    description = "Sahibi ya da moderatör/admin çağırabilir. Düğüm ağaçta kalır, çocukları yaşamaya devam eder.",
+    summary = "Delete a comment (soft-delete)",
+    description = "Callable by its owner or a moderator/admin. The node stays in the tree; its children continue to live.",
     security(("api_key" = [])),
     params(
-        ("id" = String, Path, description = "Yorumun dış id'si (`c_...`)"),
+        ("id" = String, Path, description = "The comment's external id (`c_...`)"),
     ),
     responses(
-        (status = 204, description = "Silindi"),
+        (status = 204, description = "Deleted"),
         Unauthorized,
         Forbidden,
         NotFound,
@@ -499,17 +499,17 @@ async fn delete_comment(
     get,
     path = "/actors/{username}/comments",
     tag = "comments",
-    summary = "Bir actor'ün yorumlarını listele",
-    description = "En yeni önce, düz liste (ağaç değil).",
+    summary = "List an actor's comments",
+    description = "Newest first, flat list (not a tree).",
     params(
-        ("username" = String, Path, description = "Actor'ün kullanıcı adı"),
-        ("cursor" = Option<String>, Query, description = "Önceki sayfanın `next_cursor`'ı"),
-        ("limit" = Option<String>, Query, description = "Sayfa başına öğe sayısı"),
+        ("username" = String, Path, description = "The actor's username"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
         ("fields" = Option<String>, Query,
-            description = "Virgülle ayrılmış alan adları; her yorum öğesine uygulanır"),
+            description = "Comma-separated field names; applied to each comment item"),
     ),
     responses(
-        (status = 200, description = "Yorum listesi, cursor'lu", body = CommentListResponse),
+        (status = 200, description = "Comment list, with a cursor", body = CommentListResponse),
         NotFound,
         Gone,
         RateLimited,

@@ -21,10 +21,10 @@ use crate::state::AppState;
     get,
     path = "/health",
     tag = "meta",
-    summary = "Liveness kontrolü",
-    description = "Süreç ayakta mı? Bağımlılıklara (DB/Redis/Storage) hiç bakmaz — bkz. handler dokümantasyonu.",
+    summary = "Liveness check",
+    description = "Is the process up? Never looks at dependencies (DB/Redis/Storage) — see the handler documentation.",
     responses(
-        (status = 200, description = "Süreç ayakta", body = LivenessResponse,
+        (status = 200, description = "Process is up", body = LivenessResponse,
             content_type = "application/json", example = json!({"status": "ok"})),
     )
 )]
@@ -76,12 +76,12 @@ impl Check {
     get,
     path = "/health/ready",
     tag = "meta",
-    summary = "Readiness kontrolü",
-    description = "Veritabanı, Redis ve nesne depolamayı paralel yoklar; biri bile düşükse 503 döner ki \
-        yük dengeleyici bu instance'a istek yönlendirmesin.",
+    summary = "Readiness check",
+    description = "Polls the database, Redis, and object storage in parallel; returns 503 if even one \
+        is down, so a load balancer stops routing traffic to this instance.",
     responses(
-        (status = 200, description = "Üçü de ayakta", body = Readiness),
-        (status = 503, description = "En az bir bağımlılık düşük", body = Readiness),
+        (status = 200, description = "All three are up", body = Readiness),
+        (status = 503, description = "At least one dependency is down", body = Readiness),
     )
 )]
 pub async fn ready(State(state): State<AppState>) -> impl IntoResponse {
