@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT value FROM votes WHERE actor_id = $1 AND content_id = $2",
+  "query": "SELECT value, weight FROM votes WHERE actor_id = $1 AND content_id = $2",
   "describe": {
     "columns": [
       {
@@ -13,6 +13,17 @@
             "name": "value"
           }
         }
+      },
+      {
+        "ordinal": 1,
+        "name": "weight",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "votes",
+            "name": "weight"
+          }
+        }
       }
     ],
     "parameters": {
@@ -22,8 +33,9 @@
       ]
     },
     "nullable": [
+      false,
       false
     ]
   },
-  "hash": "f22b227db050fc1be0c841b6aaaf3987aff805ddc533233b9971ac7817269699"
+  "hash": "d872139c89beb30be47171548408cf9186d124d40d087c16f16a838429a757fb"
 }

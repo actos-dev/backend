@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE actors SET trust_level = 1 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8c81b867fe180b6b0308aebe1d67322ee0e26992c1ca7f5a6f34d3a9fc6c0dd3"
+}

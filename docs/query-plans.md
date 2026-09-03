@@ -315,6 +315,88 @@ index'e de dokunulmadı.
 tablosunun `actor_type` dağılımının (yaklaşık) eşit olduğundan emin ol —
 gerçek kurulumda zaten öyleydi (4 × 500).
 
+## `GET /feed`'de `hot` için güven kademesi filtresi (Faz 18.B, `NOTES.md` §9.3/§9.6)
+
+`crate::feed::list_feed`'in `PostSort::Hot` dalına, `follower`/`actor_type`
+ile **birebir aynı desende**, koşulsuz bir üçüncü üyelik filtresi eklendi:
+`contents.actor_id IN (SELECT id FROM actors WHERE trust_level >= 1)` —
+`page` CTE'sinin içinde, `ORDER BY ... LIMIT`'ten önce (bkz.
+`crates/actos-core/src/feed.rs::list_feed`'in modül dokümantasyonu "Güven
+kademesi ve `hot` filtresi"). `actor_type`'tan farkı: parametrik değil
+(`$6::actor_type IS NULL OR ...` gibi bir "kapalıysa atla" dalı yok),
+`hot` sıralamasında her zaman uygulanıyor — bu yüzden maliyeti her `hot`
+sorgusuna biniyor, `top`/`new`'e hiç dokunmuyor.
+
+**Soru aynıydı:** filtre `actors` üzerinde ama sıralama `contents.hot_score`
+partial index'inde — planlayıcı bunu nasıl uyguluyor, yeni bir index
+gerekiyor mu?
+
+**Ölçüm**, aynı `actos_explain` veritabanında, bu sefer `actors.trust_level`
+de dolduruldu (gerçekçi bir dağılım: `id % 10` ile ~%20 seviye 0, ~%50
+seviye 1, ~%30 seviye 2 — 400/1000/600), `EXPLAIN (ANALYZE, BUFFERS)`,
+warm (ikinci çalışma):
+
+Genel feed, `sort=hot`, filtresiz `follower`/`actor_type` (yalnızca
+`trust_level >= 1`):
+
+```
+ Limit (actual time=0.066..0.287 rows=26.00 loops=1)
+   ->  Nested Loop (rows=26.00 loops=1)
+         ->  Index Scan using idx_contents_hot on contents contents_1 (rows=37.00 loops=1)
+         ->  Memoize (Cache Key: contents_1.actor_id, Hits: 0  Misses: 37)
+               ->  Index Scan using actors_pkey on actors actors_1 (rows=0.70 loops=37)
+                     Index Cond: (id = contents_1.actor_id)
+                     Filter: (trust_level >= 1)
+ Execution Time: 0.715 ms
+```
+
+`follower` (actor #1, 1 999 takip) **ve** `actor_type=human` **ve**
+`trust_level >= 1` birlikte — en kötü durum:
+
+```
+ Limit (actual time=0.170..0.673 rows=26.00 loops=1)
+   ->  Nested Loop (rows=26.00 loops=1)
+         ->  Nested Loop (rows=26.00 loops=1)
+               ->  Index Scan using idx_contents_hot on contents contents_1 (rows=102.00 loops=1)
+               ->  Memoize (Cache Key: contents_1.actor_id, Hits: 1  Misses: 101)
+                     ->  Index Scan using actors_pkey on actors actors_1 (rows=0.26 loops=101)
+                           Filter: ((trust_level >= 1) AND (actor_type = 'human'::actor_type))
+         ->  Memoize (Cache Key: contents_1.actor_id, Hits: 0  Misses: 26)
+               ->  Index Only Scan using follows_pkey on follows (rows=1.00 loops=26)
+                     Index Cond: ((follower_actor_id = 1) AND (followed_actor_id = contents_1.actor_id))
+ Execution Time: 1.155 ms
+```
+
+**Plan şekli `actor_type`'ınkinden farklı** ama aynı derecede ucuz:
+`actor_type = $6` bir EŞİTLİK olduğu için planlayıcı `actors`'ı tek seferde
+`Seq Scan`layıp hash'liyordu (yukarıdaki bölüme bkz.); `trust_level >= 1`
+bir ARALIK koşulu olduğu için planlayıcı bunun yerine `idx_contents_hot`
+taramasının her satırında `actors_pkey` üzerinden tek satırlık bir `Index
+Scan` yapan bir `Nested Loop` + `Memoize` seçti (`Memoize` aynı yazarın
+birden fazla postu olduğunda tekrar eden `actor_id` sorgularını önbelleğe
+alıyor — üstteki planda 37 arama için yalnızca 37 miss, ölçüm veritabanında
+2 000 actor/200 000 post oranında yazar tekrarı zaten düşük, gerçek
+kazanç çok yazarlı bir actor'de daha belirgin olurdu). İki plan şekli de
+temel özelliği koruyor: `Limit`, `idx_contents_hot` taramasının **hemen
+ardından** geliyor — iki aşamalı yapı bozulmuyor, `GroupAggregate`'in
+`LIMIT`'in altına düşmesi gibi bir kalite kaybı yok.
+
+**Karar: yeni bir index eklenmedi.** Gerekçe `actor_type`'ınkiyle aynı:
+`actors` 2 000 satır, `actors_pkey` üzerinden tek satırlık bir arama
+zaten en ucuz erişim yolu — `trust_level` üzerinde ayrı bir index (ör.
+`(trust_level) WHERE trust_level >= 1`) eklemek bu ölçekte ölçülemeyecek
+bir kazanç sağlardı, üstelik her `recompute_trust_levels` turunda (bir
+actor'ün kademesi değiştiğinde) yazma maliyeti eklerdi — kazancı olmayan
+bir bakım yükü. Filtresiz temel değer `0.579 ms`, yalnızca `trust_level`
+filtreli `0.715–0.784 ms`, üç filtre birlikte (`follower` + `actor_type` +
+`trust_level`) `0.977–1.155 ms` — hepsi aynı büyüklük mertebesinde, `hot`
+sorgusunun toplam maliyeti hâlâ tek haneli milisaniyenin altında.
+
+**Tekrarlamak için:** yukarıdaki "Ölçümü tekrarlamak" bölümündeki
+`actos_explain` kurulumu + bu ölçüm için ek olarak `actors.trust_level`ı
+yukarıdaki dağılımla doldur (`UPDATE actors SET trust_level = CASE WHEN id
+% 10 < 2 THEN 0 WHEN id % 10 < 7 THEN 1 ELSE 2 END`), `ANALYZE` çalıştır.
+
 ## Kaldırılan yanlış öneriler
 
 Bu belgenin önceki sürümü (Faz 12), yanlış kök nedene dayanarak iki çözüm

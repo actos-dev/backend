@@ -9,6 +9,12 @@
 //! uyguluyor; yükleme ucu 8 MB kabul ediyor. Sınır alan okunurken
 //! uygulanıyor, yani 8 MB'ı aşan bir gövde belleğe tamamen alınmadan
 //! reddediliyor.
+//!
+//! **Tek dosya sınırı (`max_bytes`) ile toplam depolama kotası
+//! (`quota_bytes`) ayrı kavramlar:** ilki bu isteğin gövdesine, ikincisi
+//! aktörün `attachments` tablosundaki **birikimine** uygulanıyor (Faz
+//! 18.A, bkz. NOTES.md §9.8 ve `actos_core::attachment::create_attachment`
+//! üzerindeki gerekçe) — biri tek yüklemeyi, diğeri toplamı sınırlıyor.
 
 use actos_core::{Error, attachment as core_attachment, id::IdCodec};
 use actos_types::upload::UploadResponse;
@@ -119,6 +125,16 @@ async fn create_upload(
         .with_request_id(&headers));
     };
 
+    // Faz 18.A: aktör başına toplam depolama kotası, güven kademesine göre
+    // (bkz. NOTES.md §9.8, `actos_core::config::StorageQuotaConfig`).
+    // `current.actor.trust_level` middleware'in zaten okuduğu satırdan
+    // geliyor — ek bir sorgu yok (bkz. `crate::middleware::ratelimit`
+    // içindeki aynı desen).
+    let quota_bytes = state
+        .config()
+        .storage_quota
+        .for_trust_level(current.actor.trust_level);
+
     let ek = core_attachment::create_attachment(
         state.db(),
         state.storage(),
@@ -126,6 +142,7 @@ async fn create_upload(
         current.actor.id,
         &bytes,
         max_bytes,
+        quota_bytes,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;

@@ -30,6 +30,16 @@ pub struct Config {
     pub storage: StorageConfig,
     pub security: SecurityConfig,
     pub rate_limits: LimitTable,
+    /// Actor başına toplam depolama kotası, güven kademesine göre (Faz
+    /// 18.A, bkz. NOTES.md §9.8). `rate_limits`'ten **ayrı bir alan**:
+    /// ikisi de güven kademesine bağlı ama biri hızı (istek/saniye) biri
+    /// birikimi (toplam bayt) sınırlıyor — kavramsal olarak farklı
+    /// eksenler, tek bir yapıda birleştirmek ["kademe çarpanı" tek bir
+    /// katsayıya indirgenmiş `TRUST_LEVEL_CAPACITY_MULTIPLIER`'ın aksine]
+    /// kotanın kendi mutlak bayt değerlerini taşıması gerektiğinden
+    /// (`50 MB`/`500 MB`/`2 GB` çarpan değil, mutlak sayı) yapay bir
+    /// zorlama olurdu.
+    pub storage_quota: StorageQuotaConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +112,103 @@ pub struct StorageConfig {
     pub public_base_url: String,
 }
 
+/// Actor başına toplam depolama kotası, güven kademesine göre (bayt) — Faz
+/// 18.A, NOTES.md §9.8: *"biri 1000 hesap açıp her biriyle 100 tane 8 MB'lık
+/// görsel yükleyip diski doldurabilir"* senaryosuna karşı savunma.
+///
+/// **Neden `MAX_UPLOAD_BYTES` yetmiyordu:** o, **tek dosya** başına bir üst
+/// sınır (bkz. `ServerConfig::max_upload_bytes`) — rate limit (`Scope::
+/// Upload`) yükleme **hızını** kısıyor ama sabırlı bir saldırgan zamanla
+/// aynı toplam boyuta ulaşır. Bu kota **birikimi** (toplam bayt) sınırlıyor,
+/// hıza bakmaksızın.
+///
+/// **Değerler `koda gömülü değil, env'den okunuyor`** (görev gereksinimi):
+/// rate limit çarpanlarının aksine (`TRUST_LEVEL_CAPACITY_MULTIPLIER`,
+/// birimsiz oran) bunlar mutlak bayt sayıları — operatörün depolama
+/// kapasitesine göre ayarlaması gereken, platforma özgü işletme kararları,
+/// kodda sabitlenmeye uygun değil (tıpkı `MAX_UPLOAD_BYTES` gibi).
+#[derive(Clone, Copy, Debug)]
+pub struct StorageQuotaConfig {
+    /// Kademe 0 (taze/doğrulanmamış hesap) — en dar. Varsayılan 50 MB.
+    pub trust_level_0_bytes: i64,
+    /// Kademe 1 (asgari etkinlik göstermiş hesap). Varsayılan 500 MB.
+    pub trust_level_1_bytes: i64,
+    /// Kademe 2 (kurulmuş hesap) — en geniş. Varsayılan 2 GB.
+    pub trust_level_2_bytes: i64,
+}
+
+impl StorageQuotaConfig {
+    /// `trust_level` (0-2) için kota baytı.
+    ///
+    /// `crate::attachment::create_attachment`'a doğrudan `quota_bytes: i64`
+    /// olarak geçiliyor — `attachment.rs` bu struct'ı ya da `trust_level`
+    /// kavramını bilmiyor, yalnızca çağıranın (`actos-api::routes::uploads`)
+    /// hesapladığı nihai bayt sınırını uyguluyor. Bu, `RateLimitConfig`
+    /// (çözümlenmiş kapasite) ile `LimitTable` (kademe → kapasite kuralları)
+    /// arasındaki aynı sorumluluk ayrımı: kural burada, uygulama orada.
+    ///
+    /// Aralık dışı bir `trust_level` (savunmacı — şema `CHECK` ile `0..=2`
+    /// garanti ediyor ama bu fonksiyon şemaya güvenmeden de doğru
+    /// davranmalı) en yakın uca kenetlenir.
+    #[must_use]
+    pub const fn for_trust_level(&self, trust_level: i16) -> i64 {
+        match trust_level {
+            i16::MIN..=0 => self.trust_level_0_bytes,
+            1 => self.trust_level_1_bytes,
+            _ => self.trust_level_2_bytes,
+        }
+    }
+
+    /// Ortamdan oku ve doğrula (bkz. [`Self::validate`]).
+    ///
+    /// # Errors
+    /// Bir değer çözümlenemiyorsa veya kademeler artan sırada değilse.
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let table = Self {
+            trust_level_0_bytes: optional("STORAGE_QUOTA_TRUST_0_BYTES")?
+                .unwrap_or(50 * 1024 * 1024),
+            trust_level_1_bytes: optional("STORAGE_QUOTA_TRUST_1_BYTES")?
+                .unwrap_or(500 * 1024 * 1024),
+            trust_level_2_bytes: optional("STORAGE_QUOTA_TRUST_2_BYTES")?
+                .unwrap_or(2 * 1024 * 1024 * 1024),
+        };
+        table.validate()?;
+        Ok(table)
+    }
+
+    /// Sıfır/negatif bir kota, `create_attachment`'ta *hiçbir* yükleme
+    /// başarılı olamayacağı ("mevcut kullanım (>= 0) + yeni dosya (> 0)
+    /// her zaman kotayı aşar") anlamsız bir yapılandırma — açılışta
+    /// yakalanmalı. Kademeler **kesin artan** olmalı: bu şart bir CHECK
+    /// kısıtı değil (migration eklenmedi, bkz. görev kısıtı) ama sessizce
+    /// tersine dönmüş bir sıralama ("kademe 2 kademe 0'dan dar") operatör
+    /// hatasının en olası biçimi, açılışta durdurmak ilk isteği beklemekten
+    /// daha iyi.
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (name, value) in [
+            ("STORAGE_QUOTA_TRUST_0_BYTES", self.trust_level_0_bytes),
+            ("STORAGE_QUOTA_TRUST_1_BYTES", self.trust_level_1_bytes),
+            ("STORAGE_QUOTA_TRUST_2_BYTES", self.trust_level_2_bytes),
+        ] {
+            if value <= 0 {
+                return Err(ConfigError::Invalid {
+                    name,
+                    detail: "sıfır veya negatif olamaz".to_owned(),
+                });
+            }
+        }
+        if !(self.trust_level_0_bytes <= self.trust_level_1_bytes
+            && self.trust_level_1_bytes <= self.trust_level_2_bytes)
+        {
+            return Err(ConfigError::Invalid {
+                name: "STORAGE_QUOTA_TRUST_*_BYTES",
+                detail: "kademeler artan sırada olmalı (kademe 0 <= 1 <= 2)".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct SecurityConfig {
     /// Dış ID'lerin ardışık görünmemesi için kullanılan permütasyon anahtarı.
@@ -126,6 +233,7 @@ impl fmt::Debug for Config {
             // Sır değil: operasyonda "hangi limitler yürürlükte" sorusuna
             // loglardan cevap verebilmek daha değerli.
             .field("rate_limits", &self.rate_limits)
+            .field("storage_quota", &self.storage_quota)
             .finish()
     }
 }
@@ -207,6 +315,7 @@ impl Config {
                 cursor_signing_key: required("CURSOR_SIGNING_KEY")?,
             },
             rate_limits: LimitTable::from_env()?,
+            storage_quota: StorageQuotaConfig::from_env()?,
         };
 
         config.validate()?;
@@ -269,11 +378,15 @@ where
 // PLAN.md "Faz 6"daki varsayılan tablo burada kodlanır ama **sabit değil**:
 // her hücre kendi `RATE_LIMIT_..._CAPACITY` / `..._WINDOW_SECS` çifti ile
 // ortamdan override edilebilir. `actos_core::ratelimit::RateLimiter::check`,
-// `Subject::Actor { actor_type, .. }`'daki `actor_type`'a bakarak doğru
-// kademeyi (human/ai_agent) kendisi seçmek için bu tabloyu kullanır — çağıran
-// tarafın kademe seçmesi gerekmez. `override_cfg` parametresi, seçilen
-// kademenin *üstüne* geçilen, `actors.rate_limit_config` jsonb'sinden gelen
-// **kişiye özel** bir override'dır (bkz. [`crate::ratelimit::config_from_json`]).
+// `Subject::Actor { actor_type, trust_level, .. }`'daki `actor_type`'a
+// bakarak doğru temel kademeyi (human/ai_agent) seçip `trust_level`'a göre
+// [`TRUST_LEVEL_CAPACITY_MULTIPLIER`] ile ölçeklemek (Faz 18.A) için bu
+// tabloyu kullanır — çağıran tarafın kademe seçmesi gerekmez. `override_cfg`
+// parametresi, seçilen bu kademenin **yerine tamamen geçen** (üstüne
+// binmeyen), `actors.rate_limit_config` jsonb'sinden gelen **kişiye özel**
+// bir override'dır (bkz. [`crate::ratelimit::config_from_json`]) — öncelik
+// sırası kişiye özel override > güven kademesi çarpanı > actor_type temel
+// kademesi (bkz. `RateLimiter::check` üzerindeki gerekçe).
 //
 // `Config`'in bir alanı: `Config::from_env()` başarısız olursa (ör. bir
 // `RATE_LIMIT_..._CAPACITY` sıfırsa) süreç, tıpkı diğer yapılandırma
@@ -323,6 +436,35 @@ pub struct AnonymousLimits {
     pub write: RateLimitConfig,
 }
 
+/// Güven kademesi (`actors.trust_level`, 0-2) başına rate limit **kapasite
+/// çarpanı** — Faz 18.A, bkz. NOTES.md §9.3 ve §9.8. **Tek yerde tanımlı**:
+/// büyütülecek/küçültülecek her ayar burada, başka hiçbir yerde bu üç sayı
+/// tekrar yazılmamalı (bkz. [`LimitTable::scale_for_trust_level`]).
+///
+/// İndeks = `trust_level` (0, 1, 2).
+///
+/// **Neden `human`/`ai_agent` tablolarına ayrı bir üçüncü boyut (3 kademe ×
+/// mevcut 7 scope alanı) eklenmedi de bir çarpan tercih edildi:** mevcut
+/// tablolar zaten `actor_type` başına 7 alan taşıyor, hepsi ayrı ayrı env
+/// değişkeniyle override edilebilir (`RATE_LIMIT_*_CAPACITY`/`_WINDOW_SECS`).
+/// Kademe başına ayrı bir tablo bunu 3 katına çıkarırdı (42 alan + 84 env
+/// değişkeni), `.env.example`'ı ve `LimitTable::validate`'i şişirir, ve en
+/// önemlisi **hiçbir yeni bilgi taşımaz** — kademe zaten var olan temel
+/// kapasiteyi ölçekliyor, yeni bir eksen açmıyor. Çarpan aynı ilkeyi
+/// (kademe arttıkça kapasite artar) sıfır yeni env değişkeniyle sağlıyor.
+///
+/// **Neden `trust_level = 1` temel (1.0×) alındı, `0` değil:** `human`/
+/// `ai_agent` tabloları zaten Faz 6'da "kurulmuş, normal davranan hesap"
+/// için kalibre edilmişti — bu değerleri değiştirmeden kademe 1'in
+/// karşılığı yapmak mevcut hiçbir üretim ayarını (env override'ları dahil)
+/// bozmuyor. Kademe 0 (taze hesap, §9.3'ün asıl hedefi — bir gecede açılan
+/// 100 hesabın manipülasyon/spam hızını kısmak) bunun **yarısı**; kademe 2
+/// (yaşını kanıtlamış hesap) **iki katı**. 2×'in ötesine geçilmedi: amaç
+/// kıdemli bir hesabı ödüllendirmek, `human`/`ai_agent` arasındaki temel
+/// farkı (bazı scope'larda zaten 3-10×) gölgede bırakacak kadar büyütmek
+/// değil.
+const TRUST_LEVEL_CAPACITY_MULTIPLIER: [f64; 3] = [0.5, 1.0, 2.0];
+
 /// Rate limiting için tüm varsayılan limitler: `human`/`ai_agent`
 /// (kimlikli) ve `anonymous` (IP başına).
 #[derive(Clone, Copy, Debug)]
@@ -334,9 +476,11 @@ pub struct LimitTable {
 
 impl LimitTable {
     /// Bir `Scope` + `Subject` çifti için **varsayılan** (kişiye özel
-    /// override'sız) limiti döner: `Subject::Actor { actor_type, .. }`
-    /// için `actor_type`'ın gerçek kademesi (bkz. [`Self::for_actor_type`]),
-    /// `Subject::Ip` için IP başına (anonim) tablo.
+    /// override'sız) limiti döner: `Subject::Actor { actor_type, trust_level,
+    /// .. }` için `actor_type`'ın temel kademesi (bkz.
+    /// [`Self::for_actor_type`]) `trust_level`'a göre ölçeklenir (bkz.
+    /// [`Self::scale_for_trust_level`] ve [`TRUST_LEVEL_CAPACITY_MULTIPLIER`]);
+    /// `Subject::Ip` için IP başına (anonim, güven kademesiz) tablo.
     ///
     /// [`crate::ratelimit::RateLimiter::check`] bunu **her zaman** çağırır —
     /// `override_cfg: None` verildiğinde döndürdüğü değer doğrudan kullanılır,
@@ -347,7 +491,14 @@ impl LimitTable {
     #[must_use]
     pub fn resolve(&self, scope: Scope, subject: &Subject) -> RateLimitConfig {
         match subject {
-            Subject::Actor { actor_type, .. } => self.for_actor_type(scope, *actor_type),
+            Subject::Actor {
+                actor_type,
+                trust_level,
+                ..
+            } => {
+                let temel = self.for_actor_type(scope, *actor_type);
+                Self::scale_for_trust_level(temel, *trust_level)
+            }
             Subject::Ip(_) => match scope {
                 Scope::Register => self.anonymous.register,
                 Scope::Recover => self.anonymous.recover,
@@ -361,10 +512,13 @@ impl LimitTable {
         }
     }
 
-    /// Belirli bir `actor_type` için scope başına limiti döner.
+    /// Belirli bir `actor_type` için scope başına **temel** (henüz güven
+    /// kademesi çarpanı uygulanmamış — `trust_level = 1`'in karşılığı, bkz.
+    /// [`TRUST_LEVEL_CAPACITY_MULTIPLIER`] üzerindeki gerekçe) limiti döner.
     ///
     /// [`Self::resolve`] tarafından `Subject::Actor`'ın kendi `actor_type`'ı
-    /// ile çağrılır — `RateLimiter::check` bunu otomatik yaptığı için normal
+    /// ile çağrılır, dönen değer ardından [`Self::scale_for_trust_level`]'a
+    /// verilir — `RateLimiter::check` bunu otomatik yaptığı için normal
     /// akışta **doğrudan çağrılması gerekmez**. Public kalmasının nedeni
     /// test edilebilirlik ve HTTP katmanının (ör. bir yönetim panelinde
     /// "bu actor_type için mevcut limit ne?" göstermek gibi) ihtiyaç
@@ -390,6 +544,42 @@ impl LimitTable {
             // (PLAN.md'de yalnızca IP başına tanımlı) — savunmacı varsayılan
             // olarak anonim "diğer yazmalar" kovasına düşer.
             Scope::Register | Scope::Recover | Scope::Write => self.anonymous.write,
+        }
+    }
+
+    /// [`Self::for_actor_type`]'ın döndürdüğü **temel** (henüz güven
+    /// kademesi uygulanmamış) kapasiteyi [`TRUST_LEVEL_CAPACITY_MULTIPLIER`]
+    /// ile kademeye göre ölçekler — Faz 18.A "kademeye bağlı rate limit"
+    /// (bkz. NOTES.md §9.3: "yüksek kademe daha geniş rate limit demek").
+    ///
+    /// Yalnızca **kapasite** ölçekleniyor, `window` aynı kalıyor: token
+    /// bucket'ın dolum formülü (`elapsed_ms * capacity / window_ms`, bkz.
+    /// `crate::ratelimit::BUCKET_SCRIPT_SRC`) kapasiteyle orantılı olduğu
+    /// için pencereyi de değiştirmeye gerek yok — kapasiteyi ölçeklemek tek
+    /// başına dolum hızını da doğru oranda ölçekler.
+    ///
+    /// `trust_level` şema düzeyinde `0..=2` ile sınırlı (bkz.
+    /// `migrations/0020_trust_levels.up.sql` `ck_actors_trust_level_range`)
+    /// ama bu fonksiyon savunmacı: aralık dışı bir değer çökmek yerine en
+    /// yakın uca kenetlenir (`clamp`).
+    ///
+    /// Yuvarlama `round()` ile, sonuç en az `1`: kapasite sıfır olursa Lua
+    /// script'i sıfıra böler (bkz. [`Self::validate`]'in aynı gerekçesi).
+    #[must_use]
+    fn scale_for_trust_level(cfg: RateLimitConfig, trust_level: i16) -> RateLimitConfig {
+        let index = trust_level.clamp(0, (TRUST_LEVEL_CAPACITY_MULTIPLIER.len() - 1) as i16);
+        #[allow(clippy::indexing_slicing)] // `clamp` üstteki satırda aralığı garanti ediyor.
+        let multiplier = TRUST_LEVEL_CAPACITY_MULTIPLIER[index as usize];
+
+        let scaled = (f64::from(cfg.capacity) * multiplier).round();
+        // `scaled` negatif olamaz (capacity `u32`, multiplier > 0), yani tek
+        // risk üstten taşma değil `1`'in altına düşmek — `max` bunu kapatıyor.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let capacity = (scaled as u32).max(1);
+
+        RateLimitConfig {
+            capacity,
+            window: cfg.window,
         }
     }
 

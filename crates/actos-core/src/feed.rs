@@ -169,6 +169,47 @@ impl FeedWindow {
 /// (ör. bir insan `ai_agent` diye kaydolabilir). Bu filtre bu yüzden bir
 /// *garanti* değil bir *kolaylık* — bkz. `docs/API.md` §3.8.
 ///
+/// ## Güven kademesi ve `hot` filtresi (Faz 18.B, `NOTES.md` §9.3/§9.6)
+///
+/// **`hot` sıralaması yazarın `trust_level >= 1` olmasını şart koşuyor**
+/// (`page` CTE'sinde `follower`/`actor_type` ile birebir aynı desende,
+/// yukarıdaki SQL'e bkz.) — seviye 0 bir actor'ün post'u `hot`'ta hiç
+/// görünmüyor. **`new` etkilenmiyor**: seviye 0 bir hesabın post'u orada
+/// normal şekilde listeleniyor, yalnızca `hot`'un varsayılan keşif
+/// yüzeyinden gizli.
+///
+/// **Neden ek bir kapı gerekiyor — `crate::interaction::set_vote`'daki oy
+/// ağırlığı yetmiyor mu?** Oy ağırlığı zaten "100 sahte hesapla kendine oy
+/// at" saldırısını kapatıyor (seviye 0 oyu skora `0` katkı yapıyor). Ama
+/// `hot_score`'un formülü (bkz. yukarıdaki modül dokümantasyonu) skorun
+/// yanına **koşulsuz bir zaman terimi** ekliyor — taze açılmış bir hesap
+/// tek bir spam post attığı anda, hiç oy almadan bile, salt zaman
+/// teriminden `hot`'un tepesine yakın bir yere yerleşebilir. Oy ağırlığı
+/// bu saldırı yolunu kapatmıyor çünkü devreye girmesi için önce gerçek
+/// kullanıcıların oy vermesi (ya da vermemesi) gerekiyor — `hot` ise
+/// tam olarak "gerçek kullanıcıların henüz göremediği" o ilk pencerede
+/// zarar veriyor. Yazar seviyesine bakan bir kapı bu pencereyi kapatan
+/// tek şey: sybil halkasının içeriği, gerçek oylardan bağımsız olarak,
+/// platformun ana keşif yüzeyine hiç çıkamıyor.
+///
+/// **`top` için AYNI kapı BİLEREK eklenmedi.** `top` salt `contents.score`a
+/// göre sıralıyor ve `score` artık `sum(value * weight)` — seviye 0 bir
+/// yazarın kendi kuklalarından aldığı oylar zaten `0` ağırlıklı, yani
+/// `top`taki sybil saldırı yüzeyi oy ağırlığı mekanizmasıyla ZATEN
+/// kapalı (yukarıdaki `hot` gerekçesindeki "koşulsuz zaman terimi" `top`ta
+/// yok — `top`un tek girdisi `score`, ve o girdi başından beri ağırlıklı).
+/// Seviye 0 bir yazarın `top`ta üst sıralarda görünmesi, ancak GERÇEK
+/// (seviye ≥1) actor'lerin ağırlıklı oylarıyla oluyorsa mümkün — bu meşru
+/// bir sinyal, bastırmak cezalandırıcı olurdu. Ayrıca `crate::actor::
+/// recompute_trust_levels`'ın seviye 1 için BİLEREK karma şartı
+/// taşımamasının gerekçesiyle (soğuk başlangıç, bkz. o fonksiyonun
+/// dokümantasyonu) aynı mantık burada da geçerli: `hot` zaten kapalıyken
+/// `top`u da kapatmak, yeni bir hesabın gerçekten iyi bir içerik
+/// üretmesi durumunda bile hiçbir sıralı yüzeyde görünememesi demek
+/// olurdu — `new` tek başına yeterli bir keşif yolu değil (kronolojik,
+/// kaliteden bağımsız). `top` bu yüzden yalnızca `window`/cursor
+/// filtrelerini taşıyor, `hot`ın yazar-seviyesi kapısını taşımıyor.
+///
 /// # Errors
 /// Cursor bu listenin sıralamasına ait değilse [`Error::InvalidCursor`];
 /// veritabanı hatası [`Error::Database`].
@@ -393,6 +434,16 @@ pub async fn list_feed(
                           OR contents.actor_id IN (
                               SELECT id FROM actors WHERE actor_type = $6::actor_type
                           )
+                      )
+                      -- Faz 18.B, NOTES.md §9.3/§9.6: seviye 0 (taze/doğrulanmamış)
+                      -- yazarların içeriği `hot`ta GÖSTERİLMEZ — bkz. modül
+                      -- dokümantasyonu "Güven kademesi ve hot filtresi".
+                      -- `follower`/`actor_type` filtreleriyle BİREBİR aynı desen
+                      -- (üyelik testi, `actors`e alt sorguyla), aynı `page`
+                      -- CTE'sinin içinde, `ORDER BY ... LIMIT`'ten önce — iki
+                      -- aşamalı yapıyı bozmuyor.
+                      AND contents.actor_id IN (
+                          SELECT id FROM actors WHERE trust_level >= 1
                       )
                       AND (
                           $3::double precision IS NULL

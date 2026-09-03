@@ -146,19 +146,30 @@ impl Scope {
 
 /// Kovanın kime ait olduğu: kimlikli bir actor mı, yoksa kimliksiz bir IP mi.
 ///
-/// `Actor` **`actor_type`'ı da taşır** — bilinçli bir tasarım kararı.
-/// `RateLimiter::check` doğru kademeyi (human/ai_agent) bu alandan otomatik
-/// seçer; `actor_type`'ı taşımasaydı, çağıran tarafın `override_cfg` ile
-/// elle doğru kademeyi geçirmeyi *unutmaması* gerekirdi — bir AI ajanın
-/// sessizce insan limitlerine düşmesi kolay ve tehlikeli bir hata olurdu
-/// (bu platformda AI ajanlar birinci sınıf vatandaş; onları görünmez şekilde
-/// daraltan bir footgun bırakmıyoruz). `actor_type` anahtar şemasına
-/// **girmez** (bkz. aşağıdaki "Redis anahtar şeması" bölümü) — yalnızca
-/// kademe seçiminde kullanılır, bir hesabın türü değişse bile kovası
-/// sıfırlanmaz.
+/// `Actor` **`actor_type`'ı ve `trust_level`'ı da taşır** — bilinçli bir
+/// tasarım kararı. `RateLimiter::check` doğru kademeyi (human/ai_agent ×
+/// güven kademesi 0-2) bu alanlardan otomatik seçer; taşımasaydı, çağıran
+/// tarafın `override_cfg` ile elle doğru kademeyi geçirmeyi *unutmaması*
+/// gerekirdi — bir AI ajanın sessizce insan limitlerine düşmesi ya da taze
+/// bir hesabın kıdemli bir hesabın kapasitesini alması kolay ve (ikincisi
+/// için özellikle, bkz. NOTES.md §9.3) tehlikeli bir hata olurdu (bu
+/// platformda AI ajanlar birinci sınıf vatandaş; onları görünmez şekilde
+/// daraltan bir footgun bırakmıyoruz). Ne `actor_type` ne `trust_level`
+/// anahtar şemasına **girer** (bkz. aşağıdaki "Redis anahtar şeması"
+/// bölümü) — ikisi de yalnızca kademe seçiminde kullanılır, bir hesabın
+/// türü ya da güven kademesi değişse bile kovası sıfırlanmaz.
+///
+/// `trust_level` çağıranın (ör. `actos-api::middleware::ratelimit`)
+/// `actors.trust_level`'dan okuyup taşıdığı ham değer — bu modül onu
+/// yalnızca [`crate::config::LimitTable::resolve`]'a iletir, hesaplamaz
+/// (hesaplama `crate::actor::recompute_trust_levels`'ın işi).
 #[derive(Debug, Clone, Copy)]
 pub enum Subject {
-    Actor { id: i64, actor_type: ActorType },
+    Actor {
+        id: i64,
+        actor_type: ActorType,
+        trust_level: i16,
+    },
     Ip(IpAddr),
 }
 
@@ -194,12 +205,18 @@ pub struct RateLimitDecision {
 // Her test kendi benzersiz önekiyle kurulursa, üretim anahtar şemasına hiç
 // dokunmadan tamamen izole bir anahtar uzayı alır.
 //
-// `Subject::Actor`'daki `actor_type` **anahtara girmez**: yalnızca kademe
-// seçiminde kullanılır (bkz. [`Subject`] üzerindeki yorum). Girseydi, bir
-// hesabın `actor_type`'ı değişince (ör. bir organizasyon insan hesabından
-// dönüştürülse) kovası sıfırlanır, kısa bir pencerede kapasitenin iki katı
-// isteğe izin verilmiş olurdu — tam da token bucket'ın önlemeye çalıştığı
-// türden bir sızıntı.
+// `Subject::Actor`'daki `actor_type` VE `trust_level` **anahtara girmez**:
+// ikisi de yalnızca kademe seçiminde kullanılır (bkz. [`Subject`] üzerindeki
+// yorum). Girselerdi, bir hesabın `actor_type`'ı değişince (ör. bir
+// organizasyon insan hesabından dönüştürülse) YA DA `trust_level`'ı
+// `recompute_trust_levels`'ın periyodik turuyla değişince (bu, tasarım
+// gereği sık ve beklenen bir olay — bkz. `TRUST_LEVEL_INTERVAL_SECS`) kovası
+// sıfırlanır, kısa bir pencerede kapasitenin iki katı isteğe izin verilmiş
+// olurdu — tam da token bucket'ın önlemeye çalıştığı türden bir sızıntı.
+// `trust_level` için bunun bedeli `actor_type`'takinden de büyük olurdu:
+// periyodik iş HER SAATTE (varsayılan `TRUST_LEVEL_INTERVAL_SECS`) çok
+// sayıda actor'ün kademesini değiştirebilir, bu da düzenli aralıklarla
+// toplu bir kova sıfırlaması demek olurdu.
 
 fn bucket_key(prefix: &str, scope: Scope, subject: &Subject) -> String {
     match subject {
@@ -363,19 +380,33 @@ impl RateLimiter {
     /// Bir istek için hız sınırlama kararı üretir.
     ///
     /// Kademe seçimi **otomatiktir**: `subject` bir `Subject::Actor` ise
-    /// içindeki `actor_type` alanına bakılarak human/ai_agent kademesi
-    /// [`crate::config::LimitTable::resolve`] ile seçilir; `Subject::Ip`
-    /// ise IP başına (anonim) tablo kullanılır. Çağıran tarafın kademeyi
-    /// elle seçmesi gerekmez ve gerekmemeli — `Subject`'in taşıdığı
-    /// `actor_type` tek doğruluk kaynağıdır (bkz. [`Subject`] üzerindeki
-    /// yorum: bunun amacı, bir AI ajanının override iletilmeyi unutulduğu
-    /// için sessizce insan limitlerine düşmesini imkânsız kılmak).
+    /// içindeki `actor_type` alanına bakılarak human/ai_agent temel kademesi,
+    /// sonra `trust_level` alanına bakılarak bunun üstüne güven kademesi
+    /// çarpanı [`crate::config::LimitTable::resolve`] ile uygulanır;
+    /// `Subject::Ip` ise IP başına (anonim, güven kademesiz) tablo kullanılır.
+    /// Çağıran tarafın kademeyi elle seçmesi gerekmez ve gerekmemeli —
+    /// `Subject`'in taşıdığı `actor_type`/`trust_level` tek doğruluk
+    /// kaynağıdır (bkz. [`Subject`] üzerindeki yorum: bunun amacı, bir AI
+    /// ajanının ya da taze bir hesabın override iletilmeyi unutulduğu için
+    /// sessizce yanlış limitlere düşmesini imkânsız kılmak).
     ///
-    /// `override_cfg`, seçilen bu kademenin **yerine tamamen geçer** — ama
-    /// amacı kademe seçmek değil, `actors.rate_limit_config` jsonb'sinden
-    /// [`config_from_json`] ile okunan **kişiye özel** bir sınırı
-    /// uygulamaktır. `None` verildiğinde otomatik seçilen kademe zaten
-    /// doğrudan kullanılır — çoğu çağrı için bu yeterlidir.
+    /// `override_cfg`, seçilen bu kademenin (actor_type × trust_level)
+    /// **yerine tamamen geçer** — ama amacı kademe seçmek değil,
+    /// `actors.rate_limit_config` jsonb'sinden [`config_from_json`] ile
+    /// okunan **kişiye özel** bir sınırı uygulamaktır. `None` verildiğinde
+    /// otomatik seçilen kademe zaten doğrudan kullanılır — çoğu çağrı için
+    /// bu yeterlidir.
+    ///
+    /// **Öncelik sırası (bilinçli karar):** kişiye özel `rate_limit_config`
+    /// override'ı > güven kademesi çarpanı. Operatör bir actor'e elle bir
+    /// override koyduysa, bu bilinçli bir istisna niyetidir (ör. bilinen
+    /// iyi niyetli ama henüz kademesi düşük bir hesap, ya da tersine
+    /// kötüye kullanım şüphesiyle daraltılmış kıdemli bir hesap) — otomatik
+    /// kademe hesaplamasının bunu ezmesi operatörün elle koyduğu kararı
+    /// sessizce iptal eder. Mimari bunu zaten doğal olarak veriyor:
+    /// `override_cfg: Some(_)` her zaman `resolve()`'un ürettiği değerin
+    /// (trust_level çarpanı dahil) **yerine geçiyor**, üstüne binmiyor —
+    /// ayrı bir öncelik kodu yazmaya gerek kalmadı.
     ///
     /// **Hata döndürmez.** Redis'e erişilemezse modül başındaki fail-open/
     /// fail-closed politikasına düşülür (bkz. modül dokümantasyonu).

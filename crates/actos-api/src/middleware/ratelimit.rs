@@ -271,6 +271,13 @@ pub async fn enforce(State(state): State<AppState>, req: Request, next: Next) ->
         Some(ResolvedIdentity::Authenticated(actor)) => Subject::Actor {
             id: actor.actor.id,
             actor_type: actor.actor.actor_type,
+            // Faz 18.A: `actos_core::config::LimitTable::resolve` bunu
+            // güven kademesi kapasite çarpanını (bkz. `TRUST_LEVEL_
+            // CAPACITY_MULTIPLIER`) seçmek için kullanıyor. `identity`
+            // middleware'i bu istekte `actors` satırını zaten okudu
+            // (`authenticate`), yani bu ek bir sorgu değil — alan zaten
+            // elimizdeki `ActorRecord`'da.
+            trust_level: actor.actor.trust_level,
         },
         // Anonim VE doğrulaması başarısız olmuş (401 dönecek) istekler
         // aynı şekilde IP başına sınırlanır — bir istemci geçersiz key'ler
@@ -288,6 +295,11 @@ pub async fn enforce(State(state): State<AppState>, req: Request, next: Next) ->
         _ => None,
     };
 
+    // Öncelik: `override_cfg` doluysa (kişiye özel `rate_limit_config`)
+    // `subject`'in taşıdığı `trust_level`'a göre otomatik seçilen/ölçeklenen
+    // kademe tamamen görmezden gelinir (bkz. `RateLimiter::check` üzerindeki
+    // "Öncelik sırası" gerekçesi) — operatörün elle koyduğu bir istisna,
+    // otomatik güven kademesi hesaplamasından her zaman üstün.
     let decision = state
         .rate_limiter()
         .check(scope, &subject, override_cfg.as_ref())

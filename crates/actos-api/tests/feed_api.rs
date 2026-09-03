@@ -16,6 +16,7 @@ use actos_core::{
     auth::{self as core_auth, ActorType},
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
+        StorageQuotaConfig,
     },
     cursor::CursorCodec,
     id::IdCodec,
@@ -73,6 +74,8 @@ fn test_config() -> Config {
             cursor_signing_key: "test-cursor-signing-key-en-az-otuz-iki-karakter".to_owned(),
         },
         rate_limits: LimitTable::from_env().expect("varsayılan limit tablosu geçerli olmalı"),
+        storage_quota: StorageQuotaConfig::from_env()
+            .expect("varsayılan depolama kotası geçerli olmalı"),
     }
 }
 
@@ -171,11 +174,29 @@ async fn seed_actor(pool: &PgPool, username: &str) -> (i64, String) {
 /// [`seed_actor`] ile aynı, ama `actor_type`'ı seçebiliyor —
 /// `?actor_type=` filtre testleri için (bkz. aşağıdaki
 /// `feed_actor_type_ile_filtreleniyor` grubu).
+///
+/// **`trust_level` kayıttan hemen sonra `1`'e yükseltiliyor** (şema
+/// varsayılanı `0` değil) — Faz 18.B'den (`crate::feed::list_feed`'in
+/// `hot` filtresi + `crate::interaction::set_vote`'un oy ağırlığı) ÖNCE
+/// yazılmış bu dosyadaki testlerin BÜYÜK ÇOĞUNLUĞU güven kademesini değil
+/// feed sıralama/sayfalama/filtre davranışını sınıyor; seviye 0'da
+/// bırakılsaydı postları `hot`tan tamamen kaybolur, oyları ağırlıksız
+/// kalırdı — ilgisiz oldukları bir mekanizma yüzünden kırılırlardı.
+/// Seviye 0'a özgü davranış (`hot`ta gizlenme) `feed_seviye_0_hotta_gizli_newde_goruyor`
+/// testinde AYRI ve AÇIKÇA, ham `UPDATE actors SET trust_level = 0` ile
+/// sınanıyor.
 #[allow(clippy::expect_used)]
 async fn seed_actor_typed(pool: &PgPool, username: &str, actor_type: ActorType) -> (i64, String) {
     let reg = core_auth::register(pool, username, actor_type, None)
         .await
         .expect("fixture actor oluşturulabilmeli");
+    sqlx::query!(
+        r#"UPDATE actors SET trust_level = 1 WHERE id = $1"#,
+        reg.actor.id,
+    )
+    .execute(pool)
+    .await
+    .expect("fixture actor'ün trust_level'ı yükseltilebilmeli");
     (reg.actor.id, reg.api_key)
 }
 
@@ -362,6 +383,56 @@ async fn feed_sort_hot_yeni_oysuz_postu_gomulmuyor(pool: PgPool) {
         "oy almamış yeni post, üç günlük tek oylu postun üstünde olmalı: {body}"
     );
     assert!(!yeni.is_empty());
+}
+
+/// Faz 18.B, `NOTES.md` §9.3/§9.6: seviye 0 (taze/doğrulanmamış) bir
+/// yazarın postu `hot`ta hiç görünmüyor — `new`de ise normal şekilde
+/// listeleniyor. Bkz. `crate::feed::list_feed`'in modül dokümantasyonu
+/// "Güven kademesi ve `hot` filtresi" (neden `hot`, neden `top` değil).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn feed_seviye_0_hotta_gizli_newde_goruyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    // seed_actor kayıttan sonra trust_level'ı 1'e yükseltiyor (bkz. onun
+    // dokümantasyonu) — burada tam tersini istiyoruz, o yüzden ham SQL'le
+    // seviye 0'a GERİ düşürülüyor.
+    let (taze_id, taze_key) = seed_actor(&raw_pool, "hot_seviye0_yazar").await;
+    sqlx::query!(
+        r#"UPDATE actors SET trust_level = 0 WHERE id = $1"#,
+        taze_id
+    )
+    .execute(&raw_pool)
+    .await
+    .expect("trust_level 0'a düşürülebilmeli");
+
+    let (_, kurulu_key) = seed_actor(&raw_pool, "hot_seviye0_kurulu_yazar").await;
+
+    seed_post(&router, &taze_key, "taze hesabin postu").await;
+    seed_post(&router, &kurulu_key, "kurulu hesabin postu").await;
+
+    // Zaman terimi tazelensin ki iki post da hot_score alsın (oy yok, ikisi
+    // de şema varsayılanı 0'da).
+    actos_core::feed::recompute_hot_scores(&raw_pool)
+        .await
+        .expect("tazeleme çalışabilmeli");
+
+    let (status, body) = get_json(&router, "/feed?sort=hot").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        basliklar(&body),
+        vec!["kurulu hesabin postu"],
+        "hot yalnızca trust_level >= 1 yazarların postunu göstermeli: {body}"
+    );
+
+    let (status, body) = get_json(&router, "/feed?sort=new").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut basliklar_new = basliklar(&body);
+    basliklar_new.sort_unstable();
+    assert_eq!(
+        basliklar_new,
+        vec!["kurulu hesabin postu", "taze hesabin postu"],
+        "new, güven kademesinden bağımsız ikisini de göstermeli: {body}"
+    );
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]

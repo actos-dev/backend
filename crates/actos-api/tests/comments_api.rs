@@ -15,6 +15,7 @@ use actos_core::{
     auth::{self as core_auth, ActorType, AdminRole},
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
+        StorageQuotaConfig,
     },
     cursor::CursorCodec,
     id::IdCodec,
@@ -72,6 +73,8 @@ fn test_config() -> Config {
             cursor_signing_key: "test-cursor-signing-key-en-az-otuz-iki-karakter".to_owned(),
         },
         rate_limits: LimitTable::from_env().expect("varsayılan limit tablosu geçerli olmalı"),
+        storage_quota: StorageQuotaConfig::from_env()
+            .expect("varsayılan depolama kotası geçerli olmalı"),
     }
 }
 
@@ -379,8 +382,23 @@ async fn silinmis_posta_yorum_410_doner(pool: PgPool) {
 async fn derinlik_limiti_asimi_400_ile_reddediliyor(pool: PgPool) {
     let raw_pool = pool.clone();
     let router = build_router(pool);
-    let (_, api_key) = seed_actor(&raw_pool, "derinlesen").await;
+    let (actor_id, api_key) = seed_actor(&raw_pool, "derinlesen").await;
     let post_id = seed_post(&router, &api_key, "Derin").await;
+
+    // Bu test derinlik limitini sınıyor, güven kademesine bağlı hız
+    // sınırlamasını (Faz 18.A) değil — ama 32 yorumu tek saatte tek
+    // actor'den atmak, taze bir hesabın (kademe 0, `comment` kovasında
+    // taban kapasitenin yarısı — bkz. `actos_core::config::
+    // TRUST_LEVEL_CAPACITY_MULTIPLIER`) rate limitine takılır ve testi
+    // yanlış sebeple (429, 400 değil) düşürür. Actor'ü kademe 1'e ("normal",
+    // 1.0× — bugüne kadarki değişmemiş davranış) çekmek, bu testi rate
+    // limitten izole ediyor; `recompute_trust_levels`'ı beklemeden doğrudan
+    // `UPDATE` ile (bkz. `crates/actos-core/tests/trust_level.rs`'teki
+    // "geçmişe UPDATE" deseni, burada kademeye uygulanmış hâli).
+    sqlx::query!("UPDATE actors SET trust_level = 1 WHERE id = $1", actor_id)
+        .execute(&raw_pool)
+        .await
+        .expect("trust_level güncellenebilmeli");
 
     // depth 1..=32 → 32 yorum. Post depth 0.
     let mut parent: Option<String> = None;

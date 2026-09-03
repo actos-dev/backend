@@ -20,8 +20,46 @@ use actos_core::{
 use sqlx::PgPool;
 
 /// Kimlik doğrulama yolundan geçmeden bir actor satırı oluşturur.
+///
+/// **`trust_level = 1` ile açılıyor** (şema varsayılanı `0` değil) — Faz
+/// 18.B'den (oy ağırlığı, bkz. `crate::interaction::set_vote`) önce
+/// yazılmış bu dosyadaki testlerin BÜYÜK ÇOĞUNLUĞU sayaç/eşzamanlılık
+/// davranışını sınıyor, güven kademesini DEĞİL — "bir oy skoru 1
+/// artırır" gibi varsayımlar taşıyorlar. Eğer bu fixture şema
+/// varsayılanı `0`'da kalsaydı, oy ağırlığı seviye 0'ı `0` ağırlıklandırdığı
+/// için o testlerin TAMAMI (ilgisiz oldukları bir mekanizma yüzünden)
+/// kırılırdı. Seviye 0'a özgü davranış (ağırlık `0`, terfi sonrası geri
+/// çekme) [`seed_actor_level0`] ile AYRI ve AÇIKÇA test ediliyor — bkz.
+/// aşağıdaki "Oy ağırlığı" bölümü.
 #[allow(clippy::expect_used)]
 async fn seed_actor(pool: &PgPool, username: &str) -> ActorRecord {
+    let row = sqlx::query!(
+        r#"
+        INSERT INTO actors (username, actor_type, trust_level)
+        VALUES ($1, 'human'::actor_type, 1)
+        RETURNING id, created_at, trust_level
+        "#,
+        username,
+    )
+    .fetch_one(pool)
+    .await
+    .expect("actor eklenebilmeli");
+
+    ActorRecord {
+        id: row.id,
+        username: username.to_owned(),
+        actor_type: ActorType::Human,
+        display_name: None,
+        bio: None,
+        created_at: row.created_at,
+        trust_level: row.trust_level,
+    }
+}
+
+/// [`seed_actor`] gibi ama **seviye 0** (şema varsayılanı) ile açılır —
+/// oy ağırlığı testlerinin "taze/doğrulanmamış hesap" ucu bunu kullanıyor.
+#[allow(clippy::expect_used)]
+async fn seed_actor_level0(pool: &PgPool, username: &str) -> ActorRecord {
     let row = sqlx::query!(
         r#"
         INSERT INTO actors (username, actor_type)
@@ -43,6 +81,21 @@ async fn seed_actor(pool: &PgPool, username: &str) -> ActorRecord {
         created_at: row.created_at,
         trust_level: row.trust_level,
     }
+}
+
+/// Bir actor'ün `trust_level`'ını doğrudan yazar — "terfi" senaryosunu
+/// gerçek zamanda (`recompute_trust_levels`'ın koşullarını sağlamayı
+/// beklemeden) simüle etmek için.
+#[allow(clippy::expect_used)]
+async fn trust_level_yukselt(pool: &PgPool, actor_id: i64, yeni_seviye: i16) {
+    sqlx::query!(
+        r#"UPDATE actors SET trust_level = $2 WHERE id = $1"#,
+        actor_id,
+        yeni_seviye,
+    )
+    .execute(pool)
+    .await
+    .expect("trust_level güncellenebilmeli");
 }
 
 #[allow(clippy::expect_used)]
@@ -270,6 +323,107 @@ async fn toplu_oy_sorgusu_yalnizca_oy_verilenleri_donuyor(pool: PgPool) {
     beklenen.sort_unstable();
 
     assert_eq!(oylar, beklenen, "oy verilmemiş içerik yanıtta olmamalı");
+}
+
+// --- Oy ağırlığı (Faz 18.B, NOTES.md §9.3, migrations/0022_vote_weight) ----
+
+/// Seviye 0'ın oyu `votes` satırı olarak kaydedilir ve `upvotes` ham
+/// sayacına işler — kullanıcı oyunun "tuttuğunu" görmeli — ama `weight = 0`
+/// olduğu için `score`'a hiç katkı yapmaz. Bkz.
+/// `crate::interaction::set_vote`'un "Oy ağırlığı" bölümü.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn seviye_0in_oyu_sayaci_etkiler_skoru_etkilemez(pool: PgPool) {
+    let yazar = seed_actor(&pool, "agirlik0_yazar").await;
+    let oylayan = seed_actor_level0(&pool, "agirlik0_oylayan").await;
+    let post = seed_post(&pool, &yazar).await;
+
+    let sonuc = interaction::set_vote(&pool, oylayan.id, post, 1)
+        .await
+        .expect("seviye 0 da oy verebilmeli — oy engellenmiyor, sadece ağırlıksız");
+
+    assert_eq!(sonuc.score, 0, "seviye 0'ın oyu skora katkı yapmamalı");
+    assert_eq!(sonuc.upvotes, 1, "ham upvote sayacı yine de artmalı");
+    assert_eq!(sonuc.downvotes, 0);
+
+    assert_eq!(
+        sayaclar(&pool, post).await,
+        (0, 1, 0),
+        "veritabanındaki sayaçlar da aynı: score 0, upvotes 1"
+    );
+
+    let satir = sqlx::query!(
+        r#"SELECT value, weight FROM votes WHERE actor_id = $1 AND content_id = $2"#,
+        oylayan.id,
+        post,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("oy satırı kaydedilmiş olmalı — silinmedi, sadece ağırlıksız");
+    assert_eq!((satir.value, satir.weight), (1, 0));
+}
+
+/// Seviye 1'in (ve dolayısıyla seviye 2'nin) oyu tam ağırlıklı: skoru
+/// doğrudan etkiler. `seed_actor` zaten seviye 1 açıyor (bkz. onun
+/// dokümantasyonu) — bu test o varsayımı açıkça sabitliyor.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn seviye_1in_oyu_skoru_degistirir(pool: PgPool) {
+    let yazar = seed_actor(&pool, "agirlik1_yazar").await;
+    let oylayan = seed_actor(&pool, "agirlik1_oylayan").await;
+    assert_eq!(
+        oylayan.trust_level, 1,
+        "fixture varsayımı: seed_actor seviye 1"
+    );
+    let post = seed_post(&pool, &yazar).await;
+
+    let sonuc = interaction::set_vote(&pool, oylayan.id, post, 1)
+        .await
+        .expect("oy verilebilmeli");
+
+    assert_eq!(sonuc.score, 1, "seviye 1'in oyu tam ağırlıklı olmalı");
+    assert_eq!(sayaclar(&pool, post).await, (1, 1, 0));
+}
+
+/// **Madde 3'teki incelik:** seviye 0'ken verilen bir oy, sahibi SONRADAN
+/// terfi ettikten sonra geri çekilirse `score`'u BOZMAMALI. Ağırlık oy
+/// ANINDA sabitlendiği için (`votes.weight`), geri çekmenin delta'sı satırda
+/// saklı `weight = 0` ile hesaplanmalı — oy verenin BUGÜNKÜ (terfi sonrası)
+/// kademesiyle değil. Yanlış bir uygulama (delta'yı bugünkü kademeden
+/// türetirse) geri çekmeyi `-1` sayar ve `score`'u gereksiz yere eksiye
+/// kaydırırdı; bu test tam olarak o hatayı yakalamak için var.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn seviye_0iken_verilip_terfi_sonrasi_geri_cekilen_oy_skoru_bozmuyor(pool: PgPool) {
+    let yazar = seed_actor(&pool, "terfi_yazar").await;
+    let oylayan = seed_actor_level0(&pool, "terfi_oylayan").await;
+    let post = seed_post(&pool, &yazar).await;
+
+    // Seviye 0'ken oy ver: ağırlıksız, score 0'da kalır (satırda weight=0
+    // sabitlenir).
+    interaction::set_vote(&pool, oylayan.id, post, 1)
+        .await
+        .expect("seviye 0 oy verebilmeli");
+    assert_eq!(sayaclar(&pool, post).await, (0, 1, 0));
+
+    // Terfi: recompute_trust_levels'ın koşullarını sağlamayı beklemek
+    // yerine kademe doğrudan yazılıyor (bkz. trust_level_yukselt).
+    trust_level_yukselt(&pool, oylayan.id, 1).await;
+
+    // Oyu geri çek. Eğer delta yanlışlıkla oy verenin BUGÜNKÜ (seviye 1)
+    // kademesinden hesaplansaydı, "eski katkı" 1 sayılır ve score -1'e
+    // düşerdi. Doğru davranış: satırda saklı weight=0 kullanıldığı için
+    // eski katkı zaten 0, geri çekme score'u DEĞİŞTİRMEMELİ.
+    let sonuc = interaction::set_vote(&pool, oylayan.id, post, 0)
+        .await
+        .expect("geri çekilebilmeli");
+
+    assert_eq!(
+        sonuc.score, 0,
+        "terfi sonrası geri çekme skoru eksiye kaydırmamalı"
+    );
+    assert_eq!(
+        sayaclar(&pool, post).await,
+        (0, 0, 0),
+        "geri çekme upvote sayacını da düşürmeli (ham sayaç, ağırlıktan bağımsız)"
+    );
 }
 
 // --- Takip -----------------------------------------------------------------

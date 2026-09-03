@@ -68,6 +68,32 @@ pub struct VoteOutcome {
 /// iş ([`crate::feed::recompute_hot_scores`]) yalnızca zaman ilerledikçe
 /// kayan değerleri tazeliyor; anlık güncelleme burada.
 ///
+/// ## Oy ağırlığı (Faz 18.B, `NOTES.md` §9.3, `migrations/0022_vote_weight.up.sql`)
+///
+/// `contents.score` artık ham oy toplamı değil, `sum(value * weight)`.
+/// `weight` oyu veren actor'ün **bu fonksiyon çağrıldığı andaki**
+/// `trust_level`'ından türetiliyor (seviye 0 → `0`, seviye 1/2 → `1`) ve
+/// `votes.weight`'e öyle yazılıyor — bkz. migration'daki `COMMENT ON
+/// COLUMN` için tam gerekçe. **Bu ağırlık sonradan yeniden hesaplanmıyor:**
+/// bir actor terfi ettiğinde geçmiş oylarını dolaşıp `contents.score`'u
+/// güncellemek, her terfide potansiyel olarak binlerce satırı taramak
+/// demek olurdu. Ağırlık oy anının fotoğrafı.
+///
+/// **Kritik incelik — delta hangi ağırlıkla hesaplanır:** bir oy
+/// değiştirildiğinde ya da geri çekildiğinde, **eski** katkı (`onceki_value
+/// * onceki_weight`) satırda **önceden saklı duran** `weight` ile
+/// hesaplanır, oy verenin **bugünkü** kademesiyle DEĞİL. **Yeni** katkı
+/// (`value * yeni_weight`) ise bu çağrının anında okunan güncel kademeden
+/// türetilen `yeni_weight` ile. Bu ayrım şart: aksi hâlde seviye 0'ken oy
+/// verip sonra terfi eden biri oyunu geri çekince (`value = 0`, yeni katkı
+/// zaten `0`) eski katkı yanlışlıkla `1` sayılır ve `contents.score`
+/// gereksiz yere eksiye kayardı — oysa o oy hiçbir zaman skora katkı
+/// vermemişti. Test: `crates/actos-core/tests/interaction.rs`.
+///
+/// `upvotes`/`downvotes` bu değişiklikten **etkilenmiyor** — hâlâ ham oy
+/// SAYISI (kaç kişi upvote/downvote verdi), kullanıcı oyunun kaydedildiğini
+/// görebilsin diye. Değişen yalnızca oyun `score`'a katkısı.
+///
 /// # Errors
 /// `value` `-1`/`0`/`1` dışındaysa [`Error::Validation`]; içerik yoksa
 /// [`Error::NotFound`]; silinmişse [`Error::Gone`]; içerik çağıranın
@@ -109,21 +135,38 @@ pub async fn set_vote(
         return Err(Error::Forbidden);
     }
 
-    let mevcut: Option<i16> = sqlx::query_scalar!(
-        r#"SELECT value FROM votes WHERE actor_id = $1 AND content_id = $2"#,
+    // Önceki oy VE o oyun satırda saklı ağırlığı — eski katkının delta'sı
+    // bununla hesaplanacak, oy verenin bugünkü kademesiyle değil (bkz.
+    // fonksiyon dokümantasyonu "Kritik incelik").
+    let mevcut = sqlx::query!(
+        r#"SELECT value, weight FROM votes WHERE actor_id = $1 AND content_id = $2"#,
         actor_id,
         content_id,
     )
     .fetch_optional(&mut *tx)
     .await?;
 
-    let onceki = mevcut.unwrap_or(0);
+    let (onceki_value, onceki_weight) = mevcut.map_or((0i16, 0i16), |r| (r.value, r.weight));
+
+    // Oy verenin GÜNCEL güven kademesi — bu YAZI anında okunuyor ve
+    // `votes.weight`'e öyle sabitleniyor (bkz. `migrations/
+    // 0022_vote_weight.up.sql` üzerindeki `COMMENT ON COLUMN`). Seviye 0 →
+    // ağırlık 0 (oy kaydedilir, sayaçlara işler, skora katkı vermez);
+    // seviye 1/2 → ağırlık 1 (tam).
+    let oylayan_trust_level: i16 =
+        sqlx::query_scalar!(r#"SELECT trust_level FROM actors WHERE id = $1"#, actor_id,)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    let yeni_weight: i16 = i16::from(oylayan_trust_level >= 1);
 
     // Sayaç farkları önceki ve yeni değerden türetiliyor; "kaç oy vardı"yı
-    // yeniden saymaya gerek yok.
-    let upvote_delta = i32::from(value == 1) - i32::from(onceki == 1);
-    let downvote_delta = i32::from(value == -1) - i32::from(onceki == -1);
-    let score_delta = i32::from(value) - i32::from(onceki);
+    // yeniden saymaya gerek yok. `upvotes`/`downvotes` ağırlıktan bağımsız
+    // — ham yön sayısı; yalnızca `score_delta` ağırlıklı.
+    let upvote_delta = i32::from(value == 1) - i32::from(onceki_value == 1);
+    let downvote_delta = i32::from(value == -1) - i32::from(onceki_value == -1);
+    let score_delta = i32::from(value) * i32::from(yeni_weight)
+        - i32::from(onceki_value) * i32::from(onceki_weight);
 
     if value == 0 {
         sqlx::query!(
@@ -136,13 +179,14 @@ pub async fn set_vote(
     } else {
         sqlx::query!(
             r#"
-            INSERT INTO votes (actor_id, content_id, value)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (actor_id, content_id) DO UPDATE SET value = EXCLUDED.value
+            INSERT INTO votes (actor_id, content_id, value, weight)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (actor_id, content_id) DO UPDATE SET value = EXCLUDED.value, weight = EXCLUDED.weight
             "#,
             actor_id,
             content_id,
             value,
+            yeni_weight,
         )
         .execute(&mut *tx)
         .await?;

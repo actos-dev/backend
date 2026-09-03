@@ -23,6 +23,7 @@ use actos_core::{
     Config, Storage,
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
+        StorageQuotaConfig,
     },
     cursor::CursorCodec,
     id::IdCodec,
@@ -77,6 +78,8 @@ fn test_config() -> Config {
             cursor_signing_key: "test-cursor-signing-key-en-az-otuz-iki-karakter".to_owned(),
         },
         rate_limits: LimitTable::from_env().expect("varsayılan limit tablosu geçerli olmalı"),
+        storage_quota: StorageQuotaConfig::from_env()
+            .expect("varsayılan depolama kotası geçerli olmalı"),
     }
 }
 

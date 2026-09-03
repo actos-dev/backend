@@ -1,5 +1,6 @@
-//! Yüklenen dosyalar: depolamaya yazma, içeriğe bağlama, silme ve
-//! bağlanmamış yüklemeleri toplayan periyodik iş.
+//! Yüklenen dosyalar: depolamaya yazma (aktör başına toplam depolama
+//! kotasına tabi — Faz 18.A, bkz. NOTES.md §9.8 ve [`create_attachment`]),
+//! içeriğe bağlama, silme ve bağlanmamış yüklemeleri toplayan periyodik iş.
 //!
 //! Görselin doğrulanması ve normalize edilmesi burada değil,
 //! [`crate::media`]'da; bu modül onun çıktısını alıp depolama ile
@@ -90,8 +91,8 @@ impl Attachment {
     }
 }
 
-/// `POST /uploads`: ham baytları doğrula, normalize et, depolamaya yaz,
-/// kaydı oluştur.
+/// `POST /uploads`: ham baytları doğrula, normalize et, **depolama kotasını
+/// kontrol et**, depolamaya yaz, kaydı oluştur.
 ///
 /// **Sıra bilinçli:** önce depolamaya yazılıyor, sonra veritabanı satırı
 /// ekleniyor. Ters sırada, veritabanı satırı yazılıp depolama yüklemesi
@@ -100,11 +101,56 @@ impl Attachment {
 /// ihtimalle sahipsiz bir nesne kalıyor — görünmez, zararsız ve
 /// [`cleanup_orphaned`]'in tarayabileceği bir çöp.
 ///
+/// ## Depolama kotası (Faz 18.A, bkz. NOTES.md §9.8)
+///
+/// `quota_bytes`, çağıranın (`actos-api::routes::uploads`) actor'ün güven
+/// kademesine göre önceden hesapladığı **toplam** bayt sınırı (bkz.
+/// `crate::config::StorageQuotaConfig::for_trust_level`). Bu modül
+/// `trust_level` kavramını hiç bilmiyor — yalnızca nihai sayıyı uyguluyor,
+/// tıpkı `max_bytes`'ın (tek dosya sınırı) zaten yaptığı gibi. Kontrol
+/// [`total_storage_bytes`] ile `SUM(attachments.byte_size)` okuyup bu
+/// yüklemenin ekleyeceği baytla toplayarak yapılıyor; **sayaç kolonuna
+/// çevrilmedi** — bu ölçekte (aktör başına yüzlerce/binlerce satır, kotayla
+/// zaten sınırlı) her yüklemede bir `SUM` sorgusu ölçülebilir bir maliyet
+/// değil, ayrı bir sayaç kolonu tutarlılığını (silme/geri alma gibi her
+/// yol için doğru artır/azalt) elle garanti etmek gerektirir ve bu ölçekte
+/// karşılığı yok. Ölçek büyürse (`docs/query-plans.md` benzeri bir eşikte)
+/// bu kararın gözden geçirilmesi gerekir.
+///
+/// Kontrol **normalize edilmiş** (WebP) boyut üzerinden, `media::
+/// process_image`'ın çıktısı hazır olduktan ama depolamaya hiç yazılmadan
+/// önce yapılıyor: (1) `attachments.byte_size`'ın kendisi bu değeri
+/// tutuyor, yani kota tam bu sütunun toplamıyla tutarlı olmalı — ham
+/// yükleme boyutuyla kontrol etseydik WebP sıkıştırması sonrası gerçek
+/// kullanım kotayla uyuşmayabilirdi; (2) normalize etme yerel/CPU-bağımlı
+/// (ağ çağrısı yok), reddedilecek bir yükleme için bu adımı çalıştırmanın
+/// maliyeti `storage.put_object`'in ağ üzerinden S3'e yazmasından çok daha
+/// ucuz — asıl pahalı adımdan (depolamaya yazma) önce durmak, sonrasında
+/// durup nesneyi geri silmekten (ki bu ek bir başarısızlık noktası daha
+/// açardı) daha basit ve daha az riskli.
+///
 /// # Errors
 /// Dosya doğrulamadan geçmezse [`Error::Validation`] /
 /// [`Error::UnsupportedMedia`] (bkz. [`crate::media::process_image`]);
-/// depolama erişilemezse [`Error::Internal`]; veritabanı hatası
-/// [`Error::Database`].
+/// **kota aşılırsa [`Error::Validation`]** (bkz. aşağıdaki gerekçe — neden
+/// `Forbidden` değil); depolama erişilemezse [`Error::Internal`]; veritabanı
+/// hatası [`Error::Database`].
+///
+/// **Neden `Validation`, `Forbidden` değil:** bu kod tabanında `Forbidden`
+/// bir *yetki/sahiplik* ihlalini işaret ediyor (bkz. [`resolve_as_avatar`] —
+/// "bu senin değil"), kotanın anlamı bu değil; actor'ün yükleme *yetkisi*
+/// hâlâ var, yalnızca şu anki *isteği* (bu boyutta, bu anda) mevcut
+/// durumuyla (kullanımı) çakışıyor. Bu tam olarak [`Error::Validation`]'ın
+/// `max_bytes`/görsel format kontrolleri için zaten kullandığı aile: girdi
+/// biçimsel olarak geçerli ama bağlamıyla (kota) birlikte kabul edilemez.
+/// `Conflict` (409) de düşünülebilirdi ama o bu kod tabanında "kaynağın şu
+/// anki durumu" (ör. zaten bağlı bir ek) için ayrılmış (bkz.
+/// [`resolve_as_avatar`]); burada çakışan kaynağın kendisi değil, isteğin
+/// hacmi — `400 Validation` daha doğru. Mesaj kullanıcının **ne kadar
+/// kullandığını ve sınırın ne olduğunu** taşıyor (bkz. aşağıdaki
+/// `format!`) — yalnızca "kota doldu" demek, istemcinin (özellikle bir
+/// ajanın, bu platformda birinci sınıf vatandaş) bir sonraki adımı
+/// planlamasına (silmeli mi, ne kadar yer açmalı) yetmezdi.
 pub async fn create_attachment(
     pool: &PgPool,
     storage: &Storage,
@@ -112,6 +158,7 @@ pub async fn create_attachment(
     actor_id: i64,
     bytes: &[u8],
     max_bytes: usize,
+    quota_bytes: i64,
 ) -> Result<Attachment> {
     let islenmis: ProcessedImage = media::process_image(bytes, max_bytes)?;
 
@@ -123,6 +170,20 @@ pub async fn create_attachment(
     let checksum = sha256_hex(&islenmis.data);
     let byte_size = i64::try_from(islenmis.data.len())
         .map_err(|_| Error::Internal("dosya boyutu i64'e sığmadı".to_owned()))?;
+
+    let mevcut_kullanim = total_storage_bytes(pool, actor_id).await?;
+    // Taşma savunması: `mevcut_kullanim` ve `byte_size` ayrı ayrı makul
+    // (SUM zaten var olan satırlardan, `byte_size` tek bir görselden) ama
+    // toplamları `i64::checked_add` olmadan teorik olarak taşabilir —
+    // `saturating_add` en kötü ihtimalle kotayı "kesin aşılmış" sayar,
+    // asla sessizce izin vermez.
+    if mevcut_kullanim.saturating_add(byte_size) > quota_bytes {
+        return Err(Error::Validation(format!(
+            "depolama kotası aşıldı: şu an {mevcut_kullanim} bayt kullanıyorsun, \
+             kademe sınırın {quota_bytes} bayt, bu yükleme {byte_size} bayt daha \
+             ekleyecekti — önce bazı eklerini silmen gerekebilir"
+        )));
+    }
 
     storage
         .put_object(&object_key, islenmis.data, ProcessedImage::mime_type())
@@ -174,6 +235,45 @@ pub async fn create_attachment(
         checksum_sha256: checksum,
         created_at: row.created_at,
     })
+}
+
+/// Bir actor'ün **tüm** yüklemelerinin toplam bayt kullanımı —
+/// [`create_attachment`]'ın kota kontrolünün ve `DELETE /uploads/{id}`'in
+/// (bkz. [`delete_attachment`]) kotayı serbest bırakmasının tek doğruluk
+/// kaynağı.
+///
+/// **Silinen ekler otomatik düşer:** ayrı bir "azalt" adımı yok çünkü hiç
+/// gerekmiyor — `SUM(byte_size)`, sorgu her çalıştığında `attachments`
+/// tablosunun **o anki** satırlarını topluyor; [`delete_attachment`]'ın
+/// `DELETE FROM attachments` çağrısı satırı kaldırdığı an bir sonraki `SUM`
+/// onu zaten görmüyor. Bir sayaç kolonu olsaydı bu senkronu (silme yolunun
+/// hepsinde doğru azaltma) elle korumak gerekirdi; `SUM` bunu bedavaya
+/// veriyor (bkz. [`create_attachment`] üzerindeki "sayaç kolonuna
+/// çevrilmedi" gerekçesi).
+///
+/// `COALESCE(..., 0)`: actor'ün hiç yüklemesi yoksa `SUM` SQL'de `NULL`
+/// döner (boş küme üzerinde toplam tanımsız) — `0`'a çeviriyoruz ki
+/// çağıranın `Option` ile uğraşmasına gerek kalmasın, "kullanım yok" ile
+/// "kullanım sıfır bayt" burada eşdeğer. `::bigint` cast'i sqlx'in `SUM`
+/// çıktısını (Postgres'te `numeric`, `byte_size` `bigint` olsa bile)
+/// `i64`'e güvenle eşlemesi için — `crate::actor`'daki `total_score!`
+/// deseniyle aynı (bkz. `ProfileRow` sorgusu).
+///
+/// # Errors
+/// Veritabanı hatası [`Error::Database`].
+pub async fn total_storage_bytes(pool: &PgPool, actor_id: i64) -> Result<i64> {
+    let toplam = sqlx::query_scalar!(
+        r#"
+        SELECT COALESCE(SUM(byte_size), 0)::bigint AS "toplam!"
+        FROM attachments
+        WHERE actor_id = $1
+        "#,
+        actor_id,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(toplam)
 }
 
 /// `<actor dış id>/<uuidv7>.webp`.

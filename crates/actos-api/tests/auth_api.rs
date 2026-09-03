@@ -42,6 +42,7 @@ use actos_core::{
     Config, Storage,
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
+        StorageQuotaConfig,
     },
     id::IdCodec,
     idempotency::IdempotencyStore,
@@ -120,6 +121,8 @@ fn test_config() -> Config {
         // anahtar önekiyle kurması (bkz. dosya başı yorumu) — aksi halde bu
         // varsayılanlar bile paralel testler arasında çakışırdı.
         rate_limits: LimitTable::from_env().expect("varsayılan limit tablosu geçerli olmalı"),
+        storage_quota: StorageQuotaConfig::from_env()
+            .expect("varsayılan depolama kotası geçerli olmalı"),
     }
 }
 
