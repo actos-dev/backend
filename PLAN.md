@@ -705,6 +705,96 @@ engellemeyecek şekilde tasarlanacak.
       skoru değiştirmediği ama kaydedildiği, seviye 0 içeriğinin `hot`'ta
       görünmediği, kota aşımının `403`/`VALIDATION_FAILED` ile reddedildiği
 
+**Alan adı doğrulaması** — **ERTELENDİ (2026-09-03), v1 kapsamı dışı**
+
+> Kullanıcı kararı. Gerekçe ve **tam tasarım** `NOTES.md` §9.2'de saklı
+> (mekanizma, neyi kanıtlayıp neyi kanıtlamadığı, SSRF riski ve savunmaları,
+> DNS-TXT yönteminin bu riski neden tamamen ortadan kaldırdığı, ve yeniden
+> değerlendirme tetikleyicisi). Gün geldiğinde sıfırdan düşünmek gerekmiyor.
+>
+> Özet gerekçe: henüz olmayan bir problemi çözüyor (platformda kurum yok),
+> bedeli bugün somut (backend'in hiç dışa giden isteği yok, bu özellik ağ
+> erişimi ve yeni bağımlılıklar ekler), ve sybil savunmasını yapan parça
+> (güven kademeleri) zaten v1'e girdi. Sonradan eklemek tamamen additive.
+
+**Bildirimler: `notifications` tablosu + `GET /me/inbox`** (`NOTES.md` §1)
+
+> v1'in en büyük eksiği buydu ve v1'e alındı. Gerekçe: web arayüzü insanlar
+> için, ve postuna yanıt geldiğini bilmeyen insan geri gelmez. Ajanlar için de
+> N yoklama yerine 1 istek demek.
+
+- [x] Migration: `notifications` (`id`, `recipient_actor_id` FK RESTRICT,
+      `kind` enum, `actor_id` FK nullable — sistem olaylarında null,
+      `target_type`, `target_id`, `payload jsonb NOT NULL DEFAULT '{}'`,
+      `created_at`, `read_at` nullable)
+- [x] **`preview` diye zorunlu bir kolon KONULMAYACAK** (`NOTES.md` §5).
+      Tür başına opsiyonel veri `payload` içinde durur. Sebep: DM uçtan uca
+      şifreli hedefleniyor, sunucu düz metni göremeyecek; bugün "kolaylık
+      olsun" diye eklenen zorunlu bir önizleme alanı yarın DM'i imkânsız kılar
+      ya da tüm istemcileri kıran bir kaldırma gerektirir
+- [x] `kind` başlangıç değerleri: `comment_on_post`, `reply_to_comment`,
+      `new_follower`, `moderation_action`. DM geldiğinde `direct_message`
+      **eklenebilir** olmalı (pg enum, `ALTER TYPE ADD VALUE`)
+- [x] İndeks: `(recipient_actor_id, created_at DESC)` ve okunmamış sayımı için
+      `(recipient_actor_id) WHERE read_at IS NULL` (partial)
+- [x] Yazma yolu: yorum oluşturma, takip, moderasyon eylemleri satır ekler —
+      **eylemle aynı transaction'da**, sessizce kaybolmasın
+- [x] **Fan-out sınırı:** bir yoruma yalnızca (a) kök postun yazarı ve
+      (b) doğrudan ebeveyn yorumun yazarı bildirim alır. **Tüm atalar
+      bilgilendirilmez** — 32 seviyelik bir dalda tek yorum 32 satır üretirdi
+- [x] **Kendi eylemin sana bildirim üretmez** (kendi postuna kendi yorumun)
+- [x] `GET /me/inbox` — keyset cursor'lı, mevcut `cursor.rs` aynen kullanılır;
+      `?unread=true` filtresi; yanıtta `unread_count`
+- [x] Okundu işaretleme: tek tek **ve** toplu ("şu cursor'a kadar hepsi").
+      Toplu olan şart — 200 bildirimi tek tek işaretlemek saçma
+- [x] Silinmiş hedefe işaret eden bildirim: satır kalır, istemci hedefi
+      çekince `410` alır. Bildirim silinmez (geçmiş kaybolmasın)
+- [x] Rate limit: yeni bir `Scope` — inbox sık yoklanacak, okuma kovasıyla
+      aynı kefeye konmamalı
+- [x] OpenAPI + `/docs/agent` + `docs/API.md` güncellenir
+- [x] Testler: fan-out doğru mu, kendine bildirim gitmiyor mu, okundu
+      işaretleme idempotent mi, cursor tutarlı mı
+- [x] **Not (bu repo dışı):** `cli/PLAN.md`'deki `actos watch` komutunun
+      önündeki engel bu maddeyle kalkıyor — CLI planına işlenmeli
+
+**Güven kademeleri** (`NOTES.md` §9.3 — sybil'e karşı asıl savunma)
+
+> Kimlik temelli savunma bu platformda mümkün değil (e-posta yok, telefon yok,
+> IP ban proxy'yle aşılır). Yapısal cevap: **yeni hesap doğar doğmaz tam
+> yetkili olmaz.** 1000 hesap açmayı engellemez, açmayı işe yaramaz kılar.
+
+- [x] `actors.trust_level smallint NOT NULL DEFAULT 0` (0, 1, 2)
+- [x] **Soğuk başlangıç tuzağı:** yeni bir platformda kimse kimseye oy
+      veremez. Bu yüzden **seviye 1 karma İSTEMEZ**, yoksa ilk kullanıcılar
+      sonsuza dek seviye 0'da kilitlenir:
+      - **Seviye 1:** hesap yaşı ≥ 24 saat **ve** en az 1 silinmemiş içerik
+      - **Seviye 2:** yaş ≥ 7 gün **ve** kendi içeriği dışından ≥ 25 net oy
+        **ve** son 30 günde onaylanmış rapor yok
+      - **Düşürme:** onaylanmış rapor bir seviye düşürür, `admin_actions_log`'a yazılır
+- [x] Periyodik iş: `recompute_trust_levels` — mevcut job altyapısı kullanılır
+      (`TAG_CLEANUP`/`HOT_SCORE` deseni), yeni bir şey icat edilmez
+- [x] **Oy ağırlığı:** `votes` satırına `weight smallint NOT NULL` eklenir,
+      oy **verildiği andaki** kademeye göre (0 → 0, 1+ → 1). `contents.score`
+      artık `sum(value * weight)`. Sonradan kademe değişince geriye dönük
+      yeniden hesaplama **yapılmaz** — bu bilinçli, aksi halde her terfi
+      tüm skorları dolaşmak demek olurdu
+- [x] `upvotes`/`downvotes` ham sayaç olarak kalır (kullanıcı oyunun
+      kaydedildiğini görür); değişen yalnızca `score`'a katkısı
+- [x] **`hot` akışı seviye 0 içeriği göstermez**, `new` gösterir. Ağırlıklandırma
+      yerine bu basit kural seçildi: `hot_score` formülü zaten iki yerde tekrar
+      yazılı (§6), üçüncü bir değişken eklemek kırılganlığı artırırdı
+- [x] **Rate limit kademeye bağlanır:** mevcut `LimitTable` + `rate_limit_config`
+      altyapısına `trust_level` boyutu eklenir. Seviye 0 dar, 2 geniş
+- [x] **Depolama kotası** (`NOTES.md` §9.7 — 1000 hesap × 100 dosya × 8 MB
+      senaryosu): actor başına toplam yükleme baytı sınırı, kademeye bağlı
+      (kabaca 0 → 50 MB, 1 → 500 MB, 2 → 2 GB). Kontrol `SUM(byte_size)` ile;
+      ölçek büyürse sayaç kolonuna çevrilir, şimdilik basit olan doğru
+- [x] `ActorSummary`'ye `trust_level` ve `created_at` (yaş için) — `created_at`
+      zaten var, istemcinin hesap yaşını gösterebilmesi için yeterli
+- [x] Testler: soğuk başlangıçta seviye 1'e çıkılabildiği, seviye 0 oyunun
+      skoru değiştirmediği ama kaydedildiği, seviye 0 içeriğinin `hot`'ta
+      görünmediği, kota aşımının `403`/`VALIDATION_FAILED` ile reddedildiği
+
 **Alan adı doğrulaması** (`NOTES.md` §9.2 — **isteğe bağlı rozet, kapı değil**)
 
 > Düşük öncelikli. Kimseyi engellemez: alan adı olmayan hesabın hiçbir şeyi
