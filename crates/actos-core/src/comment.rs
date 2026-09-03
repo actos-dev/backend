@@ -46,6 +46,7 @@ use crate::{
     content::{BodyFormat, Content, ContentType},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
+    notification::{self, NotificationKind},
     text,
 };
 
@@ -224,10 +225,30 @@ fn split_new_cursor_checked(
 // --- Yorum oluşturma -------------------------------------------------------
 
 /// Bir yorumun ebeveyni hakkında [`create_comment`]'in ihtiyaç duyduğu
-/// asgari bilgi.
+/// bilgi: nereye takılacağı (id/depth) **ve** bildirim fan-out'u için kimin
+/// yazarı olduğu.
+///
+/// `root_author_id`/`parent_author_id` burada bilerek birlikte taşınıyor
+/// (ayrı bir sorguya çıkmak yerine): [`resolve_parent`] zaten hem kök
+/// post'u hem (varsa) doğrudan ebeveyn yorumu `FOR UPDATE` ile okuyor, o
+/// satırların `actor_id`'sini de aynı sorgudan almak bedelsiz — bildirim
+/// fan-out'u için content.rs'e ikinci bir gidiş-dönüş gerekmiyor.
 struct ParentInfo {
     id: i64,
     depth: i32,
+    /// Kök post'un yazarı — `comment_on_post` bildiriminin alıcısı.
+    root_author_id: i64,
+    /// Doğrudan ebeveynin (post ya da yorum) yazarı — ebeveyn bir yorumsa
+    /// `reply_to_comment` bildiriminin alıcısı; ebeveyn post'un kendisiyse
+    /// `root_author_id` ile aynı değer.
+    parent_author_id: i64,
+    /// `true` ise doğrudan ebeveyn post'un kendisi (yorum post'a direkt
+    /// yazıldı), `false` ise ebeveyn ağaçtaki başka bir yorum. [`create_comment`]
+    /// bunu, ayrı bir `reply_to_comment` bildirimi üretip üretmeyeceğine
+    /// karar vermek için kullanıyor (bkz. "fan-out sınırı" — post'a direkt
+    /// yazılan bir yorum için `comment_on_post` zaten aynı olayı anlatıyor,
+    /// ikinci bir bildirime gerek yok).
+    is_direct_child_of_post: bool,
 }
 
 /// `POST /posts/{id}/comments`: bir post'a ya da mevcut bir yoruma yanıt.
@@ -290,6 +311,41 @@ pub async fn create_comment(
     // Ekler aynı transaction'da (bkz. `crate::content::create_post`).
     crate::attachment::attach_to_content(&mut tx, inserted.id, author.id, attachment_ids).await?;
 
+    // --- Bildirim fan-out'u: kök yazarı + doğrudan ebeveyn, BAŞKASI DEĞİL
+    // (bkz. `crate::notification` modül dokümantasyonu "Fan-out sınırı"
+    // bölümü). `notify_once` aynı actor'e (root == parent yazarıysa) iki kez
+    // yazılmasını, `create_notification`'ın kendisi de yeni yorumun yazarına
+    // (kendine bildirim) yazılmasını engelliyor — ikisi de burada elle tekrar
+    // kontrol edilmiyor, merkezi.
+    let mut notified = std::collections::HashSet::new();
+    notification::notify_once(
+        &mut tx,
+        &mut notified,
+        parent.root_author_id,
+        NotificationKind::CommentOnPost,
+        Some(author.id),
+        "content",
+        inserted.id,
+        serde_json::json!({}),
+    )
+    .await?;
+    // Ebeveyn post'un kendisiyse yukarıdaki `comment_on_post` zaten aynı
+    // olayı anlatıyor — ayrıca bir `reply_to_comment` bildirimi ÜRETİLMEZ
+    // (bkz. fan-out sınırı).
+    if !parent.is_direct_child_of_post {
+        notification::notify_once(
+            &mut tx,
+            &mut notified,
+            parent.parent_author_id,
+            NotificationKind::ReplyToComment,
+            Some(author.id),
+            "content",
+            inserted.id,
+            serde_json::json!({}),
+        )
+        .await?;
+    }
+
     tx.commit().await?;
 
     get_comment(pool, inserted.id).await
@@ -310,7 +366,7 @@ async fn resolve_parent(
     // da aynı kuralı uyguluyor, bkz. modül dokümantasyonu).
     let post = sqlx::query!(
         r#"
-        SELECT id, depth, deleted_at
+        SELECT id, depth, deleted_at, actor_id
         FROM contents
         WHERE id = $1 AND content_type = 'post'::content_type
         FOR UPDATE
@@ -329,6 +385,9 @@ async fn resolve_parent(
         return Ok(ParentInfo {
             id: post.id,
             depth: post.depth,
+            root_author_id: post.actor_id,
+            parent_author_id: post.actor_id,
+            is_direct_child_of_post: true,
         });
     };
 
@@ -339,12 +398,15 @@ async fn resolve_parent(
         return Ok(ParentInfo {
             id: post.id,
             depth: post.depth,
+            root_author_id: post.actor_id,
+            parent_author_id: post.actor_id,
+            is_direct_child_of_post: true,
         });
     }
 
     let parent = sqlx::query!(
         r#"
-        SELECT id, depth, deleted_at, root_post_id
+        SELECT id, depth, deleted_at, root_post_id, actor_id
         FROM contents
         WHERE id = $1 AND content_type = 'comment'::content_type
         FOR UPDATE
@@ -369,6 +431,9 @@ async fn resolve_parent(
     Ok(ParentInfo {
         id: parent.id,
         depth: parent.depth,
+        root_author_id: post.actor_id,
+        parent_author_id: parent.actor_id,
+        is_direct_child_of_post: false,
     })
 }
 

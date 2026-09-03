@@ -113,6 +113,16 @@ pub enum Scope {
     /// yapıyor, `GET /posts/{id}` gibi bir tekil okumadan belirgin ölçüde
     /// daha pahalı.
     Search,
+    /// `GET /me/inbox` (Faz 18.A, bildirimler). Genel `Read`'den **ayrı**
+    /// bir kova — gerekçe `Search`'ünkinin tam tersi yönde ama aynı ilke:
+    /// inbox ucu, "postuma yanıt geldi mi" sorusunu yanıtlamak için **sık
+    /// sık yoklanması** teşvik edilen bir uç (bkz. NOTES.md §1 — bu uç,
+    /// N ayrı okuma isteğinin yerine geçiyor). Genel `Read` kovasına
+    /// koyulsaydı, bir istemcinin inbox'ı sık yoklaması onun post/profil
+    /// okuma kotasını da tüketirdi (ve tersi: yoğun içerik okuyan bir
+    /// istemci inbox'ını kontrol edemez hâle gelirdi) — ikisinin kullanım
+    /// desenleri birbirinden bağımsız, kotaları da öyle olmalı.
+    Inbox,
 }
 
 impl Scope {
@@ -129,6 +139,7 @@ impl Scope {
             Self::Upload => "upload",
             Self::Write => "write",
             Self::Search => "search",
+            Self::Inbox => "inbox",
         }
     }
 }
@@ -607,9 +618,9 @@ impl RateLimiter {
 ///
 /// Tanınan anahtarlar: `posts_per_hour`, `comments_per_hour`,
 /// `votes_per_hour`, `reads_per_minute`, `uploads_per_hour`,
-/// `searches_per_minute`. Diğer scope'ların (`Register`, `Recover`,
-/// `Write`) actor başına override'ı yok — bunlar zaten kimliksiz (IP
-/// başına) uygulanıyor.
+/// `searches_per_minute`, `inbox_per_minute`. Diğer scope'ların (`Register`,
+/// `Recover`, `Write`) actor başına override'ı yok — bunlar zaten kimliksiz
+/// (IP başına) uygulanıyor.
 ///
 /// Tanınmayan bir anahtar, eksik bir alan ya da beklenmeyen bir tip (string,
 /// negatif sayı, ondalık, sıfır, `u32`'ye sığmayan bir değer) sessizce
@@ -624,6 +635,7 @@ pub fn config_from_json(value: &serde_json::Value, scope: Scope) -> Option<RateL
         Scope::Read => ("reads_per_minute", Duration::from_secs(60)),
         Scope::Upload => ("uploads_per_hour", Duration::from_secs(3600)),
         Scope::Search => ("searches_per_minute", Duration::from_secs(60)),
+        Scope::Inbox => ("inbox_per_minute", Duration::from_secs(60)),
         Scope::Register | Scope::Recover | Scope::Write => return None,
     };
 

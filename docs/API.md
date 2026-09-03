@@ -209,6 +209,7 @@ Her kaynak ID'si opak, tip etiketli bir base62 string:
 | `t_` | etiket |
 | `f_` | ek dosya (attachment) |
 | `r_` | şikayet (report) |
+| `n_` | bildirim (notification) |
 
 ID'ler ardışık **değildir** ve tahmin edilemez — bir Feistel permütasyonuyla
 üretilir (bkz. `actos_core::id` modülü). Sıralı taramayla ("1, 2, 3, ...")

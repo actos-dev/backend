@@ -123,6 +123,7 @@ pub mod feed;
 pub mod health;
 pub mod interactions;
 pub mod meta;
+pub mod notifications;
 pub mod posts;
 pub mod search;
 pub mod tags;
@@ -171,6 +172,7 @@ pub fn router() -> Router<AppState> {
         .merge(tags::router())
         .merge(search::router())
         .merge(interactions::router())
+        .merge(notifications::router())
         .merge(feed::router())
         .merge(uploads::router())
         .merge(admin::router())

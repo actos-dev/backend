@@ -176,6 +176,10 @@ const EXPECTED_PATHS: &[&str] = &[
     "/actors/{username}/follow",
     "/me/saves",
     "/me/votes",
+    // bildirimler (Faz 18.A)
+    "/me/inbox",
+    "/me/inbox/read",
+    "/me/inbox/{id}/read",
     // feed
     "/feed",
     "/feed/following",
@@ -211,7 +215,7 @@ async fn openapi_json_200_ve_gecerli_json(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn openapi_json_42_yolun_hepsini_iceriyor(pool: PgPool) {
+async fn openapi_json_45_yolun_hepsini_iceriyor(pool: PgPool) {
     let router = build_router(pool);
     let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
     assert_eq!(status, StatusCode::OK);

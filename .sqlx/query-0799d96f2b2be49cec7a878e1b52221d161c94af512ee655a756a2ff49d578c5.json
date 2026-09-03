@@ -1,33 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            api_keys.secret_hash,\n            api_keys.revoked_at AS key_revoked_at,\n            actors.id AS actor_id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.deleted_at,\n            (\n                bans.actor_id IS NOT NULL\n                AND (bans.expires_at IS NULL OR bans.expires_at > now())\n            ) AS \"is_banned!\"\n        FROM api_keys\n        JOIN actors ON actors.id = api_keys.actor_id\n        LEFT JOIN bans ON bans.actor_id = actors.id\n        WHERE api_keys.id = $1\n        ",
+  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.avatar_object_key,\n            actors.deleted_at,\n            COUNT(contents.id) FILTER (\n                WHERE contents.content_type = 'post' AND contents.deleted_at IS NULL\n            ) AS \"post_count!\",\n            COUNT(contents.id) FILTER (\n                WHERE contents.content_type = 'comment' AND contents.deleted_at IS NULL\n            ) AS \"comment_count!\",\n            COALESCE(\n                SUM(contents.score) FILTER (WHERE contents.deleted_at IS NULL),\n                0\n            )::bigint AS \"total_score!\"\n        FROM actors\n        LEFT JOIN contents ON contents.actor_id = actors.id\n        WHERE actors.username = $1\n        GROUP BY actors.id\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "secret_hash",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "api_keys",
-            "name": "secret_hash"
-          }
-        }
-      },
-      {
-        "ordinal": 1,
-        "name": "key_revoked_at",
-        "type_info": "Timestamptz",
-        "origin": {
-          "Table": {
-            "table": "api_keys",
-            "name": "revoked_at"
-          }
-        }
-      },
-      {
-        "ordinal": 2,
-        "name": "actor_id",
+        "name": "id",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -37,7 +15,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 1,
         "name": "username",
         "type_info": {
           "Custom": {
@@ -53,7 +31,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 2,
         "name": "actor_type: ActorType",
         "type_info": {
           "Custom": {
@@ -76,7 +54,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 3,
         "name": "display_name",
         "type_info": "Text",
         "origin": {
@@ -87,7 +65,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 4,
         "name": "bio",
         "type_info": "Text",
         "origin": {
@@ -98,7 +76,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -109,7 +87,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 6,
         "name": "trust_level",
         "type_info": "Int2",
         "origin": {
@@ -120,7 +98,18 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 7,
+        "name": "avatar_object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "avatar_object_key"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
         "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -131,21 +120,36 @@
         }
       },
       {
+        "ordinal": 9,
+        "name": "post_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
         "ordinal": 10,
-        "name": "is_banned!",
-        "type_info": "Bool",
+        "name": "comment_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "total_score!",
+        "type_info": "Int8",
         "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        }
       ]
     },
     "nullable": [
       false,
-      true,
-      false,
       false,
       false,
       true,
@@ -153,8 +157,11 @@
       false,
       false,
       true,
+      true,
+      null,
+      null,
       null
     ]
   },
-  "hash": "3caca0e7500e15d809608d59f3f4cacae9832a2a8068a5c46b4e418c2dd7488a"
+  "hash": "0799d96f2b2be49cec7a878e1b52221d161c94af512ee655a756a2ff49d578c5"
 }

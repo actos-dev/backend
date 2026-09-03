@@ -120,6 +120,17 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
         return Some(Scope::Search);
     }
 
+    // `GET /me/inbox` (Faz 18.A, bildirimler). Ayrı kova — gerekçe
+    // `actos_core::ratelimit::Scope::Inbox` üzerinde: bu uç sık yoklanması
+    // teşvik edilen bir uç, genel `Read` kovasını onunla paylaşmak ikisinin
+    // kotasını birbirine karıştırırdı. Yalnızca `GET`/`HEAD` — `POST
+    // /me/inbox/read` (toplu okundu işaretleme) ve `PATCH
+    // /me/inbox/{id}/read` (tekil) birer yazma, aşağıdaki genel
+    // `Scope::Write`'a düşüyorlar; sık yoklanan taraf yalnızca okuma.
+    if (*method == Method::GET || *method == Method::HEAD) && path == "/me/inbox" {
+        return Some(Scope::Inbox);
+    }
+
     // Faz 13 geldiğinde buraya eklenecek:
     //   if *method == Method::POST && path == "/media" { return Some(Scope::Upload); }
     // Bu satırların üstünde durmaları gerekiyor çünkü aşağıdaki genel
@@ -174,9 +185,9 @@ fn resolve_client_ip(req: &Request, trusted_proxy_hops: usize) -> IpAddr {
 /// etmiyor (bkz. `crates/actos-core/src/auth.rs`). Onu genişletmek
 /// `actos-core`'a dokunmak demek olurdu (bu görevde yasak). Ek sorgunun
 /// maliyetini sınırlamak için yalnızca `config_from_json`'ın gerçekten
-/// tanıdığı scope'larda (`Post`/`Comment`/`Vote`/`Read`/`Upload`/`Search`)
-/// atılıyor — `Register`/`Recover`/`Write` için o fonksiyon zaten koşulsuz
-/// `None` döndüğünden sorgu bile gereksiz.
+/// tanıdığı scope'larda (`Post`/`Comment`/`Vote`/`Read`/`Upload`/`Search`/
+/// `Inbox`) atılıyor — `Register`/`Recover`/`Write` için o fonksiyon zaten
+/// koşulsuz `None` döndüğünden sorgu bile gereksiz.
 async fn actor_rate_limit_override(
     db: &PgPool,
     actor_id: i64,
@@ -184,7 +195,13 @@ async fn actor_rate_limit_override(
 ) -> Option<RateLimitConfig> {
     if !matches!(
         scope,
-        Scope::Post | Scope::Comment | Scope::Vote | Scope::Read | Scope::Upload | Scope::Search
+        Scope::Post
+            | Scope::Comment
+            | Scope::Vote
+            | Scope::Read
+            | Scope::Upload
+            | Scope::Search
+            | Scope::Inbox
     ) {
         return None;
     }

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM attachments\n        WHERE id IN (\n            SELECT attachments.id\n            FROM attachments\n            WHERE attachments.content_id IS NULL\n              AND attachments.created_at < $1\n              AND NOT EXISTS (\n                  SELECT 1 FROM actors\n                  WHERE actors.avatar_object_key = attachments.object_key\n              )\n            ORDER BY attachments.created_at\n            LIMIT $2\n        )\n        RETURNING object_key\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "attachments",
+            "name": "object_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0e41f92805b3058447195e6235487e5bf2ab060683a0542aa7d3b7fe09487ec1"
+}

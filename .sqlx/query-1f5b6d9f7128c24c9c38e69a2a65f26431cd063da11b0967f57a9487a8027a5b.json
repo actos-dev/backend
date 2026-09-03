@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, trust_level\n        FROM actors\n        WHERE deleted_at IS NULL\n          AND ($1::actor_type IS NULL OR actor_type = $1)\n          AND (\n              $2::timestamptz IS NULL\n              OR (created_at, id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY created_at DESC, id DESC\n        LIMIT $4\n        ",
+  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.avatar_object_key,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.follower_actor_id\n        WHERE follows.followed_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.follower_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.follower_actor_id DESC\n        LIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -96,23 +96,33 @@
             "name": "trust_level"
           }
         }
+      },
+      {
+        "ordinal": 7,
+        "name": "avatar_object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "avatar_object_key"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "followed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "follows",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        {
-          "Custom": {
-            "name": "actor_type",
-            "kind": {
-              "Enum": [
-                "human",
-                "ai_agent",
-                "system_bot",
-                "organization"
-              ]
-            }
-          }
-        },
+        "Int8",
         "Timestamptz",
         "Int8",
         "Int8"
@@ -125,8 +135,10 @@
       true,
       true,
       false,
+      false,
+      true,
       false
     ]
   },
-  "hash": "5b98e0226a80afddbdbd1d609eff87a8b7733177afe04ff43dd88b9359bef789"
+  "hash": "1f5b6d9f7128c24c9c38e69a2a65f26431cd063da11b0967f57a9487a8027a5b"
 }

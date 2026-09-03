@@ -1,11 +1,33 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.followed_actor_id\n        WHERE follows.follower_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.followed_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.followed_actor_id DESC\n        LIMIT $4\n        ",
+  "query": "\n        SELECT\n            api_keys.secret_hash,\n            api_keys.revoked_at AS key_revoked_at,\n            actors.id AS actor_id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.avatar_object_key,\n            actors.deleted_at,\n            (\n                bans.actor_id IS NOT NULL\n                AND (bans.expires_at IS NULL OR bans.expires_at > now())\n            ) AS \"is_banned!\"\n        FROM api_keys\n        JOIN actors ON actors.id = api_keys.actor_id\n        LEFT JOIN bans ON bans.actor_id = actors.id\n        WHERE api_keys.id = $1\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "secret_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "api_keys",
+            "name": "secret_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "key_revoked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "api_keys",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "actor_id",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -15,7 +37,7 @@
         }
       },
       {
-        "ordinal": 1,
+        "ordinal": 3,
         "name": "username",
         "type_info": {
           "Custom": {
@@ -31,7 +53,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 4,
         "name": "actor_type: ActorType",
         "type_info": {
           "Custom": {
@@ -54,7 +76,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 5,
         "name": "display_name",
         "type_info": "Text",
         "origin": {
@@ -65,7 +87,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 6,
         "name": "bio",
         "type_info": "Text",
         "origin": {
@@ -76,7 +98,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -87,7 +109,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "trust_level",
         "type_info": "Int2",
         "origin": {
@@ -98,35 +120,53 @@
         }
       },
       {
-        "ordinal": 7,
-        "name": "followed_at",
+        "ordinal": 9,
+        "name": "avatar_object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "avatar_object_key"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
-            "table": "follows",
-            "name": "created_at"
+            "table": "actors",
+            "name": "deleted_at"
           }
         }
+      },
+      {
+        "ordinal": 11,
+        "name": "is_banned!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Timestamptz",
-        "Int8",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
       false,
+      true,
+      false,
       false,
       false,
       true,
       true,
       false,
       false,
-      false
+      true,
+      true,
+      null
     ]
   },
-  "hash": "cdad13a358561ac11d61a96884e9a76422fc8078f35032b98b8804a33db19533"
+  "hash": "4ce87fcbc0df0ab1269e3b62864a08f292a7add179a29e0a84e4943bb7477fa3"
 }

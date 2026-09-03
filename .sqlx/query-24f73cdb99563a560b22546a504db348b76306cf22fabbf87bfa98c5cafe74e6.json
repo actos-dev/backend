@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.follower_actor_id\n        WHERE follows.followed_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.follower_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.follower_actor_id DESC\n        LIMIT $4\n        ",
+  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.avatar_object_key,\n            follows.created_at AS followed_at\n        FROM follows\n        JOIN actors ON actors.id = follows.followed_actor_id\n        WHERE follows.follower_actor_id = $1\n          AND actors.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (follows.created_at, follows.followed_actor_id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY follows.created_at DESC, follows.followed_actor_id DESC\n        LIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -99,6 +99,17 @@
       },
       {
         "ordinal": 7,
+        "name": "avatar_object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "avatar_object_key"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
         "name": "followed_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -125,8 +136,9 @@
       true,
       false,
       false,
+      true,
       false
     ]
   },
-  "hash": "b0ce82a5fd8c427f9561e98f7ecfe44556463bb468cb5c28c5f3ded77623136d"
+  "hash": "24f73cdb99563a560b22546a504db348b76306cf22fabbf87bfa98c5cafe74e6"
 }

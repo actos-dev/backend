@@ -55,6 +55,7 @@ fn dummy_limit_table() -> LimitTable {
             read: cfg,
             upload: cfg,
             search: cfg,
+            inbox: cfg,
         },
         ai_agent: ScopeLimits {
             post: cfg,
@@ -63,6 +64,7 @@ fn dummy_limit_table() -> LimitTable {
             read: cfg,
             upload: cfg,
             search: cfg,
+            inbox: cfg,
         },
         anonymous: AnonymousLimits {
             register: cfg,
@@ -70,6 +72,7 @@ fn dummy_limit_table() -> LimitTable {
             read: cfg,
             search: cfg,
             write: cfg,
+            inbox: cfg,
         },
     }
 }

@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO notifications (recipient_actor_id, kind, actor_id, target_type, target_id, payload)\n        VALUES ($1, $2, $3, $4, $5, $6)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "notification_kind",
+            "kind": {
+              "Enum": [
+                "comment_on_post",
+                "reply_to_comment",
+                "new_follower",
+                "moderation_action"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Text",
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f085b97f189d688dae0db310bbf8403ddfb2ba92276e055b3bf91318eda34955"
+}

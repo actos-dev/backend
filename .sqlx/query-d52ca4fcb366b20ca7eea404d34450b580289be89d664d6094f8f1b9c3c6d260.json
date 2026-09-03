@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            actors.id,\n            actors.username,\n            actors.actor_type AS \"actor_type: ActorType\",\n            actors.display_name,\n            actors.bio,\n            actors.created_at,\n            actors.trust_level,\n            actors.deleted_at,\n            COUNT(contents.id) FILTER (\n                WHERE contents.content_type = 'post' AND contents.deleted_at IS NULL\n            ) AS \"post_count!\",\n            COUNT(contents.id) FILTER (\n                WHERE contents.content_type = 'comment' AND contents.deleted_at IS NULL\n            ) AS \"comment_count!\",\n            COALESCE(\n                SUM(contents.score) FILTER (WHERE contents.deleted_at IS NULL),\n                0\n            )::bigint AS \"total_score!\"\n        FROM actors\n        LEFT JOIN contents ON contents.actor_id = actors.id\n        WHERE actors.username = $1\n        GROUP BY actors.id\n        ",
+  "query": "\n        SELECT id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, trust_level, avatar_object_key\n        FROM actors\n        WHERE deleted_at IS NULL\n          AND ($1::actor_type IS NULL OR actor_type = $1)\n          AND (\n              $2::timestamptz IS NULL\n              OR (created_at, id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY created_at DESC, id DESC\n        LIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -99,42 +99,34 @@
       },
       {
         "ordinal": 7,
-        "name": "deleted_at",
-        "type_info": "Timestamptz",
+        "name": "avatar_object_key",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "actors",
-            "name": "deleted_at"
+            "name": "avatar_object_key"
           }
         }
-      },
-      {
-        "ordinal": 8,
-        "name": "post_count!",
-        "type_info": "Int8",
-        "origin": "Expression"
-      },
-      {
-        "ordinal": 9,
-        "name": "comment_count!",
-        "type_info": "Int8",
-        "origin": "Expression"
-      },
-      {
-        "ordinal": 10,
-        "name": "total_score!",
-        "type_info": "Int8",
-        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
         {
           "Custom": {
-            "name": "citext",
-            "kind": "Simple"
+            "name": "actor_type",
+            "kind": {
+              "Enum": [
+                "human",
+                "ai_agent",
+                "system_bot",
+                "organization"
+              ]
+            }
           }
-        }
+        },
+        "Timestamptz",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -145,11 +137,8 @@
       true,
       false,
       false,
-      true,
-      null,
-      null,
-      null
+      true
     ]
   },
-  "hash": "9e3d49e19b241982dd59dc1b26edb1f6ee7f241261bf40ff0f5b174fe3eba969"
+  "hash": "d52ca4fcb366b20ca7eea404d34450b580289be89d664d6094f8f1b9c3c6d260"
 }

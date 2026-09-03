@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE actors SET avatar_object_key = 'silinecek/avatar.webp' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c45feb01bc9842243aadd14a716869781704c5d8004e8897dc3a5c4cc7bd6c53"
+}

@@ -70,6 +70,7 @@ use crate::error::ProblemDetails;
         (name = "search", description = "İçerik ve actor araması"),
         (name = "feed", description = "Ana akış ve takip akışı"),
         (name = "interactions", description = "Oy, kaydetme, takip — idempotent PUT/DELETE"),
+        (name = "notifications", description = "Gelen kutusu (`GET /me/inbox`) ve okundu işaretleme"),
         (name = "uploads", description = "Dosya yükleme ve silme"),
         (name = "moderation", description = "Şikayet oluşturma (herkese açık)"),
         (name = "admin", description = "Moderasyon kuyruğu, ban'ler, roller, denetim izi — moderatör/admin gerektirir"),

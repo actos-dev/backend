@@ -30,6 +30,7 @@ use crate::{
     content::{BodyFormat, Content, ContentType},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
+    notification::{self, NotificationKind},
 };
 
 /// Bir actor'ün bir içeriğe verdiği oy: `-1`, `0` (oy yok) veya `1`.
@@ -225,6 +226,13 @@ pub async fn votes_for(
 /// ama burada önden reddediliyor ki istemci 500 değil anlaşılır bir hata
 /// alsın (`crate::comment::create_comment`'teki aynı gerekçe).
 ///
+/// **Bildirim yalnızca gerçekten YENİ bir takipte üretilir** — `RETURNING`
+/// ile `INSERT`in fiilen bir satır ekleyip eklemediği (`ON CONFLICT DO
+/// NOTHING` yüzünden sessizce hiçbir şey yapmamış olabilir) ayırt ediliyor.
+/// Aksi hâlde `PUT`'un idempotent doğası gereği aynı takibi tekrar tekrar
+/// gönderen bir istemci, takip edilen actor'ün gelen kutusunu her seferinde
+/// "yeni takipçi" bildirimiyle doldururdu.
+///
 /// # Errors
 /// Kullanıcı adı yoksa [`Error::NotFound`]; hedef silinmişse [`Error::Gone`];
 /// kendini takip denemesi [`Error::Validation`]; veritabanı hatası
@@ -238,17 +246,35 @@ pub async fn follow(pool: &PgPool, follower_id: i64, username: &str) -> Result<(
         ));
     }
 
-    sqlx::query!(
+    let mut tx = pool.begin().await?;
+
+    let inserted = sqlx::query!(
         r#"
         INSERT INTO follows (follower_actor_id, followed_actor_id)
         VALUES ($1, $2)
         ON CONFLICT (follower_actor_id, followed_actor_id) DO NOTHING
+        RETURNING follower_actor_id
         "#,
         follower_id,
         followed_id,
     )
-    .execute(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+
+    if inserted.is_some() {
+        notification::create_notification(
+            &mut tx,
+            followed_id,
+            NotificationKind::NewFollower,
+            Some(follower_id),
+            "actor",
+            follower_id,
+            serde_json::json!({}),
+        )
+        .await?;
+    }
+
+    tx.commit().await?;
 
     Ok(())
 }

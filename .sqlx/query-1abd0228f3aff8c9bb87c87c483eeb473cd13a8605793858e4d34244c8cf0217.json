@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        UPDATE actors\n        SET\n            display_name = CASE WHEN $2 THEN $3 ELSE display_name END,\n            bio = CASE WHEN $4 THEN $5 ELSE bio END\n        WHERE id = $1 AND deleted_at IS NULL\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, trust_level\n        ",
+  "query": "\n        UPDATE actors\n        SET\n            display_name = CASE WHEN $2 THEN $3 ELSE display_name END,\n            bio = CASE WHEN $4 THEN $5 ELSE bio END,\n            avatar_object_key = CASE WHEN $6 THEN $7 ELSE avatar_object_key END\n        WHERE id = $1 AND deleted_at IS NULL\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, trust_level, avatar_object_key\n        ",
   "describe": {
     "columns": [
       {
@@ -96,11 +96,24 @@
             "name": "trust_level"
           }
         }
+      },
+      {
+        "ordinal": 7,
+        "name": "avatar_object_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "avatar_object_key"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
         "Int8",
+        "Bool",
+        "Text",
         "Bool",
         "Text",
         "Bool",
@@ -114,8 +127,9 @@
       true,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "ae55bd1dd452f9d6240b0de0bfa04d29d0170622dda4cd2c5cdef9c3e2787749"
+  "hash": "1abd0228f3aff8c9bb87c87c483eeb473cd13a8605793858e4d34244c8cf0217"
 }

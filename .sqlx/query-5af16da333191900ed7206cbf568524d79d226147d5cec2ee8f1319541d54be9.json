@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE actors SET avatar_object_key = 'abc/some-key.webp' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5af16da333191900ed7206cbf568524d79d226147d5cec2ee8f1319541d54be9"
+}

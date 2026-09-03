@@ -41,6 +41,9 @@ pub mod interaction;
 /// Şikayet ve admin uçlarının istek-yanıt tipleri.
 pub mod moderation;
 
+/// `GET /me/inbox` ve okundu-işaretleme uçlarının yanıt/istek tipleri.
+pub mod notification;
+
 /// Dosya yükleme uçlarının yanıt tipleri.
 pub mod upload;
 

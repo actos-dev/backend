@@ -33,6 +33,7 @@ use crate::{
     auth::AdminRole,
     cursor::{Cursor, SortKey},
     error::{Error, Result},
+    notification::{self, NotificationKind},
     text,
 };
 
@@ -378,6 +379,11 @@ pub async fn update_report(
 /// yorum da silinebilir), sahiplik aramıyor (yetki zaten rolden geliyor) ve
 /// **gerekçe zorunlu** — denetim izine yazılacak olan o.
 ///
+/// İçeriğin yazarına `moderation_action` bildirimi gider (bkz.
+/// `crate::notification` modül dokümantasyonu) — bir moderatörün kendi
+/// içeriğini silmesi durumunda `create_notification`'ın kendi-bildirim
+/// koruması bu satırı sessizce atlar, burada ayrıca kontrol edilmiyor.
+///
 /// # Errors
 /// İçerik yoksa [`Error::NotFound`]; zaten silinmişse [`Error::Gone`];
 /// gerekçe geçersizse [`Error::Validation`]; veritabanı hatası
@@ -393,7 +399,7 @@ pub async fn moderate_delete_content(
     let mut tx = pool.begin().await?;
 
     let mevcut = sqlx::query!(
-        r#"SELECT deleted_at FROM contents WHERE id = $1 FOR UPDATE"#,
+        r#"SELECT actor_id, deleted_at FROM contents WHERE id = $1 FOR UPDATE"#,
         content_id,
     )
     .fetch_optional(&mut *tx)
@@ -421,6 +427,17 @@ pub async fn moderate_delete_content(
     )
     .await?;
 
+    notification::create_notification(
+        &mut tx,
+        mevcut.actor_id,
+        NotificationKind::ModerationAction,
+        Some(admin_actor_id),
+        "content",
+        content_id,
+        serde_json::json!({ "action_type": "content_delete", "reason": reason }),
+    )
+    .await?;
+
     tx.commit().await?;
 
     Ok(())
@@ -434,6 +451,9 @@ pub async fn moderate_delete_content(
 /// **çakışma değil güncelleme**: `bans` tablosunun PK'sı `actor_id`, yani
 /// bir actor'ün aynı anda en fazla bir ban kaydı olabilir. Süreyi uzatmak
 /// ya da gerekçeyi düzeltmek yeni bir uç gerektirmemeli.
+///
+/// Banlanan actor'e `moderation_action` bildirimi gider (bkz.
+/// `crate::notification`).
 ///
 /// # Errors
 /// Kullanıcı yoksa [`Error::NotFound`]; gerekçe geçersiz ya da bitiş zamanı
@@ -493,6 +513,17 @@ pub async fn ban_actor(
         "actor",
         hedef.id,
         Some(&reason),
+    )
+    .await?;
+
+    notification::create_notification(
+        &mut tx,
+        hedef.id,
+        NotificationKind::ModerationAction,
+        Some(admin_actor_id),
+        "actor",
+        hedef.id,
+        serde_json::json!({ "action_type": "actor_ban", "reason": reason }),
     )
     .await?;
 

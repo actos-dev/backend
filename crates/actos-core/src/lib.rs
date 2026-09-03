@@ -20,6 +20,7 @@ pub mod idempotency;
 pub mod interaction;
 pub mod media;
 pub mod moderation;
+pub mod notification;
 pub mod ratelimit;
 pub mod search;
 pub mod secret;

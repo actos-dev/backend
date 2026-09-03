@@ -1,10 +1,21 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT deleted_at FROM contents WHERE id = $1 FOR UPDATE",
+  "query": "SELECT actor_id, deleted_at FROM contents WHERE id = $1 FOR UPDATE",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "actor_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
         "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -21,8 +32,9 @@
       ]
     },
     "nullable": [
+      false,
       true
     ]
   },
-  "hash": "dc7237dda6330142ba0ae72d02a47df6a20e181ff05030a5a8a08e60d1ebb24d"
+  "hash": "f7beaa48a84c2682c6ec09b93aa65aeffd31592047c9c73b68481a03c7909e5a"
 }

@@ -292,6 +292,10 @@ pub struct ScopeLimits {
     /// üzerindeki gerekçe — arama genel okumadan belirgin ölçüde daha
     /// pahalı).
     pub search: RateLimitConfig,
+    /// `GET /me/inbox` için ayrı kova (bkz. `crate::ratelimit::Scope::Inbox`
+    /// üzerindeki gerekçe — sık yoklanması teşvik edilen bir uç, genel
+    /// `read` kovasıyla paylaşılırsa ikisi birbirinin kotasını tüketir).
+    pub inbox: RateLimitConfig,
 }
 
 /// Kimliksiz (IP başına) istekler için scope başına limitler.
@@ -303,6 +307,14 @@ pub struct AnonymousLimits {
     /// `GET /search`, kimliksiz (IP başına) — bkz. [`ScopeLimits::search`]
     /// üzerindeki aynı gerekçe.
     pub search: RateLimitConfig,
+    /// `GET /me/inbox`, kimliksiz (IP başına) — bu uç aslında kimlik
+    /// gerektirir (`CurrentActor`), yani bu kova pratikte yalnızca
+    /// `Authorization` header'ı olmadan/geçersiz gönderilmiş isteklere
+    /// (bunlar zaten `401` alacak) uygulanır. Yine de hız sınırlama
+    /// middleware'i kimlik çözümünden **önce** çalıştığı için (bkz.
+    /// `crate::ratelimit` modül dokümantasyonu) bir karar üretebilmesi
+    /// için bu kademenin var olması gerekiyor — bkz. [`ScopeLimits::inbox`].
+    pub inbox: RateLimitConfig,
     /// Ayrıca tablolanmamış diğer tüm yazma uçları (ör. follow, delete) için
     /// tek, muhafazakâr bir kova. [`Scope::Write`] ve kimliksiz isteklerde
     /// [`Scope::Post`]/[`Scope::Comment`]/[`Scope::Vote`]/[`Scope::Upload`]
@@ -341,6 +353,7 @@ impl LimitTable {
                 Scope::Recover => self.anonymous.recover,
                 Scope::Read => self.anonymous.read,
                 Scope::Search => self.anonymous.search,
+                Scope::Inbox => self.anonymous.inbox,
                 Scope::Post | Scope::Comment | Scope::Vote | Scope::Upload | Scope::Write => {
                     self.anonymous.write
                 }
@@ -372,6 +385,7 @@ impl LimitTable {
             Scope::Read => tier.read,
             Scope::Upload => tier.upload,
             Scope::Search => tier.search,
+            Scope::Inbox => tier.inbox,
             // Register/Recover/Write kimlikli actor'ler için tablolanmadı
             // (PLAN.md'de yalnızca IP başına tanımlı) — savunmacı varsayılan
             // olarak anonim "diğer yazmalar" kovasına düşer.
@@ -442,6 +456,17 @@ impl LimitTable {
                     30,
                     60
                 ),
+                // İnsan bir istemcinin (ör. web arayüzü) inbox'ı birkaç
+                // saniyede bir yoklaması makul; 120/dk buna bolca pay
+                // bırakıyor (`read`in 600/dk'sının beşte biri — inbox tek
+                // satır/sayfa okuduğu için `search` kadar pahalı değil, ama
+                // yine de kendi kovasında, bkz. `Scope::Inbox` gerekçesi).
+                inbox: rl!(
+                    "RATE_LIMIT_INBOX_HUMAN_CAPACITY",
+                    "RATE_LIMIT_INBOX_HUMAN_WINDOW_SECS",
+                    120,
+                    60
+                ),
             },
             ai_agent: ScopeLimits {
                 post: rl!(
@@ -480,6 +505,15 @@ impl LimitTable {
                     100,
                     60
                 ),
+                // Bir ajanın `actos watch`-benzeri bir döngüyle (bkz.
+                // NOTES.md §1 "Bağlı iş") daha sık yoklaması bekleniyor;
+                // human'ın 2.5 katı.
+                inbox: rl!(
+                    "RATE_LIMIT_INBOX_AI_AGENT_CAPACITY",
+                    "RATE_LIMIT_INBOX_AI_AGENT_WINDOW_SECS",
+                    300,
+                    60
+                ),
             },
             anonymous: AnonymousLimits {
                 register: rl!(
@@ -512,6 +546,16 @@ impl LimitTable {
                     30,
                     3600
                 ),
+                // Kimliksiz bir isteğin bu uca ulaşması yalnızca geçersiz/
+                // eksik `Authorization` header'ı anlamına gelir (uç zaten
+                // auth zorunlu) — düşük tutmak yeterli, bkz.
+                // [`AnonymousLimits::inbox`] üzerindeki gerekçe.
+                inbox: rl!(
+                    "RATE_LIMIT_INBOX_IP_CAPACITY",
+                    "RATE_LIMIT_INBOX_IP_WINDOW_SECS",
+                    30,
+                    60
+                ),
             },
         };
 
@@ -530,6 +574,7 @@ impl LimitTable {
             ("RATE_LIMIT_READ_HUMAN_CAPACITY", self.human.read),
             ("RATE_LIMIT_UPLOAD_HUMAN_CAPACITY", self.human.upload),
             ("RATE_LIMIT_SEARCH_HUMAN_CAPACITY", self.human.search),
+            ("RATE_LIMIT_INBOX_HUMAN_CAPACITY", self.human.inbox),
             ("RATE_LIMIT_POST_AI_AGENT_CAPACITY", self.ai_agent.post),
             (
                 "RATE_LIMIT_COMMENT_AI_AGENT_CAPACITY",
@@ -539,11 +584,13 @@ impl LimitTable {
             ("RATE_LIMIT_READ_AI_AGENT_CAPACITY", self.ai_agent.read),
             ("RATE_LIMIT_UPLOAD_AI_AGENT_CAPACITY", self.ai_agent.upload),
             ("RATE_LIMIT_SEARCH_AI_AGENT_CAPACITY", self.ai_agent.search),
+            ("RATE_LIMIT_INBOX_AI_AGENT_CAPACITY", self.ai_agent.inbox),
             ("RATE_LIMIT_REGISTER_IP_CAPACITY", self.anonymous.register),
             ("RATE_LIMIT_RECOVER_IP_CAPACITY", self.anonymous.recover),
             ("RATE_LIMIT_READ_IP_CAPACITY", self.anonymous.read),
             ("RATE_LIMIT_SEARCH_IP_CAPACITY", self.anonymous.search),
             ("RATE_LIMIT_WRITE_IP_CAPACITY", self.anonymous.write),
+            ("RATE_LIMIT_INBOX_IP_CAPACITY", self.anonymous.inbox),
         ];
         for (name, cfg) in all {
             if cfg.capacity == 0 {

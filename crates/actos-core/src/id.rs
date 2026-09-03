@@ -167,6 +167,13 @@ impl IdKind for Report {
     const PREFIX: &'static str = "r";
 }
 
+/// `notifications` tablosundaki satırlar (Faz 18.A, bildirimler).
+pub struct Notification;
+impl IdKind for Notification {
+    const TAG: u8 = 5;
+    const PREFIX: &'static str = "n";
+}
+
 /// ID üretme/ayrıştırma sırasında oluşan hatalar. Hiçbiri panik değildir:
 /// istemciden gelen bozuk bir ID, bu tiplerden biriyle geri döner.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE notifications\n        SET read_at = COALESCE(read_at, now())\n        WHERE recipient_actor_id = $1\n          AND read_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (created_at, id) >= ($2::timestamptz, $3::bigint)\n          )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1270d316eacdc898dca838a23bafbb2af1a47f53a66fdf8071c528747771bf12"
+}
