@@ -860,9 +860,9 @@ engellemeyecek şekilde tasarlanacak.
 > Her fazda testler yazılıyor; burası bütünsel kontrol.
 
 - [x] `#[sqlx::test]` ile her testte izole geçici veritabanı
-- [ ] Uçtan uca senaryo testi: kayıt ol → post at → yorum yap → oy ver →
+- [x] Uçtan uca senaryo testi: kayıt ol → post at → yorum yap → oy ver →
       raporla → admin sil → doğrula
-- [ ] Auth matrisi testi: her endpoint × (anon / normal / sahip / mod / admin / banlı)
+- [x] Auth matrisi testi: her endpoint × (anon / normal / sahip / mod / admin / banlı)
       — **18.A'da eklenen uçlar dahil**
 - [ ] Rate limit testleri
 - [x] **`record_key_use_ve_drain_key_uses` izolasyon hatası** (`crates/actos-core/
