@@ -644,10 +644,23 @@ async fn redis_erişilemezken_read_izin_veriyor_post_reddediyor() {
 
 #[tokio::test]
 async fn record_key_use_ve_drain_key_uses() {
-    // Bu test kova anahtarlarına dokunmuyor (yalnızca `KEY_TOUCH_HASH`),
-    // dolayısıyla ayrı bir temizliğe gerek yok — `drain_key_uses` zaten
-    // kendi durumunu temizliyor.
-    let (limiter, _pool) = make_limiter();
+    // **İzolasyon (Faz 18.B):** bu test önce `make_limiter()` kullanıyordu —
+    // yani boş `key_prefix`, dolayısıyla üretimle birebir aynı prefixsiz
+    // `"rl:key_touches"` anahtarı (bkz. `KEY_TOUCH_HASH` üzerindeki yorum).
+    // O anahtar aynı Redis'e bağlanan her prefixsiz `RateLimiter` arasında
+    // paylaşılıyor: makinede `cargo run` ile ayakta bir dev sunucu varsa
+    // `middleware::identity::resolve` her kimlikli istekte oraya
+    // `record_key_use` yazıyor ve aşağıdaki "tam olarak 2" iddiası rastgele
+    // düşüyordu (test tek başına hep geçiyor, takım koşumunda flaky).
+    //
+    // Assert'i gevşetmek yerine `with_prefix` seçildi çünkü testin ikinci
+    // iddiası — "ilk drain her şeyi temizler, ikinci drain boş döner" —
+    // paylaşılan bir HASH'te hiçbir biçimde korunamaz. Prefix ise her iki
+    // iddiayı da harfiyen bırakıyor; `actos-api` testlerindeki
+    // `test:{uuid}:` deseniyle aynı çözüm.
+    let test_prefix = format!("test:{}:", Uuid::new_v4());
+    let pool = make_pool();
+    let limiter = RateLimiter::with_prefix(pool, dummy_limit_table(), test_prefix);
     let key_a = Uuid::new_v4();
     let key_b = Uuid::new_v4();
 
