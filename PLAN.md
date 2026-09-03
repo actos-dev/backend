@@ -817,20 +817,20 @@ engellemeyecek şekilde tasarlanacak.
 
 **Hata metinleri İngilizceye** (istemci i18n'i mümkün kılmak için)
 
-- [ ] Bugün tüm `detail` metinleri Türkçe (`"post bulunamadı"`,
+- [x] Bugün tüm `detail` metinleri Türkçe (`"post bulunamadı"`,
       `"doğrulama başarısız: oy değeri yalnızca -1, 0 veya 1 olabilir"`).
       Hedef kitle "dünyadaki herkes" olan bir API için varsayılan İngilizce olmalı
-- [ ] `Error` varyantlarının ürettiği tüm metinler ve `ApiError`'ın
+- [x] `Error` varyantlarının ürettiği tüm metinler ve `ApiError`'ın
       `title` alanları İngilizceye çevrilir
-- [ ] **Karar: API tek dilli (İngilizce) kalır, `Accept-Language` desteklenmez.**
+- [x] **Karar: API tek dilli (İngilizce) kalır, `Accept-Language` desteklenmez.**
       Yerelleştirme istemcinin işidir ve `code` üzerinden yapılır — sözleşme
       olan alan `code`, `detail` geliştirici/log metnidir. Aksi hâlde her yeni
       dil backend'e çeviri dosyası ve `Accept-Language` boru hattı eklemek
       demek olurdu; üstelik `detail` metinleri son kullanıcıya gösterilecek
       kalitede kopya değil, arayüz onları zaten kendi diliyle değiştirecek
-- [ ] `docs/API.md` §3.6'ya bu ilke yazılır: "dallanmayı `code`'a göre yap,
+- [x] `docs/API.md` §3.6'ya bu ilke yazılır: "dallanmayı `code`'a göre yap,
       `detail`'i kullanıcıya olduğu gibi gösterme"
-- [ ] **Yanıt gövdesindeki gömülü Türkçe metinler** — bunlar hata mesajı
+- [x] **Yanıt gövdesindeki gömülü Türkçe metinler** — bunlar hata mesajı
       değil, **veri alanı** oldukları için kolayca gözden kaçıyor:
       - Silinmiş yazar için `ActorSummary.username = "[silindi]"`
         (`routes/posts.rs:126`, `:192`)
@@ -839,28 +839,28 @@ engellemeyecek şekilde tasarlanacak.
       İngilizceye çevrilmeli (`[deleted]`). Alanı `null` yapmak daha temiz
       olurdu ama `username: String` opsiyonel değil — tip değişikliği
       istemcileri kırar, kazanç marjinal
-- [ ] `docs/API.md`'ye kural: **istemci `deleted` ve `author_deleted`
+- [x] `docs/API.md`'ye kural: **istemci `deleted` ve `author_deleted`
       boolean'larına dallanmalı**, gövdedeki yer tutucu metne değil. Metin
       dumb istemciler için bir yedek; arayüz kendi yerelleştirilmiş metnini
       basmalı
-- [ ] Türkçe kalanlar: kod yorumları, `PLAN.md`/`NOTES.md`/`docs/*` — bunlar
+- [x] Türkçe kalanlar: kod yorumları, `PLAN.md`/`NOTES.md`/`docs/*` — bunlar
       geliştirme dili, değişmiyor
-- [ ] Testler: mevcut testlerde Türkçe metin bekleyen assertion'lar güncellenir
+- [x] Testler: mevcut testlerde Türkçe metin bekleyen assertion'lar güncellenir
       (metin yerine `code` kontrolüne çevrilmeleri tercih edilir — test de
       sözleşmeye bakmalı, metne değil)
-- [ ] Commit (18.A)
+- [x] Commit (18.A)
 
 ### 18.B — Test örtüsü
 
 > Her fazda testler yazılıyor; burası bütünsel kontrol.
 
-- [ ] `#[sqlx::test]` ile her testte izole geçici veritabanı
+- [x] `#[sqlx::test]` ile her testte izole geçici veritabanı
 - [ ] Uçtan uca senaryo testi: kayıt ol → post at → yorum yap → oy ver →
       raporla → admin sil → doğrula
 - [ ] Auth matrisi testi: her endpoint × (anon / normal / sahip / mod / admin / banlı)
       — **18.A'da eklenen uçlar dahil**
 - [ ] Rate limit testleri
-- [ ] **`record_key_use_ve_drain_key_uses` izolasyon hatası** (`crates/actos-core/
+- [x] **`record_key_use_ve_drain_key_uses` izolasyon hatası** (`crates/actos-core/
       tests/ratelimit.rs:508`). Test `drain_key_uses()` sonucunun tam 2 olmasını
       bekliyor, yani global `KEY_TOUCH_HASH` anahtarının tek sahibi olduğunu
       varsayıyor. Aynı Redis'i kullanan bir dev sunucusu ayaktayken (`cargo run`)
