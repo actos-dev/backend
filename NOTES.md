@@ -397,3 +397,22 @@ hem disk doldurmayı karşılıyor, ayrı bir mekanizma gerekmiyor.
 Not: kullanıcı platformun küçük ölçekte kalacağını öngörüyor (hobi ölçeği),
 ama işin kalitesi "yarın gerçek sunuculara koyacakmışız gibi" tutulacak.
 Kota bu yüzden "ölçek gelirse eklenir" listesine değil v1'e yazıldı.
+
+### 9.9. Seviye 0 rate limit'i pratikte dar çıkabilir (2026-09-03)
+
+Kademe çarpanları `[0.5, 1.0, 2.0]` uygulandıktan sonra ortaya çıktı: seviye
+0'ın yorum kotası yarıya iniyor (60 → 30). Uygulama sırasında
+`comments_api::derinlik_limiti_asimi_400_ile_reddediliyor` testi 32 yorum
+attığı için `400` yerine `429` almaya başladı ve test aktörü seviye 1'e
+çekilerek düzeltildi.
+
+Bu bir test kusuru değil, **gerçek bir ürün sinyali**: yeni kaydolmuş bir
+insan hareketli bir tartışmada 30 yorumu bir saatte rahatlıkla geçebilir ve
+platformdaki ilk deneyimi bir `429` olur — tam da tutmak istediğimiz
+kullanıcıyı iten şey.
+
+Çarpan bilinçli seçildi (sybil savunması) ama **gerçek kullanım görülünce
+gözden geçirilmeli**. Olası ayarlar: yorum kovasını okuma/oy kovalarından
+ayrı tutup seviye 0 için daha cömert yapmak, ya da çarpanı yalnızca yazma
+hacmi yüksek kovalarda (post, upload) uygulamak. Şu an ölçüm yok, karar
+verisiz alınmamalı.

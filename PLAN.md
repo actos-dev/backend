@@ -683,25 +683,25 @@ engellemeyecek şekilde tasarlanacak.
       - **Düşürme:** onaylanmış rapor bir seviye düşürür, `admin_actions_log`'a yazılır
 - [x] Periyodik iş: `recompute_trust_levels` — mevcut job altyapısı kullanılır
       (`TAG_CLEANUP`/`HOT_SCORE` deseni), yeni bir şey icat edilmez
-- [ ] **Oy ağırlığı:** `votes` satırına `weight smallint NOT NULL` eklenir,
+- [x] **Oy ağırlığı:** `votes` satırına `weight smallint NOT NULL` eklenir,
       oy **verildiği andaki** kademeye göre (0 → 0, 1+ → 1). `contents.score`
       artık `sum(value * weight)`. Sonradan kademe değişince geriye dönük
       yeniden hesaplama **yapılmaz** — bu bilinçli, aksi halde her terfi
       tüm skorları dolaşmak demek olurdu
-- [ ] `upvotes`/`downvotes` ham sayaç olarak kalır (kullanıcı oyunun
+- [x] `upvotes`/`downvotes` ham sayaç olarak kalır (kullanıcı oyunun
       kaydedildiğini görür); değişen yalnızca `score`'a katkısı
-- [ ] **`hot` akışı seviye 0 içeriği göstermez**, `new` gösterir. Ağırlıklandırma
+- [x] **`hot` akışı seviye 0 içeriği göstermez**, `new` gösterir. Ağırlıklandırma
       yerine bu basit kural seçildi: `hot_score` formülü zaten iki yerde tekrar
       yazılı (§6), üçüncü bir değişken eklemek kırılganlığı artırırdı
-- [ ] **Rate limit kademeye bağlanır:** mevcut `LimitTable` + `rate_limit_config`
+- [x] **Rate limit kademeye bağlanır:** mevcut `LimitTable` + `rate_limit_config`
       altyapısına `trust_level` boyutu eklenir. Seviye 0 dar, 2 geniş
-- [ ] **Depolama kotası** (`NOTES.md` §9.7 — 1000 hesap × 100 dosya × 8 MB
+- [x] **Depolama kotası** (`NOTES.md` §9.7 — 1000 hesap × 100 dosya × 8 MB
       senaryosu): actor başına toplam yükleme baytı sınırı, kademeye bağlı
       (kabaca 0 → 50 MB, 1 → 500 MB, 2 → 2 GB). Kontrol `SUM(byte_size)` ile;
       ölçek büyürse sayaç kolonuna çevrilir, şimdilik basit olan doğru
 - [x] `ActorSummary`'ye `trust_level` ve `created_at` (yaş için) — `created_at`
       zaten var, istemcinin hesap yaşını gösterebilmesi için yeterli
-- [ ] Testler: soğuk başlangıçta seviye 1'e çıkılabildiği, seviye 0 oyunun
+- [x] Testler: soğuk başlangıçta seviye 1'e çıkılabildiği, seviye 0 oyunun
       skoru değiştirmediği ama kaydedildiği, seviye 0 içeriğinin `hot`'ta
       görünmediği, kota aşımının `403`/`VALIDATION_FAILED` ile reddedildiği
 
