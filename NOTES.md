@@ -499,3 +499,45 @@ gözden geçirilmeli**. Olası ayarlar: yorum kovasını okuma/oy kovalarından
 ayrı tutup seviye 0 için daha cömert yapmak, ya da çarpanı yalnızca yazma
 hacmi yüksek kovalarda (post, upload) uygulamak. Şu an ölçüm yok, karar
 verisiz alınmamalı.
+
+---
+
+## 10. Spec'te kalan Türkçe şema açıklamaları (2026-09-03) — v1'de kalıyor
+
+**Bulgu.** Faz 18.A'nın "dışa dönük metinler İngilizce" hedefi utoipa
+makrolarındaki `summary`/`description` literalleriyle sınırlı kaldı. Oysa
+`utoipa`, `#[derive(ToSchema)]` taşıyan bir tipin **`///` doküman
+yorumunu** spec'e `description` olarak taşıyor — aynı şey açık bir
+`description =` verilmemiş handler'ların `///` yorumu için de geçerli.
+
+Ölçüm (`docs/openapi.json`, 45 yol / 56 şema):
+
+- **54/56 şemanın** açıklamasında Türkçe var. Örnek — `ContentSummary.body_html`:
+  `"body'nin sanitize edilmiş HTML'i (Faz 18.A, bkz. NOTES.md §8.3)..."`
+- **2 yol** handler'ının `///` yorumunu yayınlıyor: `DELETE /auth/keys/{key_id}`
+  ve `GET /tags`
+
+Yani `GET /openapi.json`'ı tek kaynak olarak okuyan bir ajan, uç
+açıklamalarını ve hata metinlerini İngilizce, **şema alanlarının
+açıklamalarını Türkçe** görüyor.
+
+**Karar (kullanıcı, 2026-09-03): v1'de böyle kalır.** Gerekçe: uçların
+`summary`/`description`'ları, tüm hata metinleri (`code`, `title`, `detail`)
+ve `/docs/agent` önsözü zaten İngilizce; API bu hâliyle kullanılabilir.
+Şema açıklamaları alanın *ne olduğunu* değil *neden öyle tasarlandığını*
+anlatan uzun prose — bir istemci yazmak için gerekli olan bilgi tip ve
+`required` listesinde zaten var.
+
+**Değerlendirilen ve seçilmeyen alternatif:** rustdoc'u Türkçe bırakıp
+tiplere kısa İngilizce `#[schema(description = "...")]` override'ı eklemek.
+Reddedildi çünkü aynı bilgi iki yerde durur ve ayrışır — bu proje spec'i
+bilinçli olarak koddan üretiyor (bkz. Faz 16'da `API.md`'ye uç listesi
+konmama gerekçesi) ve elle tutulan ikinci bir metin tam olarak o kalıba
+aykırı.
+
+**Yeniden ele alma tetiği.** Bu iş ertelenmiş bir çeviri değil, bir
+**dil kararı**: `actos-types` aynı zamanda Rust SDK'sının git bağımlılığı,
+yani bu `///` yorumları SDK kullanıcısının rustdoc'unda da görünüyor. Repo
+public'e açılmadan (Faz 20) önce "geliştirme dili Türkçe kalsın mı"
+sorusunun bütünsel olarak yanıtlanması gerekiyor; şema açıklamaları o
+kararın parçası olarak ele alınmalı, tek tek değil.

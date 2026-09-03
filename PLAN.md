@@ -605,7 +605,7 @@ engellemeyecek şekilde tasarlanacak.
 - [x] Silinmiş içerikte `body_html`, `body` ile **aynı** maskeleme kuralına uyar
 - [x] Testler: `text.rs`'teki XSS senaryoları artık uç üzerinden de doğrulanır;
       `plain` içerikte render yapılmadığı; `fields` ile seçilebildiği
-- [ ] **Açık boşluk (uygulama sonrası bulundu):** yorum **ağacı**
+- [x] **Açık boşluk (uygulama sonrası bulundu, kapatıldı):** yorum **ağacı**
       (`GET /posts/{id}/comments`) `body_html` almıyor — `routes/comments.rs:108`
       düz `content_summary` çağırıyor. Oysa yorumların asıl okunma yolu o uç;
       web istemcisi orada yine kendi markdown render'ını yapmak zorunda kalır,
@@ -845,6 +845,11 @@ engellemeyecek şekilde tasarlanacak.
       basmalı
 - [x] Türkçe kalanlar: kod yorumları, `PLAN.md`/`NOTES.md`/`docs/*` — bunlar
       geliştirme dili, değişmiyor
+- [x] **Bilinen istisna:** `utoipa`, `#[derive(ToSchema)]` tiplerinin `///`
+      yorumlarını spec'e `description` olarak taşıyor — 56 şemanın 54'ü ve
+      2 uç (`DELETE /auth/keys/{key_id}`, `GET /tags`) `GET /openapi.json`'da
+      **Türkçe açıklama servis ediyor**. Kullanıcı kararı (2026-09-03):
+      **v1'de böyle kalır**; gerekçe ve yeniden ele alma tetiği `NOTES.md` §10
 - [x] Testler: mevcut testlerde Türkçe metin bekleyen assertion'lar güncellenir
       (metin yerine `code` kontrolüne çevrilmeleri tercih edilir — test de
       sözleşmeye bakmalı, metne değil)
