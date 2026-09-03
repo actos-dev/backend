@@ -1,24 +1,36 @@
 # Yapılacaklar — Backend
 
-> Durum: Faz 0–18.A tamamlandı. Faz 18.B'nin çoğu bitti; kalan iki madde
-> aşağıda. **Faz 19 (paketleme/deploy) ve Faz 20 (çıkış listesi) bilinçli
-> olarak ertelendi** — kullanıcı önce tüm repolarda temelin oturmasını
-> istedi.
+> Durum: **Faz 0–18 tamamlandı** (18.A + 18.B). **Faz 19 (paketleme/deploy)
+> ve Faz 20 (çıkış listesi) bilinçli olarak ertelendi** — kullanıcı önce
+> tüm repolarda temelin oturmasını istedi.
 >
 > Son kontrol: 2026-09-03.
 
-## 1. Faz 18.B — kalan iki madde
+## 1. Örtü raporundaki düşük modüller (Faz 18.B kapandı, borç kaldı)
 
-- [ ] **Hız sınırı testlerinin denetimi.** Örtü var ama "yeterli mi"
-      sorusu yanıtlanmadı: `crates/actos-core/tests/ratelimit.rs` 14 test
-      (kova mekaniği, kademe çarpanları, Redis erişilemezken davranış,
-      eşzamanlılık), `crates/actos-api/tests/observability_api.rs` uç
-      seviyesinde 429 üretimi ve muaf uçlarda `X-RateLimit-*` header'ının
-      **hiç bulunmaması**. Eksik olabilecekler: `Idempotency-Key` taşıyan
-      isteğin limit davranışı, `/search` ve `/me/inbox` için ayrılmış özel
-      kovaların (`middleware/ratelimit.rs:119,130`) uç seviyesinde testi.
-- [ ] **`cargo llvm-cov` örtü raporu**, kritik yollarda hedef %80+.
-      `cargo-llvm-cov` kurulu.
+Faz 18.B **tamamlandı**. `cargo llvm-cov --workspace` (2026-09-03):
+**toplam %83.06 region / %87.85 satır**, kritik yolların hepsi hedefin
+üstünde (`auth` %89.6, `interaction` %87.4, `comment` %86.3, `content`
+%83.6, `moderation` %80.0, `cursor` %97.2, `secret` %97.3, `text` %98.8,
+`ratelimit` %88.4, `middleware/*` %93-99).
+
+Hedefin altında kalanlar — engelleyici değil, **kayıtlı borç**:
+
+| Modül | Region | Not |
+|---|---|---|
+| `routes/health.rs` | %10.0 | Auth matrisinde bilinçli EXEMPT; hazır-olma yolunun (DB/Redis düşükken) testi yok |
+| `telemetry.rs` | %66.9 | Prometheus recorder kurulumu ve hata dalları test edilmiyor |
+| `routes/uploads.rs` | %71.2 | Depolama hata yolları (S3 erişilemez, boyut aşımı) |
+| `routes/admin.rs` | %71.8 | Moderasyon uçlarının hata dalları |
+| `routes/comments.rs` | %74.3 | Ağaç derinliği/sıralama kenar durumları |
+| `routes/interactions.rs` | %75.6 | |
+| `routes/notifications.rs` | %76.8 | En yeni modül (18.A) |
+| `jobs.rs`, `main.rs`, `bin/seed.rs` | %0 | Süreç giriş noktaları — birim testle anlamlı biçimde kapsanmaz, entegrasyon/duman testi konusu (Faz 19) |
+| `core/db.rs`, `core/cache.rs` | %0 | Bağlantı havuzu kurulumu; aynı gerekçe |
+
+Hız sınırı tarafında kalan tek somut boşluk: `/search` ve `/me/inbox` için
+ayrılmış özel kovaların (`middleware/ratelimit.rs:119,130`) uç seviyesinde
+testi yok — kova mantığı core'da test edildi, uçla eşleşmesi edilmedi.
 
 ## 2. Bilerek ertelenenler — karar verilmiş, iş değil
 
@@ -80,9 +92,9 @@ Her birinin kendi `YAPILACAKLAR.md`'si var.
 
 ## 6. Sıra önerisi
 
-1. §1'deki iki 18.B maddesi → Faz 18 kapanır.
-2. SDK'ların 18.A eksikleri (özellikle `[silindi]`/`[deleted]` sapması —
+1. SDK'ların 18.A eksikleri (özellikle `[silindi]`/`[deleted]` sapması —
    sessiz ve gerçek bir hata).
-3. Faz 19: önce CI'daki spec tazelik kontrolü (bugün yaşanan sorunun
+2. Faz 19: önce CI'daki spec tazelik kontrolü (bugün yaşanan sorunun
    tekrarını engeller), sonra Docker/deploy.
-4. Faz 20.
+3. Faz 20.
+4. §1'deki örtü borcu — engelleyici değil, fırsat buldukça.

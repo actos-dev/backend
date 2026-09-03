@@ -864,7 +864,11 @@ engellemeyecek şekilde tasarlanacak.
       raporla → admin sil → doğrula
 - [x] Auth matrisi testi: her endpoint × (anon / normal / sahip / mod / admin / banlı)
       — **18.A'da eklenen uçlar dahil**
-- [ ] Rate limit testleri
+- [x] Rate limit testleri — `actos-core/tests/ratelimit.rs` 14 test (kova
+      mekaniği, kademe çarpanları, Redis erişilemezken davranış,
+      eşzamanlılık) + uç seviyesinde 429 üretimi ve muaf uçlarda
+      `X-RateLimit-*`'ın hiç bulunmaması (`observability_api.rs`). Örtü:
+      `middleware/ratelimit.rs` %94.68, `core/ratelimit.rs` %88.43
 - [x] **`record_key_use_ve_drain_key_uses` izolasyon hatası** (`crates/actos-core/
       tests/ratelimit.rs:508`). Test `drain_key_uses()` sonucunun tam 2 olmasını
       bekliyor, yani global `KEY_TOUCH_HASH` anahtarının tek sahibi olduğunu
@@ -873,8 +877,13 @@ engellemeyecek şekilde tasarlanacak.
       tam koşuda düşüyor. Kod hatası değil, test izolasyon hatası.
       Düzeltme: test kendi anahtar alanını kullanmalı ya da ayrı bir Redis
       DB indeksine bağlanmalı
-- [ ] `cargo llvm-cov` ile örtü raporu; kritik yollarda hedef %80+
-- [ ] Commit
+- [x] `cargo llvm-cov` ile örtü raporu; kritik yollarda hedef %80+ —
+      **toplam %83.06 region / %87.85 satır** (2026-09-03). Kritik yolların
+      hepsi hedefin üstünde: `auth` %89.6, `interaction` %87.4, `comment`
+      %86.3, `content` %83.6, `moderation` %80.0, `cursor` %97.2, `secret`
+      %97.3, `text` %98.8, `ratelimit` %88.4, `middleware/*` %93-99.
+      Hedefin altında kalan HTTP modülleri `YAPILACAKLAR.md` §1'de listeli
+- [x] Commit
 
 ---
 
