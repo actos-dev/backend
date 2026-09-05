@@ -949,11 +949,17 @@ dağıtımdan önce yapılmaları gerekiyor:
       post URL'leri kırılır (bkz. docs/DEPLOYMENT.md §1).
 - [ ] İlk admin seed script ile oluşturuldu, key güvenli yerde
       — yığın canlıya çıkınca; yordam docs/DEPLOYMENT.md §5'te.
-- [ ] `docs/API.md` + `llms.txt` güncel
-      — `llms.txt` (`GET /docs/agent`) zaten İngilizce ve güncel.
-      **`docs/API.md` hâlâ Türkçe** (452 satırın 155'i) — README'den
-      bağlanan kullanıcıya dönük bir belge, "proje ana dili İngilizce"
-      kararının kapsamında. Çeviri bekliyor.
+- [x] `docs/API.md` + `llms.txt` güncel
+      — `llms.txt` (`GET /docs/agent`) zaten İngilizceydi ve günceldi.
+      `docs/API.md` İngilizceye çevrildi **ve tazelendi**: yalnızca dil
+      sorunu değildi, örnekler de bayattı — üç `ActorSummary` örneğinin
+      ikisinde `trust_level`/`avatar_url` yoktu (Faz 18.A'da eklenmişti).
+      Belgenin kendi iddiası "her örnek gerçekten çalıştırıldı" olduğu için
+      çeviri sırasında tüm zincir (kayıt → whoami → kurtarma → key rotasyonu
+      → post → yorum → oy → sayfalama → soft delete → idempotency → hata
+      gövdeleri) imajdan kalkan bir sunucuya karşı yeniden koşturuldu,
+      12 JSON bloğunun hepsi gerçek yanıt. Kurtarma kodları belgenin
+      "sırlar kısaltıldı" iddiasına uyacak şekilde 3'e indirildi.
 - [ ] Rate limitler gerçekçi değerlere ayarlandı
 - [x] `README.md`: "5 dakikada ilk post'unu at" bölümü (curl ile)
       — yazıldı ve **İngilizceye çevrildi**. Bölümdeki her komut gerçekten

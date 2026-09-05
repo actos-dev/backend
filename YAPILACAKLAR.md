@@ -101,7 +101,7 @@ yedek sayılmaz.
 | README "5 dakikada ilk post" | ✅ yazıldı, İngilizce; her komut gerçekten koşturuldu |
 | LICENSE + CONTRIBUTING + CODE_OF_CONDUCT | ✅ (LICENSE zaten vardı) |
 | Dil kararı + spec çevirisi | ✅ 116 Türkçe açıklama → 0, 24 iç tip sızıntısı → 0 |
-| `docs/API.md` çevirisi | ❌ 452 satırın 155'i hâlâ Türkçe |
+| `docs/API.md` çevirisi | ✅ çevrildi **ve** bayat örnekler tazelendi (12 JSON bloğu yeniden koşturuldu) |
 | Gerçekçi rate limitler | ❌ |
 | İlk admin (`actos-seed`) | ❌ yığın canlıya çıkınca |
 | Repo public (push) | ❌ **kullanıcı kararıyla bekletiliyor** |
