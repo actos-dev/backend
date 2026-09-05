@@ -4,8 +4,11 @@ description = "Actos API'sinin istek/yanıt tipleri — backend, CLI ve SDK bunu
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
+# Apache-2.0 — SDK'ların paylaştığı istemci tipleri izin verici olur (karar 2026-09-05).
+# Sunucu (actos-api/actos-core) AGPL-3.0-only kalır; yalnızca bu crate değişir.
+# Workspace'ten miras alan `license.workspace = true` (AGPL) kasıtlı olarak eziliyor.
+license = "Apache-2.0"
+repository = "https://github.com/actos-dev/backend"
 authors.workspace = true
 
 [dependencies]
