@@ -889,23 +889,54 @@ engellemeyecek şekilde tasarlanacak.
 
 ## Faz 19 — Paketleme ve Deploy
 
-- [ ] Multi-stage `Dockerfile` (cargo-chef ile bağımlılık cache'i → distroless/alpine)
-- [ ] `docker-compose.prod.yml` — API dahil, healthcheck, restart politikası
-- [ ] Migration stratejisi: konteyner açılışında otomatik mi, ayrı job mu →
+- [x] Multi-stage `Dockerfile` (cargo-chef ile bağımlılık cache'i → distroless/alpine)
+      — **sapma:** runtime `debian:bookworm-slim`, distroless değil. Gerekçe
+      Dockerfile'ın runtime aşamasında yazılı: compose'un
+      `condition: service_healthy` zinciri konteyner içinde koşan bir
+      healthcheck istiyor, distroless'ta kabuk/curl yok. Bedeli ~30 MB.
+- [x] `docker-compose.prod.yml` — API dahil, healthcheck, restart politikası
+- [x] Migration stratejisi: konteyner açılışında otomatik mi, ayrı job mu →
       **ayrı job** (aynı anda 3 instance migration çalıştırmasın)
-- [ ] GitHub Actions: `fmt` + `clippy -D warnings` + `test` + `audit` + image build
-- [ ] `.sqlx` offline mode CI'da çalışıyor (DB olmadan derleme)
-- [ ] **`docs/openapi.json` tazelik kontrolü.** Spec repoya commit'lendi
+      — `crates/actos-api/src/bin/migrate.rs`, compose'da
+      `depends_on: migrate: service_completed_successfully`
+- [x] GitHub Actions: `fmt` + `clippy -D warnings` + `test` + `audit` + image build
+      — `.github/workflows/ci.yml`; imaj GHCR'a, değişmez `sha-` etiketiyle
+- [x] `.sqlx` offline mode CI'da çalışıyor (DB olmadan derleme)
+      — Dockerfile'da `SQLX_OFFLINE=true`; CI'da testler gerçek DB'ye karşı
+      ama derleme offline meta veriden, yani bayat `.sqlx` orada kırılıyor
+- [x] **`docs/openapi.json` tazelik kontrolü.** Spec repoya commit'lendi
       (SDK ajanları sunucu ayağa kaldırmasın diye), ama commit'lenmiş bir
       üretilmiş dosya **kodun gerisine düşebilir** — Faz 16'da `API.md`'ye uç
-      listesi konmamasının gerekçesi tam olarak buydu. CI, sunucuyu ayağa
-      kaldırıp `GET /openapi.json` çıktısını commit'lenmiş dosyayla
-      karşılaştırmalı; farklıysa **build kırılmalı**. Karşılaştırma
-      normalize edilmiş JSON üzerinden yapılır (anahtar sırası ve
-      biçimlendirme farkı hata sayılmaz)
-- [ ] Yapılandırma dokümanı: prod'da değişmesi **zorunlu** env'ler listesi
+      listesi konmamasının gerekçesi tam olarak buydu.
+      — `tests/openapi.rs::commitlenmis_openapi_json_kodla_ayni`. Sunucu
+      kaldırmıyor: `oneshot` ile `GET /openapi.json` alıp normalize
+      `serde_json::Value` karşılaştırması yapıyor (anahtar sırası/girinti
+      farkı hata sayılmaz). Tazeleme: `ACTOS_UPDATE_OPENAPI=1`.
+      Kapının boş olmadığı negatif testle doğrulandı (44 ≠ 45'te kırıldı).
+- [x] Yapılandırma dokümanı: prod'da değişmesi **zorunlu** env'ler listesi
+      — `docs/DEPLOYMENT.md` §1; hepsi compose'da `:?` ile zorunlu, eksikse
+      yığın açılmıyor
 - [ ] Yedekleme: `pg_dump` cron + MinIO bucket mirror; **geri yükleme tatbikatı yap**
+      — `scripts/backup.sh` yazıldı ve cron satırı belgelendi; **tatbikat
+      henüz yapılmadı** (sunucuda Actos verisi yok). İlk dağıtımdan ve ilk
+      gerçek içerikten sonra `docs/DEPLOYMENT.md` §6'daki adımlar koşulacak.
 - [ ] Commit
+
+### Faz 19'un dışında kalan, sunucuya ait işler
+
+Bunlar bu repoda kod değil, `docs/DEPLOYMENT.md`'de yordam olarak duruyor;
+dağıtımdan önce yapılmaları gerekiyor:
+
+- [ ] Sunucuya Compose V2 plugin'i kur (`docker-compose` v1 EOL, compose
+      dosyasının `service_completed_successfully` koşulunu desteklemiyor)
+- [ ] `actos.com.tr` nameserver'larını Cloudflare'e çevir, A kayıtlarını ekle
+- [ ] nginx vhost'ları + certbot (`deploy/nginx/`), **gri bulut iken**
+- [ ] `scripts/cloudflare-realip.sh` + haftalık cron — bu olmadan IP bazlı
+      hız sınırı kovaları tüm dünyayı tek kovaya sokar, kayıt kilitlenir
+- [ ] GitHub secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`,
+      `DEPLOY_KNOWN_HOSTS` + `production` environment'ı
+- [ ] Sağlayıcıya balloon bildirimi (8 GB'ın ~5 GB'ı hipervizörde,
+      `MemAvailable` ~1.3 GB — bkz. `SUNUCU.md`)
 
 ---
 

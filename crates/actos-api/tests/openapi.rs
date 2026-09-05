@@ -420,3 +420,52 @@ async fn docs_agent_onsoz_temel_kavramlari_iceriyor(pool: PgPool) {
         );
     }
 }
+
+// --- `docs/openapi.json` tazelik kapısı (Faz 19) --------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn commitlenmis_openapi_json_kodla_ayni(pool: PgPool) {
+    let router = build_router(pool);
+    let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let uretilen: Value = serde_json::from_slice(&body).expect("üretilen spec geçerli JSON olmalı");
+
+    let yol = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/openapi.json")
+        .canonicalize()
+        .expect("docs/openapi.json var olmalı — spec repoya commit'lenir");
+
+    // Yazma yolu: spec bilerek değiştiyse dosyayı elle tazelemek yerine
+    // `ACTOS_UPDATE_OPENAPI=1 cargo test -p actos-api --test openapi` koşulur.
+    // Elle tazeleme tam olarak 2026-09-03'te 42-yolda kalmış bir snapshot
+    // üretmişti (PLAN.md Faz 19); tek komut, o sapmanın tekrarını engeller.
+    if std::env::var_os("ACTOS_UPDATE_OPENAPI").is_some() {
+        let mut metin = serde_json::to_string_pretty(&uretilen).expect("serileştirilebilmeli");
+        metin.push('\n');
+        std::fs::write(&yol, metin).expect("docs/openapi.json yazılabilmeli");
+        return;
+    }
+
+    let ham = std::fs::read(&yol).expect("docs/openapi.json okunabilmeli");
+    let commitlenmis: Value =
+        serde_json::from_slice(&ham).expect("commit'lenmiş spec geçerli JSON olmalı");
+
+    // Karşılaştırma normalize JSON üzerinden: `serde_json::Value`'da nesne
+    // anahtarları sıralı bir haritada tutulduğu için anahtar sırası ve
+    // girinti farkı hata sayılmaz — yalnızca gerçek içerik farkı sayılır.
+    assert_eq!(
+        commitlenmis,
+        uretilen,
+        "docs/openapi.json kodun gerisinde kaldı. Tazelemek için:\n    \
+         ACTOS_UPDATE_OPENAPI=1 cargo test -p actos-api --test openapi \
+         commitlenmis_openapi_json_kodla_ayni\n\
+         (üretilen: {} yol, commit'lenmiş: {} yol)",
+        uretilen["paths"]
+            .as_object()
+            .map_or(0, serde_json::Map::len),
+        commitlenmis["paths"]
+            .as_object()
+            .map_or(0, serde_json::Map::len),
+    );
+}

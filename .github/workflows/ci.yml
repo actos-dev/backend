@@ -1,0 +1,132 @@
+# Actos backend — sürekli entegrasyon (PLAN.md Faz 19).
+#
+# Dört iş paralel koşar; `image` yalnızca hepsi yeşilse çalışır.
+# Sırayı `needs` ile kurmak, kırık bir ağacın imajının registry'ye
+# gitmesini engelliyor.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Aynı dal için yeni push gelirse eskisini iptal et — 10 dakikalık Rust
+  # derlemelerinde kuyruk hızla birikiyor.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Ağ hatalarında runner'ı 5 dakika bekletmek yerine erken kır.
+  CARGO_NET_RETRY: 3
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml kanalı sabitliyor; `components` orada tanımlı.
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # `--all-targets` testleri ve örnekleri de kapsıyor: yalnızca kütüphane
+      # lint'lenirse test kodundaki uyarılar sessizce birikiyor.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      # Servisleri `services:` bloğu yerine compose ile kaldırıyoruz:
+      # MinIO özel bir `command` istiyor (service container'da ayarlanamaz) ve
+      # bucket'ı kuran `minio_init` adımı zaten burada tanımlı. Böylece CI ile
+      # geliştirici makinesi **aynı** dosyayı kullanıyor, sürüklenme olmuyor.
+      - name: Altyapıyı kaldır (postgres + redis + minio)
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait
+
+      # `.sqlx` bayatsa burada kırılsın: `SQLX_OFFLINE=true` ile derleyip
+      # canlı DB'ye karşı koşmak, offline meta verinin gerçekten şemayla
+      # uyuştuğunu doğrulamanın tek yolu.
+      - name: Testler
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          set -a && . ./.env && set +a
+          cargo test --workspace --locked
+
+      - name: Altyapı loglarını dök (başarısızsa)
+        if: failure()
+        run: docker compose logs --tail=100
+
+  audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  image:
+    name: imaj derle ve yayınla
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, test, audit]
+    # PR'larda yalnızca derlenebilirlik doğrulanır, push edilmez: fork'tan
+    # gelen bir PR'ın registry'ye yazma yetkisi olmamalı.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: GHCR'a giriş
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Etiketler
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # `sha-<kısa>` her zaman üretilir: dağıtımda `latest` yerine
+          # değişmez bir etiket kullanılabilsin diye (geri alma bir etiket
+          # değişikliğine iner).
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern=v{{version}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            ACTOS_GIT_SHA=${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

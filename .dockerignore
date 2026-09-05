@@ -1,0 +1,17 @@
+# Derleme çıktıları — imaj içinde yeniden derleniyor, kopyalamak
+# build context'i gigabaytlara çıkarır.
+target/
+**/target/
+
+# Sırlar: `.env` ASLA imaja girmemeli (üretimde gerçek ortam değişkenleri
+# kullanılır, bkz. docs/DEPLOYMENT.md).
+.env
+.env.*
+!.env.example
+
+.git/
+.github/
+*.md
+!README.md
+docs/
+LICENSE

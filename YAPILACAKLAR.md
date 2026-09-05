@@ -1,10 +1,33 @@
 # Yapılacaklar — Backend
 
-> Durum: **Faz 0–18 tamamlandı** (18.A + 18.B). **Faz 19 (paketleme/deploy)
-> ve Faz 20 (çıkış listesi) bilinçli olarak ertelendi** — kullanıcı önce
-> tüm repolarda temelin oturmasını istedi.
+> Durum: **Faz 0–18 tamamlandı.** **Faz 19 (paketleme/deploy) kod tarafı
+> bitti** — Dockerfile, `docker-compose.prod.yml`, migration job'ı, CI/CD
+> iş akışları, openapi tazelik kapısı, nginx/Cloudflare şablonları,
+> yedekleme script'i. Kalan: sunucu tarafındaki elle adımlar (§6) ve
+> **Faz 20 (çıkış listesi)**.
 >
-> Son kontrol: 2026-09-03.
+> Son kontrol: 2026-09-05.
+
+## 0. Bu turda düzeltilen iki gerçek hata
+
+Deploy turuna girerken `fmt` + `clippy` + `test` doğrulaması koşuldu ve
+ikisi de CI'ı ilk günden kıracak durumdaydı:
+
+1. **`cargo fmt --check` kırıktı.** `tests/auth_matrix.rs` ve
+   `tests/e2e_scenario.rs` (Faz 18.B'de eklenmişti) formatlanmadan
+   commit'lenmiş; 68 fark. Düzeltildi.
+
+2. **Kaypak test — asıl önemli olan.**
+   `crates/actos-core/tests/storage_quota.rs`'teki saf `#[test]`,
+   `Config::from_env()` çağırıyordu; o da `DATABASE_URL`'i process
+   ortamından istiyor. Ama testler `.env`'i kendileri yüklemiyordu — `.env`
+   ortama yalnızca aynı dosyadaki `#[sqlx::test]` kardeşleri koşarken
+   giriyordu. Test thread'leri paralel olduğu için bu bir **yarış**tı: saf
+   test yarışı kazanırsa `Missing("DATABASE_URL")` ile panikliyordu. Tam
+   workspace koşusunda 4 denemeden 1'inde kırıldı; `--exact` ile tek başına
+   koşturulduğunda %100. Düzeltme: `std::sync::Once` ile `dotenvy::dotenv()`
+   (edition 2024'te `env::set_var` veri yarışı olduğu için `Once` şart).
+   Düzeltmeden sonra tam paket iki kez üst üste temiz koştu.
 
 ## 1. Örtü raporundaki düşük modüller (Faz 18.B kapandı, borç kaldı)
 
@@ -53,19 +76,26 @@ listesine geri düşmemeleri için burada:
     da doğrudan geçiyor (`actos-types` onun bağımlılığı). Yani karar
     yalnızca spec'i değil SDK'ların kamuya açık yüzeyini de etkiliyor.
 
-## 3. Faz 19 — Paketleme ve deploy (ertelendi, kapsam hazır)
+## 3. Faz 19 — Paketleme ve deploy (kod tarafı bitti)
 
-Planda 9 madde; hepsi yazılı ve gerekçeli. Sıradaki turda ele alınacak.
-Öne çıkan iki tanesi:
+Bu repoda üretilenler:
 
-- **`docs/openapi.json` tazelik kontrolü CI'da.** Spec repoya commit'li
-  (SDK ajanları sunucu kaldırmasın diye) ama commit'lenmiş üretilmiş dosya
-  kodun gerisine düşebiliyor — **bu bugün fiilen yaşandı**: snapshot 42
-  yolda kalmıştı, 2026-09-03'te elle 45'e tazelendi (`b6469f7`). CI
-  sunucuyu kaldırıp `GET /openapi.json` çıktısını dosyayla karşılaştırmalı,
-  farklıysa build kırılmalı. Karşılaştırma normalize JSON üzerinden.
-- **Migration stratejisi:** açılışta otomatik değil, **ayrı job** (üç
-  instance aynı anda migration çalıştırmasın).
+| Dosya | Ne yapar |
+|---|---|
+| `Dockerfile` | cargo-chef ile 4 aşamalı; `SQLX_OFFLINE=true`, non-root, `actos-api`/`actos-migrate`/`actos-seed` |
+| `docker-compose.prod.yml` | API dahil tam yığın; sırların hiçbirinin varsayılanı yok (`:?`), portlar yalnızca 127.0.0.1 |
+| `crates/actos-api/src/bin/migrate.rs` | Ayrı migration job'ı — yalnızca `DATABASE_URL` ister |
+| `.github/workflows/ci.yml` | fmt/clippy/test/audit paralel → hepsi yeşilse GHCR'a imaj |
+| `.github/workflows/deploy.yml` | CI yeşilse SSH ile dağıtım + duman testi; `image_tag` ile geri alma |
+| `tests/openapi.rs::commitlenmis_openapi_json_kodla_ayni` | Spec tazelik kapısı |
+| `deploy/nginx/` | 3 vhost + ortak proxy snippet'i |
+| `scripts/cloudflare-realip.sh` | CF aralıkları → `set_real_ip_from`, haftalık cron |
+| `scripts/backup.sh` | `pg_dump -Fc` + `mc mirror`, doğrulamalı, 14 gün rotasyon |
+| `docs/DEPLOYMENT.md` | Sıfırdan üretime: env'ler, DNS, sertifika sırası, CI secrets, tatbikat |
+
+**Kalan tek kod maddesi:** yedekten dönüş tatbikatı — sunucuda henüz Actos
+verisi olmadığı için ilk dağıtımdan sonraya kaldı. Doğrulanmamış yedek,
+yedek sayılmaz.
 
 ## 4. Faz 20 — v1 çıkış listesi (ertelendi)
 
@@ -90,11 +120,31 @@ Bu repo hazır ama zincirin geri kalanı değil. Deployment turundan önce:
 
 Her birinin kendi `YAPILACAKLAR.md`'si var.
 
-## 6. Sıra önerisi
+## 6. Sıra önerisi — sunucu tarafındaki elle adımlar
 
-1. SDK'ların 18.A eksikleri (özellikle `[silindi]`/`[deleted]` sapması —
-   sessiz ve gerçek bir hata).
-2. Faz 19: önce CI'daki spec tazelik kontrolü (bugün yaşanan sorunun
-   tekrarını engeller), sonra Docker/deploy.
-3. Faz 20.
-4. §1'deki örtü borcu — engelleyici değil, fırsat buldukça.
+Kod hazır; canlıya çıkış bu sırayla ilerler. Ayrıntılar
+`docs/DEPLOYMENT.md`'de, burada yalnızca sıra ve gerekçe:
+
+1. **Sunucuya Compose V2 plugin'i.** `docker-compose` v1.29.2 EOL ve
+   `depends_on: service_completed_successfully`'yi desteklemiyor — yani
+   migration job'ı olmadan API kalkardı. Bu olmadan dağıtım çalışmaz.
+2. **`actos.com.tr` → Cloudflare.** Nameserver'ları çevir, A kayıtlarını
+   **gri bulut** olarak ekle.
+3. **nginx vhost'ları + certbot.** Hâlâ gri bulut iken: certbot HTTP-01
+   doğrulaması yapıyor, turuncu bulut açıkken Cloudflare'e takılır.
+4. **Turuncu buluta geç, SSL modu "Full (strict)".** "Flexible" ASLA.
+5. **`scripts/cloudflare-realip.sh` + cron.** 4'ten sonra bu yapılmazsa
+   IP bazlı kovalar (`register` 3/saat, `recover` 5/gün) tüm dünyayı tek
+   kovaya sokar ve kayıt fiilen kilitlenir.
+6. **GitHub secrets + `production` environment.** Dağıtıma özel yeni bir
+   SSH anahtarı — kişisel anahtar GitHub'a konmaz.
+7. **İlk dağıtım + `actos-seed` ile ilk admin.**
+8. **Yedekleme cron'u, sonra geri yükleme tatbikatı.**
+9. **Faz 20** (sırlar, README, LICENSE/CONTRIBUTING, repo public, `v0.1.0`).
+10. §1'deki örtü borcu — engelleyici değil, fırsat buldukça.
+
+### Ayrıca, bu repo dışı ama bilinmeli
+
+- **Sunucunun 8 GB RAM'inin ~5 GB'ı hipervizör tarafından geri alınmış**
+  (`vmw_balloon`, 1 309 184 sayfa; `MemAvailable` ~1.3 GB). Actos sığar
+  ama pay kalmaz. Sağlayıcıya bildirilecek; bkz. `SUNUCU.md`.

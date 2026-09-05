@@ -1,0 +1,177 @@
+# Actos — üretim yığını (PLAN.md Faz 19).
+#
+# Geliştirme `docker-compose.yml`'ından farkları:
+#   - API de konteynerde (orada host'ta `cargo run` ile koşuyor)
+#   - migration ayrı bir job; API ondan sonra kalkıyor
+#   - hiçbir sırrın varsayılanı yok — eksik değişken açılışta hata verir
+#   - portlar yalnızca 127.0.0.1'e bağlı; dışarıya açan tek şey nginx
+#
+# Kullanım:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# Zorunlu ortam değişkenleri için bkz. docs/DEPLOYMENT.md.
+
+name: actos
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: actos_postgres
+    restart: unless-stopped
+    # Dışarıya açılmıyor. Bu bind yalnızca sunucudan `psql` ve `pg_dump`
+    # (yedekleme cron'u) içindir.
+    ports:
+      - "127.0.0.1:3101:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER zorunlu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB zorunlu}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [actos_network]
+
+  redis:
+    image: redis:8-alpine
+    container_name: actos_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    # `noeviction`: hız sınırı sayaçları sessizce düşerse limit fiilen
+    # kalkar — bellek dolduğunda yazmayı reddetmek, koruma kaybetmekten iyi.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [actos_network]
+
+  minio:
+    image: minio/minio:latest
+    container_name: actos_minio
+    restart: unless-stopped
+    ports:
+      # S3 API: nginx bunu `media.` alt alanı olarak dışarı proxy'liyor
+      # (bucket public-read; imzasız GET ile servis ediliyor).
+      - "127.0.0.1:3103:9000"
+      # Konsol dışarı AÇILMIYOR — gerekirse SSH tüneliyle erişilir:
+      #   ssh -L 3104:127.0.0.1:3104 root@<sunucu>
+      - "127.0.0.1:3104:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER zorunlu}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD zorunlu}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks: [actos_network]
+
+  minio_init:
+    image: minio/mc:latest
+    container_name: actos_minio_init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set actos http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing actos/$${MINIO_BUCKET} &&
+      mc anonymous set download actos/$${MINIO_BUCKET} &&
+      echo 'minio bucket hazir'
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:?MINIO_BUCKET zorunlu}
+    networks: [actos_network]
+
+  # --- Migration job -----------------------------------------------------
+  #
+  # API açılışında otomatik DEĞİL, bilerek: birden fazla API instance'ı aynı
+  # anda kalkarsa hepsi aynı ALTER TABLE'ı sürmeye çalışır (bkz.
+  # crates/actos-api/src/bin/migrate.rs modül dokümanı). Bu job çıkış kodu 0
+  # verene kadar API başlamaz.
+  migrate:
+    image: ${ACTOS_IMAGE:?ACTOS_IMAGE zorunlu — ör. ghcr.io/actos-dev/backend:sha-abc1234}
+    container_name: actos_migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      RUST_LOG: ${RUST_LOG:-info}
+    entrypoint: ["/usr/local/bin/actos-migrate"]
+    networks: [actos_network]
+
+  api:
+    image: ${ACTOS_IMAGE:?ACTOS_IMAGE zorunlu}
+    container_name: actos_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      # Yalnızca loopback: dışarıya açan tek şey host'taki nginx
+      # (api.actos.com.tr → 127.0.0.1:3100).
+      - "127.0.0.1:3100:3100"
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 3100
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-20}
+      REDIS_URL: redis://redis:6379
+      # Servis adı (`minio`), konteyner adı (`actos_minio`) DEĞİL: alt
+      # çizgi geçerli bir hostname karakteri değil ve S3 istemcisi böyle bir
+      # uca bağlanmayı reddediyor ("nesne depolama erişilemiyor: service
+      # error" — yerelde doğrulandı). Aynısı DATABASE_URL/REDIS_URL için de
+      # geçerli, onlar da servis adı kullanıyor.
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      # Kullanıcıya dönen dosya URL'leri — konteyner içi adres DEĞİL, dışarıdan
+      # görünen alan adı. Yanlış ayarlanırsa yüklenen görseller tarayıcıda kırık
+      # görünür (backend hata vermez, bu yüzden sessizdir).
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:?S3_PUBLIC_BASE_URL zorunlu}
+      ID_OBFUSCATION_KEY: ${ID_OBFUSCATION_KEY:?ID_OBFUSCATION_KEY zorunlu}
+      CURSOR_SIGNING_KEY: ${CURSOR_SIGNING_KEY:?CURSOR_SIGNING_KEY zorunlu}
+      # nginx (ve önünde Cloudflare) X-Forwarded-For'a ekleme yapıyor —
+      # hız sınırının gerçek istemci IP'sini görmesi buna bağlı.
+      # bkz. docs/DEPLOYMENT.md §"Cloudflare ve gerçek IP".
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-8388608}
+      RUST_LOG: ${RUST_LOG:-actos_api=info,tower_http=info,sqlx=warn,info}
+    networks: [actos_network]
+
+volumes:
+  postgres_data:
+    name: actos_postgres_data
+  redis_data:
+    name: actos_redis_data
+  minio_data:
+    name: actos_minio_data
+
+networks:
+  actos_network:
+    name: actos_network
+    driver: bridge

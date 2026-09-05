@@ -1,0 +1,102 @@
+# Actos backend — üretime dağıtım (PLAN.md Faz 19).
+#
+# Tetikleme: `main`'e push edilen bir commit'in CI'ı yeşil bittiğinde
+# otomatik, ya da elle (belirli bir imaj etiketiyle geri alma için).
+#
+# Sunucuda tutulan tek durum: `/opt/actos/.env.prod` ve
+# `/opt/actos/docker-compose.prod.yml`. Sırlar repoda DEĞİL, sunucuda.
+# Kurulum adımları için bkz. docs/DEPLOYMENT.md.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Dağıtılacak imaj etiketi (ör. sha-abc1234). Boşsa latest."
+        required: false
+        default: ""
+
+concurrency:
+  # Dağıtım asla paralel koşmamalı: iki `compose up` aynı anda aynı
+  # konteynerleri yeniden yaratmaya çalışır.
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: sunucuya dağıt
+    runs-on: ubuntu-latest
+    # `workflow_run` CI başarısız olduğunda da tetikleniyor — kırık bir
+    # ağacın dağıtılmaması bu koşula bağlı.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH anahtarını kur
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Host key'i secret'tan al: `StrictHostKeyChecking=no` ile dağıtım
+          # sessizce bir ortadaki-adam'a yapılabilirdi.
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Compose dosyasını gönder
+        run: |
+          scp -i ~/.ssh/id_ed25519 docker-compose.prod.yml \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/actos/docker-compose.prod.yml"
+
+      - name: Dağıt
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          TAG="${IMAGE_TAG:-sha-$(git rev-parse --short=7 HEAD)}"
+          IMAGE="ghcr.io/${{ github.repository }}:${TAG}"
+          echo "dağıtılacak imaj: ${IMAGE}"
+
+          ssh -i ~/.ssh/id_ed25519 \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "IMAGE='${IMAGE}' GHCR_USER='${{ github.actor }}' GHCR_TOKEN='${{ secrets.GITHUB_TOKEN }}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd /opt/actos
+
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+          # `ACTOS_IMAGE` compose dosyasının tek değişken girdisi; onu
+          # .env.prod'a yazmak yerine ortamdan geçiriyoruz ki sunucudaki
+          # dosya sırlardan ibaret kalsın.
+          export ACTOS_IMAGE="$IMAGE"
+
+          docker compose -f docker-compose.prod.yml --env-file .env.prod pull api migrate
+          # `up -d` migration job'ını da çalıştırır ve API onu
+          # `service_completed_successfully` ile bekler (bkz. compose dosyası).
+          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait
+
+          docker logout ghcr.io
+          # Eski imajları temizle — 30 GB'lık diskte birkaç dağıtımda birikir.
+          docker image prune -af --filter "until=168h"
+          REMOTE
+
+      - name: Duman testi
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 10 "https://api.actos.com.tr/health/ready" > /tmp/ready.json; then
+              cat /tmp/ready.json
+              echo "hazır"
+              exit 0
+            fi
+            echo "hazır değil, tekrar deneniyor ($i/10)"
+            sleep 6
+          done
+          echo "sunucu 60 saniyede hazır olmadı"
+          exit 1
