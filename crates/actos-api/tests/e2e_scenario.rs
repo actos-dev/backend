@@ -223,13 +223,11 @@ async fn register(router: &Router, username: &str) -> (String, String) {
 /// İlk admin'in rolü — bkz. dosya başındaki modül dokümanının 1. maddesi.
 #[allow(clippy::expect_used)]
 async fn bootstrap_ilk_admin(pool: &PgPool, username: &str) {
-    let actor_id: i64 = sqlx::query_scalar!(
-        r#"SELECT id FROM actors WHERE username = $1"#,
-        username,
-    )
-    .fetch_one(pool)
-    .await
-    .expect("actor bulunabilmeli");
+    let actor_id: i64 =
+        sqlx::query_scalar!(r#"SELECT id FROM actors WHERE username = $1"#, username,)
+            .fetch_one(pool)
+            .await
+            .expect("actor bulunabilmeli");
     core_auth::grant_role(pool, actor_id, AdminRole::Admin, None)
         .await
         .expect("ilk admin rolü verilebilmeli");
@@ -278,7 +276,11 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "moderatör rolü verilemedi: {body}");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "moderatör rolü verilemedi: {body}"
+    );
 
     // Oy ağırlığının donma anındaki kademeye bağlı olduğunu göstermek için
     // iki farklı kademe: `e2e_oycu_dusuk` kayıt varsayılanında (0) kalıyor,
@@ -300,7 +302,11 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "post oluşturulamadı: {post_body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "post oluşturulamadı: {post_body}"
+    );
     let post_id = post_body["id"].as_str().expect("post id").to_owned();
     assert_eq!(
         headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
@@ -318,7 +324,11 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "yorum oluşturulamadı: {comment_body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "yorum oluşturulamadı: {comment_body}"
+    );
     let comment_id = comment_body["id"].as_str().expect("comment id").to_owned();
     assert_eq!(
         headers.get(header::LOCATION).and_then(|v| v.to_str().ok()),
@@ -326,8 +336,14 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
     );
 
     // Post ve yorum aynı ID uzayını (`c_...`) paylaşıyor.
-    assert!(post_id.starts_with("c_"), "post id 'c_' ile başlamalı: {post_id}");
-    assert!(comment_id.starts_with("c_"), "comment id 'c_' ile başlamalı: {comment_id}");
+    assert!(
+        post_id.starts_with("c_"),
+        "post id 'c_' ile başlamalı: {post_id}"
+    );
+    assert!(
+        comment_id.starts_with("c_"),
+        "comment id 'c_' ile başlamalı: {comment_id}"
+    );
     assert_ne!(post_id, comment_id);
 
     // === 4) Oy ver ========================================================
@@ -342,7 +358,11 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "düşük kademeli oy başarısız: {oy_body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "düşük kademeli oy başarısız: {oy_body}"
+    );
 
     // Yüksek kademeli actor (trust_level = 1): ağırlık 1.
     let (status, oy_body, _) = send(
@@ -355,14 +375,22 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "yüksek kademeli oy başarısız: {oy_body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "yüksek kademeli oy başarısız: {oy_body}"
+    );
     // Bu tekil yanıt da içeriğin güncel sayaçlarını taşıyor — burada da
     // doğrulanabilir, ama asıl doğrulama aşağıda `GET /posts/{id}` ile.
     assert_eq!(oy_body["upvotes"], 2, "{oy_body}");
-    assert_eq!(oy_body["score"], 1, "iki oy da +1 ama biri ağırlık 0: {oy_body}");
+    assert_eq!(
+        oy_body["score"], 1,
+        "iki oy da +1 ama biri ağırlık 0: {oy_body}"
+    );
 
     // === 5) Skoru doğrula =================================================
-    let (status, post_after_vote, _) = send(&router, empty_req("GET", &format!("/posts/{post_id}"))).await;
+    let (status, post_after_vote, _) =
+        send(&router, empty_req("GET", &format!("/posts/{post_id}"))).await;
     assert_eq!(status, StatusCode::OK, "{post_after_vote}");
     assert_eq!(
         post_after_vote["upvotes"], 2,
@@ -385,7 +413,11 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "şikayet oluşturulamadı: {rapor_body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "şikayet oluşturulamadı: {rapor_body}"
+    );
     let rapor_id = rapor_body["id"].as_str().expect("rapor id").to_owned();
     assert_eq!(rapor_body["status"], "pending", "{rapor_body}");
     assert_eq!(rapor_body["target_id"], post_id, "{rapor_body}");
@@ -397,7 +429,9 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{kuyruk_body}");
-    let kuyruk = kuyruk_body["reports"].as_array().expect("reports dizi olmalı");
+    let kuyruk = kuyruk_body["reports"]
+        .as_array()
+        .expect("reports dizi olmalı");
     assert!(
         kuyruk.iter().any(|r| r["id"] == rapor_id),
         "şikayet moderasyon kuyruğunda görünmüyor: {kuyruk_body}"
@@ -447,19 +481,26 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
 
     // === 9) Silinmiş içeriğin doğru maskelendiğini doğrula ================
     // Post: 410 Gone, makine-okunur kod GONE.
-    let (status, post_deleted_body, _) = send(&router, empty_req("GET", &format!("/posts/{post_id}"))).await;
+    let (status, post_deleted_body, _) =
+        send(&router, empty_req("GET", &format!("/posts/{post_id}"))).await;
     assert_eq!(status, StatusCode::GONE, "{post_deleted_body}");
     assert_eq!(post_deleted_body["code"], "GONE", "{post_deleted_body}");
 
     // Yorum: 200 + `deleted: true` + `[deleted]` gövdesi — 410 DEĞİL.
-    let (status, comment_deleted_body, _) =
-        send(&router, empty_req("GET", &format!("/comments/{comment_id}"))).await;
+    let (status, comment_deleted_body, _) = send(
+        &router,
+        empty_req("GET", &format!("/comments/{comment_id}")),
+    )
+    .await;
     assert_eq!(
         status,
         StatusCode::OK,
         "silinmiş yorum 410 değil 200 dönmeli (iş parçacığı bütünlüğü): {comment_deleted_body}"
     );
-    assert_eq!(comment_deleted_body["comment"]["deleted"], true, "{comment_deleted_body}");
+    assert_eq!(
+        comment_deleted_body["comment"]["deleted"], true,
+        "{comment_deleted_body}"
+    );
     assert_eq!(
         comment_deleted_body["comment"]["body"], "[deleted]",
         "{comment_deleted_body}"
@@ -472,31 +513,54 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
     // `target_type` ikisinde de "content".
     let (status, yazar_inbox, _) = send(&router, auth_req("GET", "/me/inbox", &yazar_key)).await;
     assert_eq!(status, StatusCode::OK, "{yazar_inbox}");
-    let yazar_bildirimleri = yazar_inbox["notifications"].as_array().expect("dizi olmalı");
+    let yazar_bildirimleri = yazar_inbox["notifications"]
+        .as_array()
+        .expect("dizi olmalı");
 
     let yorum_bildirimi = yazar_bildirimleri
         .iter()
         .find(|n| n["kind"] == "comment_on_post")
         .unwrap_or_else(|| panic!("yazarın gelen kutusunda comment_on_post yok: {yazar_inbox}"));
-    assert_eq!(yorum_bildirimi["target_type"], "content", "{yorum_bildirimi}");
-    assert_eq!(yorum_bildirimi["target_id"], comment_id, "{yorum_bildirimi}");
+    assert_eq!(
+        yorum_bildirimi["target_type"], "content",
+        "{yorum_bildirimi}"
+    );
+    assert_eq!(
+        yorum_bildirimi["target_id"], comment_id,
+        "{yorum_bildirimi}"
+    );
 
     let silme_bildirimi = yazar_bildirimleri
         .iter()
         .find(|n| n["kind"] == "moderation_action" && n["target_id"] == post_id.as_str())
-        .unwrap_or_else(|| panic!("yazarın gelen kutusunda postun silindiğine dair bildirim yok: {yazar_inbox}"));
-    assert_eq!(silme_bildirimi["target_type"], "content", "{silme_bildirimi}");
+        .unwrap_or_else(|| {
+            panic!("yazarın gelen kutusunda postun silindiğine dair bildirim yok: {yazar_inbox}")
+        });
+    assert_eq!(
+        silme_bildirimi["target_type"], "content",
+        "{silme_bildirimi}"
+    );
 
     // Yorumcu: kendi yorumunun silindiğine dair ayrı bir moderation_action
     // bildirimi almalı, target = yorumun kendisi.
-    let (status, yorumcu_inbox, _) = send(&router, auth_req("GET", "/me/inbox", &yorumcu_key)).await;
+    let (status, yorumcu_inbox, _) =
+        send(&router, auth_req("GET", "/me/inbox", &yorumcu_key)).await;
     assert_eq!(status, StatusCode::OK, "{yorumcu_inbox}");
-    let yorumcu_bildirimleri = yorumcu_inbox["notifications"].as_array().expect("dizi olmalı");
+    let yorumcu_bildirimleri = yorumcu_inbox["notifications"]
+        .as_array()
+        .expect("dizi olmalı");
     let yorum_silme_bildirimi = yorumcu_bildirimleri
         .iter()
         .find(|n| n["kind"] == "moderation_action" && n["target_id"] == comment_id.as_str())
-        .unwrap_or_else(|| panic!("yorumcunun gelen kutusunda yorumun silindiğine dair bildirim yok: {yorumcu_inbox}"));
-    assert_eq!(yorum_silme_bildirimi["target_type"], "content", "{yorum_silme_bildirimi}");
+        .unwrap_or_else(|| {
+            panic!(
+                "yorumcunun gelen kutusunda yorumun silindiğine dair bildirim yok: {yorumcu_inbox}"
+            )
+        });
+    assert_eq!(
+        yorum_silme_bildirimi["target_type"], "content",
+        "{yorum_silme_bildirimi}"
+    );
 
     // `unread_count` toplam okunmamışı yansıtıyor (bu sayfadaki öğe sayısı
     // değil) — yazar için en az iki okunmamış bildirim olmalı.

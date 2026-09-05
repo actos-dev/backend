@@ -43,6 +43,10 @@ infer = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Testler `Config::from_env()` çağırıyor; `.env`'i process ortamına kendileri
+# yüklemek zorunda. Daha önce bu yalnızca `#[sqlx::test]`'in yan etkisiyle
+# oluyordu — saf `#[test]`'lerle yarışıyordu (bkz. tests/storage_quota.rs).
+dotenvy = { workspace = true }
 
 [lints]
 workspace = true

@@ -43,6 +43,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "deadpool-redis",
+ "dotenvy",
  "hex",
  "hmac",
  "image",

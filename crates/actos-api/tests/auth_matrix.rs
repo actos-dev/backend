@@ -244,9 +244,17 @@ fn maybe_auth_json_req(method: &str, uri: &str, token: Option<&str>, body: Value
 /// Beklenen durum kodunu doğrular, gövdeyi döner (başarı gövdelerine daha
 /// fazla bakmak isteyen çağıranlar için).
 #[allow(clippy::expect_used)]
-async fn assert_status(router: &Router, req: Request<Body>, expected: StatusCode, label: &str) -> Value {
+async fn assert_status(
+    router: &Router,
+    req: Request<Body>,
+    expected: StatusCode,
+    label: &str,
+) -> Value {
     let (status, body, _) = send(router, req).await;
-    assert_eq!(status, expected, "{label}: beklenmeyen durum — gövde: {body}");
+    assert_eq!(
+        status, expected,
+        "{label}: beklenmeyen durum — gövde: {body}"
+    );
     body
 }
 
@@ -260,8 +268,14 @@ async fn assert_code(
     label: &str,
 ) {
     let (status, body, _) = send(router, req).await;
-    assert_eq!(status, expected_status, "{label}: beklenmeyen durum — gövde: {body}");
-    assert_eq!(body["code"], expected_code, "{label}: beklenmeyen kod — gövde: {body}");
+    assert_eq!(
+        status, expected_status,
+        "{label}: beklenmeyen durum — gövde: {body}"
+    );
+    assert_eq!(
+        body["code"], expected_code,
+        "{label}: beklenmeyen kod — gövde: {body}"
+    );
 }
 
 /// `actos_core::auth::register`'ı doğrudan çağırır (hız sınırını görmeden).
@@ -449,7 +463,12 @@ fn tiny_png() -> Vec<u8> {
 }
 
 #[allow(clippy::expect_used)]
-fn multipart_upload_req(method: &str, uri: &str, token: Option<&str>, bytes: &[u8]) -> Request<Body> {
+fn multipart_upload_req(
+    method: &str,
+    uri: &str,
+    token: Option<&str>,
+    bytes: &[u8],
+) -> Request<Body> {
     const BOUNDARY: &str = "----actosAuthMatrixBoundary";
     let mut body = Vec::new();
     body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
@@ -461,13 +480,10 @@ fn multipart_upload_req(method: &str, uri: &str, token: Option<&str>, bytes: &[u
     body.extend_from_slice(b"\r\n");
     body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
 
-    let mut builder = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(
-            header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={BOUNDARY}"),
-        );
+    let mut builder = Request::builder().method(method).uri(uri).header(
+        header::CONTENT_TYPE,
+        format!("multipart/form-data; boundary={BOUNDARY}"),
+    );
     if let Some(t) = token {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {t}"));
     }
@@ -481,7 +497,11 @@ async fn seed_upload(router: &Router, api_key: &str) -> String {
         multipart_upload_req("POST", "/uploads", Some(api_key), &tiny_png()),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "yükleme oluşturulamadı: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "yükleme oluşturulamadı: {body}"
+    );
     body["id"].as_str().expect("upload id").to_owned()
 }
 
@@ -785,12 +805,20 @@ async fn auth_uclarinin_yetki_matrisi(pool: PgPool) {
     // "sahip" (`owner_key`) için kendi key'ini oluşturup siliyoruz.
     let owner_new_key = assert_status(
         &router,
-        auth_json_req("POST", "/auth/keys", &owner_key, json!({ "label": "silinecek" })),
+        auth_json_req(
+            "POST",
+            "/auth/keys",
+            &owner_key,
+            json!({ "label": "silinecek" }),
+        ),
         StatusCode::CREATED,
         "DELETE /auth/keys/{key_id} kurulum: sahip key'i",
     )
     .await;
-    let owner_key_id = owner_new_key["key"]["id"].as_str().expect("key id").to_owned();
+    let owner_key_id = owner_new_key["key"]["id"]
+        .as_str()
+        .expect("key id")
+        .to_owned();
 
     assert_code(
         &router,
@@ -808,11 +836,7 @@ async fn auth_uclarinin_yetki_matrisi(pool: PgPool) {
     ] {
         assert_code(
             &router,
-            auth_req(
-                "DELETE",
-                &format!("/auth/keys/{owner_key_id}"),
-                token,
-            ),
+            auth_req("DELETE", &format!("/auth/keys/{owner_key_id}"), token),
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
             &format!("DELETE /auth/keys/{{key_id}} (başkasının key'i) [{rol}]"),
@@ -871,7 +895,8 @@ async fn auth_uclarinin_yetki_matrisi(pool: PgPool) {
         let _ = username; // yalnızca döngü etiketleme netliği için
     }
     // "sahip" hücresi: hedef = çağıranın kendisi, banlı değil.
-    let (_, _, owner_recovery_codes) = seed_actor_with_recovery(&raw_pool, "am_recover_sahip").await;
+    let (_, _, owner_recovery_codes) =
+        seed_actor_with_recovery(&raw_pool, "am_recover_sahip").await;
     assert_status(
         &router,
         maybe_auth_json_req(
@@ -962,7 +987,13 @@ async fn actor_profil_uclarinin_yetki_matrisi(pool: PgPool) {
         ("GET", "/actors/am_prof_target/following"),
     ];
     for (method, uri) in public_reads {
-        assert_status(&router, empty_req(method, uri), StatusCode::OK, &format!("{method} {uri} [anon]")).await;
+        assert_status(
+            &router,
+            empty_req(method, uri),
+            StatusCode::OK,
+            &format!("{method} {uri} [anon]"),
+        )
+        .await;
         for (rol, token) in [
             ("normal", &normal_key),
             ("moderator", &mod_key),
@@ -1011,7 +1042,12 @@ async fn actor_profil_uclarinin_yetki_matrisi(pool: PgPool) {
     }
     assert_code(
         &router,
-        auth_json_req("PATCH", "/actors/me", &banned_key, json!({ "display_name": "x" })),
+        auth_json_req(
+            "PATCH",
+            "/actors/me",
+            &banned_key,
+            json!({ "display_name": "x" }),
+        ),
         StatusCode::FORBIDDEN,
         "BANNED",
         "PATCH /actors/me [banli]",
@@ -1138,7 +1174,13 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
     // --- GET /posts/{id} — tamamen herkese açık okuma ---
     let okuma_postu = seed_post(&router, &owner_key, "okuma testi").await;
     let uri = format!("/posts/{okuma_postu}");
-    assert_status(&router, empty_req("GET", &uri), StatusCode::OK, "GET /posts/{id} [anon]").await;
+    assert_status(
+        &router,
+        empty_req("GET", &uri),
+        StatusCode::OK,
+        "GET /posts/{id} [anon]",
+    )
+    .await;
     for (rol, token) in [
         ("normal", &normal_key),
         ("sahip", &owner_key),
@@ -1146,7 +1188,13 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", &uri, token), StatusCode::OK, &format!("GET /posts/{{id}} [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", &uri, token),
+            StatusCode::OK,
+            &format!("GET /posts/{{id}} [{rol}]"),
+        )
+        .await;
     }
 
     // --- PATCH /posts/{id} — moderatör/admin override YOK (incelik #2) ---
@@ -1160,7 +1208,11 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
         "PATCH /posts/{id} [anon]",
     )
     .await;
-    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key), ("admin", &admin_key)] {
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
         assert_code(
             &router,
             auth_json_req("PATCH", &patch_uri, token, json!({ "title": "başkasının" })),
@@ -1172,7 +1224,12 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
     }
     assert_status(
         &router,
-        auth_json_req("PATCH", &patch_uri, &owner_key, json!({ "title": "güncellendi" })),
+        auth_json_req(
+            "PATCH",
+            &patch_uri,
+            &owner_key,
+            json!({ "title": "güncellendi" }),
+        ),
         StatusCode::OK,
         "PATCH /posts/{id} [sahip]",
     )
@@ -1190,7 +1247,13 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
     // update_post'un aksine `roles` alıyor). ---
     assert_code(
         &router,
-        empty_req("DELETE", &format!("/posts/{}", seed_post(&router, &owner_key, "anon delete").await)),
+        empty_req(
+            "DELETE",
+            &format!(
+                "/posts/{}",
+                seed_post(&router, &owner_key, "anon delete").await
+            ),
+        ),
         StatusCode::UNAUTHORIZED,
         "MISSING_CREDENTIALS",
         "DELETE /posts/{id} [anon]",
@@ -1241,7 +1304,13 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
 
     // --- GET /actors/{username}/posts — herkese açık ---
     let liste_uri = "/actors/am_post_owner/posts";
-    assert_status(&router, empty_req("GET", liste_uri), StatusCode::OK, "GET /actors/{username}/posts [anon]").await;
+    assert_status(
+        &router,
+        empty_req("GET", liste_uri),
+        StatusCode::OK,
+        "GET /actors/{username}/posts [anon]",
+    )
+    .await;
     for (rol, token) in [
         ("normal", &normal_key),
         ("sahip", &owner_key),
@@ -1298,7 +1367,12 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
     ] {
         assert_status(
             &router,
-            auth_json_req("POST", &comments_uri, token, json!({ "body": format!("yorum-{rol}") })),
+            auth_json_req(
+                "POST",
+                &comments_uri,
+                token,
+                json!({ "body": format!("yorum-{rol}") }),
+            ),
             StatusCode::CREATED,
             &format!("POST /posts/{{id}}/comments [{rol}]"),
         )
@@ -1314,7 +1388,13 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
     .await;
 
     // --- GET /posts/{id}/comments — herkese açık okuma ---
-    assert_status(&router, empty_req("GET", &comments_uri), StatusCode::OK, "GET /posts/{id}/comments [anon]").await;
+    assert_status(
+        &router,
+        empty_req("GET", &comments_uri),
+        StatusCode::OK,
+        "GET /posts/{id}/comments [anon]",
+    )
+    .await;
     for (rol, token) in [
         ("normal", &normal_key),
         ("sahip", &owner_key),
@@ -1322,13 +1402,25 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", &comments_uri, token), StatusCode::OK, &format!("GET /posts/{{id}}/comments [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", &comments_uri, token),
+            StatusCode::OK,
+            &format!("GET /posts/{{id}}/comments [{rol}]"),
+        )
+        .await;
     }
 
     // --- GET /comments/{id} — herkese açık okuma ---
     let ornek_yorum = seed_comment(&router, &owner_key, &post_id, "örnek yorum").await;
     let yorum_uri = format!("/comments/{ornek_yorum}");
-    assert_status(&router, empty_req("GET", &yorum_uri), StatusCode::OK, "GET /comments/{id} [anon]").await;
+    assert_status(
+        &router,
+        empty_req("GET", &yorum_uri),
+        StatusCode::OK,
+        "GET /comments/{id} [anon]",
+    )
+    .await;
     for (rol, token) in [
         ("normal", &normal_key),
         ("sahip", &owner_key),
@@ -1336,7 +1428,13 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", &yorum_uri, token), StatusCode::OK, &format!("GET /comments/{{id}} [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", &yorum_uri, token),
+            StatusCode::OK,
+            &format!("GET /comments/{{id}} [{rol}]"),
+        )
+        .await;
     }
 
     // --- PATCH /comments/{id} — moderatör/admin override YOK (post ile
@@ -1351,7 +1449,11 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
         "PATCH /comments/{id} [anon]",
     )
     .await;
-    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key), ("admin", &admin_key)] {
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
         assert_code(
             &router,
             auth_json_req("PATCH", &patch_uri, token, json!({ "body": "başkasının" })),
@@ -1363,7 +1465,12 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
     }
     assert_status(
         &router,
-        auth_json_req("PATCH", &patch_uri, &owner_key, json!({ "body": "güncellendi" })),
+        auth_json_req(
+            "PATCH",
+            &patch_uri,
+            &owner_key,
+            json!({ "body": "güncellendi" }),
+        ),
         StatusCode::OK,
         "PATCH /comments/{id} [sahip]",
     )
@@ -1382,7 +1489,10 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
         &router,
         empty_req(
             "DELETE",
-            &format!("/comments/{}", seed_comment(&router, &owner_key, &post_id, "anon delete").await),
+            &format!(
+                "/comments/{}",
+                seed_comment(&router, &owner_key, &post_id, "anon delete").await
+            ),
         ),
         StatusCode::UNAUTHORIZED,
         "MISSING_CREDENTIALS",
@@ -1434,7 +1544,13 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
 
     // --- GET /actors/{username}/comments — herkese açık ---
     let liste_uri = "/actors/am_com_owner/comments";
-    assert_status(&router, empty_req("GET", liste_uri), StatusCode::OK, "GET /actors/{username}/comments [anon]").await;
+    assert_status(
+        &router,
+        empty_req("GET", liste_uri),
+        StatusCode::OK,
+        "GET /actors/{username}/comments [anon]",
+    )
+    .await;
     for (rol, token) in [
         ("normal", &normal_key),
         ("sahip", &owner_key),
@@ -1477,17 +1593,31 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
     let vote_hedefi_1 = seed_post(&router, &owner_key, "oy hedefi anon").await;
     assert_code(
         &router,
-        maybe_auth_json_req("PUT", &format!("/contents/{vote_hedefi_1}/vote"), None, json!({ "value": 1 })),
+        maybe_auth_json_req(
+            "PUT",
+            &format!("/contents/{vote_hedefi_1}/vote"),
+            None,
+            json!({ "value": 1 }),
+        ),
         StatusCode::UNAUTHORIZED,
         "MISSING_CREDENTIALS",
         "PUT /contents/{id}/vote [anon]",
     )
     .await;
-    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key), ("admin", &admin_key)] {
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
         let hedef = seed_post(&router, &owner_key, &format!("oy hedefi {rol}")).await;
         assert_status(
             &router,
-            auth_json_req("PUT", &format!("/contents/{hedef}/vote"), token, json!({ "value": 1 })),
+            auth_json_req(
+                "PUT",
+                &format!("/contents/{hedef}/vote"),
+                token,
+                json!({ "value": 1 }),
+            ),
             StatusCode::OK,
             &format!("PUT /contents/{{id}}/vote (başkasının içeriği) [{rol}]"),
         )
@@ -1496,7 +1626,12 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
     let sahip_hedef = seed_post(&router, &owner_key, "oy hedefi sahip").await;
     assert_code(
         &router,
-        auth_json_req("PUT", &format!("/contents/{sahip_hedef}/vote"), &owner_key, json!({ "value": 1 })),
+        auth_json_req(
+            "PUT",
+            &format!("/contents/{sahip_hedef}/vote"),
+            &owner_key,
+            json!({ "value": 1 }),
+        ),
         StatusCode::FORBIDDEN,
         "FORBIDDEN",
         "PUT /contents/{id}/vote (kendi içeriğine) [sahip]",
@@ -1505,7 +1640,12 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
     let banli_hedef = seed_post(&router, &owner_key, "oy hedefi banli").await;
     assert_code(
         &router,
-        auth_json_req("PUT", &format!("/contents/{banli_hedef}/vote"), &banned_key, json!({ "value": 1 })),
+        auth_json_req(
+            "PUT",
+            &format!("/contents/{banli_hedef}/vote"),
+            &banned_key,
+            json!({ "value": 1 }),
+        ),
         StatusCode::FORBIDDEN,
         "BANNED",
         "PUT /contents/{id}/vote [banli]",
@@ -1528,7 +1668,13 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", "/me/votes", token), StatusCode::OK, &format!("GET /me/votes [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", "/me/votes", token),
+            StatusCode::OK,
+            &format!("GET /me/votes [{rol}]"),
+        )
+        .await;
     }
 
     // --- PUT /contents/{id}/save — sahiplik kısıtı yok, kendi içeriğini
@@ -1558,7 +1704,11 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
     }
     assert_code(
         &router,
-        auth_req("PUT", &format!("/contents/{kaydet_hedefi}/save"), &banned_key),
+        auth_req(
+            "PUT",
+            &format!("/contents/{kaydet_hedefi}/save"),
+            &banned_key,
+        ),
         StatusCode::FORBIDDEN,
         "BANNED",
         "PUT /contents/{id}/save [banli]",
@@ -1590,7 +1740,11 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
     }
     assert_code(
         &router,
-        auth_req("DELETE", &format!("/contents/{kaydet_hedefi}/save"), &banned_key),
+        auth_req(
+            "DELETE",
+            &format!("/contents/{kaydet_hedefi}/save"),
+            &banned_key,
+        ),
         StatusCode::FORBIDDEN,
         "BANNED",
         "DELETE /contents/{id}/save [banli]",
@@ -1607,7 +1761,11 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
         "PUT /actors/{username}/follow [anon]",
     )
     .await;
-    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key), ("admin", &admin_key)] {
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
         assert_status(
             &router,
             auth_req("PUT", "/actors/am_int_owner/follow", token),
@@ -1683,7 +1841,13 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", "/me/saves", token), StatusCode::OK, &format!("GET /me/saves [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", "/me/saves", token),
+            StatusCode::OK,
+            &format!("GET /me/saves [{rol}]"),
+        )
+        .await;
     }
 }
 
@@ -1733,10 +1897,22 @@ async fn notification_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", "/me/inbox", token), StatusCode::OK, &format!("GET /me/inbox [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", "/me/inbox", token),
+            StatusCode::OK,
+            &format!("GET /me/inbox [{rol}]"),
+        )
+        .await;
     }
 
-    let inbox = assert_status(&router, auth_req("GET", "/me/inbox", &owner_key), StatusCode::OK, "GET /me/inbox (id almak için)").await;
+    let inbox = assert_status(
+        &router,
+        auth_req("GET", "/me/inbox", &owner_key),
+        StatusCode::OK,
+        "GET /me/inbox (id almak için)",
+    )
+    .await;
     let notification_id = inbox["notifications"][0]["id"]
         .as_str()
         .expect("owner'ın gelen kutusunda en az bir bildirim olmalı")
@@ -1753,7 +1929,11 @@ async fn notification_uclarinin_yetki_matrisi(pool: PgPool) {
     )
     .await;
     // Başkasının bildirimi: var olmadığı gibi davranıyor (404, sızıntı yok).
-    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key), ("admin", &admin_key)] {
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
         assert_code(
             &router,
             auth_req("PATCH", &mark_uri, token),
@@ -1838,7 +2018,13 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
     seed_post_with_tag(&router, &owner_key, "etiketli post", "amyetkietiketi").await;
 
     // --- GET /feed — kimlik gerektirmiyor, tamamen herkese açık ---
-    assert_status(&router, empty_req("GET", "/feed"), StatusCode::OK, "GET /feed [anon]").await;
+    assert_status(
+        &router,
+        empty_req("GET", "/feed"),
+        StatusCode::OK,
+        "GET /feed [anon]",
+    )
+    .await;
     for (rol, token) in [
         ("normal", &normal_key),
         ("sahip", &owner_key),
@@ -1846,7 +2032,13 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", "/feed", token), StatusCode::OK, &format!("GET /feed [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", "/feed", token),
+            StatusCode::OK,
+            &format!("GET /feed [{rol}]"),
+        )
+        .await;
     }
 
     // --- GET /feed/following — kimlik gerekli ---
@@ -1865,7 +2057,13 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
         ("admin", &admin_key),
         ("banli", &banned_key),
     ] {
-        assert_status(&router, auth_req("GET", "/feed/following", token), StatusCode::OK, &format!("GET /feed/following [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", "/feed/following", token),
+            StatusCode::OK,
+            &format!("GET /feed/following [{rol}]"),
+        )
+        .await;
     }
 
     // --- GET /search, GET /tags, GET /tags/search, GET /tags/{name}/posts
@@ -1877,7 +2075,13 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
         "/tags/amyetkietiketi/posts",
     ];
     for uri in public_reads {
-        assert_status(&router, empty_req("GET", uri), StatusCode::OK, &format!("GET {uri} [anon]")).await;
+        assert_status(
+            &router,
+            empty_req("GET", uri),
+            StatusCode::OK,
+            &format!("GET {uri} [anon]"),
+        )
+        .await;
         for (rol, token) in [
             ("normal", &normal_key),
             ("sahip", &owner_key),
@@ -1885,7 +2089,13 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
             ("admin", &admin_key),
             ("banli", &banned_key),
         ] {
-            assert_status(&router, auth_req("GET", uri, token), StatusCode::OK, &format!("GET {uri} [{rol}]")).await;
+            assert_status(
+                &router,
+                auth_req("GET", uri, token),
+                StatusCode::OK,
+                &format!("GET {uri} [{rol}]"),
+            )
+            .await;
         }
     }
 }
@@ -1952,7 +2162,11 @@ async fn upload_uclarinin_yetki_matrisi(pool: PgPool) {
         "DELETE /uploads/{id} [anon]",
     )
     .await;
-    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key), ("admin", &admin_key)] {
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
         let hedef = seed_upload(&router, &owner_key).await;
         assert_code(
             &router,
@@ -2019,7 +2233,11 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
         "POST /reports [anon]",
     )
     .await;
-    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key), ("admin", &admin_key)] {
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
         let post = seed_post(&router, &owner_key, &sikayet_hedefi(rol)).await;
         assert_status(
             &router,
@@ -2099,7 +2317,13 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
         .await;
     }
     for (rol, token) in [("moderator", &mod_key), ("admin", &admin_key)] {
-        assert_status(&router, auth_req("GET", "/admin/reports", token), StatusCode::OK, &format!("GET /admin/reports [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", "/admin/reports", token),
+            StatusCode::OK,
+            &format!("GET /admin/reports [{rol}]"),
+        )
+        .await;
     }
     assert_code(
         &router,
@@ -2132,7 +2356,12 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
     }
     assert_code(
         &router,
-        auth_json_req("PATCH", &patch_uri, &banned_key, json!({ "status": "resolved" })),
+        auth_json_req(
+            "PATCH",
+            &patch_uri,
+            &banned_key,
+            json!({ "status": "resolved" }),
+        ),
         StatusCode::FORBIDDEN,
         "BANNED",
         "PATCH /admin/reports/{id} [banli]",
@@ -2140,7 +2369,12 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
     .await;
     assert_status(
         &router,
-        auth_json_req("PATCH", &patch_uri, &mod_key, json!({ "status": "resolved" })),
+        auth_json_req(
+            "PATCH",
+            &patch_uri,
+            &mod_key,
+            json!({ "status": "resolved" }),
+        ),
         StatusCode::OK,
         "PATCH /admin/reports/{id} [moderator]",
     )
@@ -2179,7 +2413,10 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
         &router,
         empty_req(
             "DELETE",
-            &format!("/admin/contents/{}", seed_post(&router, &owner_key, "anon mod-delete").await),
+            &format!(
+                "/admin/contents/{}",
+                seed_post(&router, &owner_key, "anon mod-delete").await
+            ),
         ),
         StatusCode::UNAUTHORIZED,
         "MISSING_CREDENTIALS",
@@ -2438,7 +2675,13 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
         .await;
     }
     for (rol, token) in [("moderator", &mod_key), ("admin", &admin_key)] {
-        assert_status(&router, auth_req("GET", "/admin/actions", token), StatusCode::OK, &format!("GET /admin/actions [{rol}]")).await;
+        assert_status(
+            &router,
+            auth_req("GET", "/admin/actions", token),
+            StatusCode::OK,
+            &format!("GET /admin/actions [{rol}]"),
+        )
+        .await;
     }
     assert_code(
         &router,

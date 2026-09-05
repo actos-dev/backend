@@ -38,11 +38,33 @@ use sqlx::PgPool;
 /// imzası istiyor.
 const MAX_UPLOAD: usize = 8 * 1024 * 1024;
 
+/// `.env`'i process ortamına **bir kez** yükler.
+///
+/// Bu dosya `Config::from_env()` çağırıyor, o da `DATABASE_URL` gibi
+/// değişkenleri process ortamından okuyor. Daha önce burada `dotenv()`
+/// çağrısı yoktu ve iş yalnızca `#[sqlx::test]`'in kendi kurulumunda `.env`'i
+/// yüklemesiyle yürüyordu — yani saf `#[test]` olan
+/// [`for_trust_level_kademeleri_doğru_eşler_ve_aralık_dışını_kenetler`] bir
+/// **yarışa** bağlıydı: test thread'leri paralel koştuğu için o test bir
+/// `#[sqlx::test]` kardeşinden önce çalışırsa `Missing("DATABASE_URL")` ile
+/// panikliyordu (`--exact` ile tek başına koşturulduğunda %100 kırılıyor).
+///
+/// `Once`, edition 2024'te `env::set_var`'ın veri yarışı olması sebebiyle de
+/// gerekli: yükleme tek thread'de, tek sefer olur.
+fn load_env_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // Yoksa hata değil: CI ortamı değişkenleri doğrudan export edebilir.
+        let _ = dotenvy::dotenv();
+    });
+}
+
 #[allow(clippy::expect_used)]
 fn real_env() -> Config {
+    load_env_once();
     Config::from_env().expect(
-        "ortam .env'den okunabilmeli — `set -a && . ./.env && set +a` ile \
-         export edilmiş olmalı (bkz. docker-compose.yml)",
+        "ortam .env'den ya da doğrudan export'tan okunabilmeli — bkz. \
+         docker-compose.yml",
     )
 }
 
