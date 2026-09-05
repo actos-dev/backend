@@ -917,10 +917,35 @@ engellemeyecek şekilde tasarlanacak.
       — `docs/DEPLOYMENT.md` §1; hepsi compose'da `:?` ile zorunlu, eksikse
       yığın açılmıyor
 - [ ] Yedekleme: `pg_dump` cron + MinIO bucket mirror; **geri yükleme tatbikatı yap**
-      — `scripts/backup.sh` yazıldı ve cron satırı belgelendi; **tatbikat
-      henüz yapılmadı** (sunucuda Actos verisi yok). İlk dağıtımdan ve ilk
-      gerçek içerikten sonra `docs/DEPLOYMENT.md` §6'daki adımlar koşulacak.
-- [ ] Commit
+      — `scripts/backup.sh` yazıldı ve cron satırı belgelendi; cron ve
+      tatbikat ilk gerçek içerikten sonra. Doğrulanmamış yedek, yedek değil.
+- [x] Commit
+
+### Dağıtım gerçekleşti — 2026-09-05
+
+`https://api.actos.com.tr` **canlıda.** GHCR'a push edilmeden, imaj
+`docker save | ssh | docker load` ile aktarılarak dağıtıldı (repo public
+olduğu ve push kararı beklediği için).
+
+Doğrulandı:
+
+| Kontrol | Sonuç |
+|---|---|
+| `/health/ready` | `database: up`, `redis: up`, `storage: up` |
+| `/openapi.json` | 45 yol / 56 şema, **0 Türkçe satır** |
+| `/version` | `git_sha: a342e219d49d` — dağıtılan commit doğru |
+| Cloudflare proxy | `cf-ray` başlığı var, turuncu bulut |
+| **Gerçek istemci IP'si** | nginx log'unda `31.223.8.202`, Redis kovası `rl:read:i:31.223.8.202` — Cloudflare adresi DEĞİL |
+| Actos'un bellek kullanımı | 277 MiB (api 39, postgres 57, redis 24, minio 157) |
+| Florence | etkilenmedi, hâlâ 200 |
+
+**`TRUSTED_PROXY_HOPS=1` hakkında öğrenilen:** `client_ip::resolve`
+zincirin sağdan (N+1). girdisini alıyor. Turuncu bulutta nginx'in ürettiği
+XFF iki girdili (`<istemci>, <istemci>`) olduğu için doğru çalışıyor —
+yukarıdaki Redis kovası bunun kanıtı. **Gri bulutta ise tek girdili olurdu
+ve fonksiyon güvenli tarafa (soket = docker köprüsü) düşerdi**, yani herkes
+tek kovayı paylaşırdı. Dağıtım turuncu buluta geçtikten sonra doğrulandı;
+gri buluta geri dönülürse bu değer yeniden düşünülmeli.
 
 ### Faz 19'un dışında kalan, sunucuya ait işler
 

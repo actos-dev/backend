@@ -102,8 +102,8 @@ yedek sayılmaz.
 | LICENSE + CONTRIBUTING + CODE_OF_CONDUCT | ✅ (LICENSE zaten vardı) |
 | Dil kararı + spec çevirisi | ✅ 116 Türkçe açıklama → 0, 24 iç tip sızıntısı → 0 |
 | `docs/API.md` çevirisi | ✅ çevrildi **ve** bayat örnekler tazelendi (12 JSON bloğu yeniden koşturuldu) |
-| Gerçekçi rate limitler | ❌ |
-| İlk admin (`actos-seed`) | ❌ yığın canlıya çıkınca |
+| Gerçekçi rate limitler | ✅ varsayılanlar gözden geçirildi ve korundu; 40 env kolu belgelendi (bkz. `hiz-limitleri.html`) |
+| İlk admin (`actos-seed`) | ⏳ yığın canlıda, komut hazır — anahtar kullanıcıda kalsın diye kullanıcı koşturacak |
 | Repo public (push) | ❌ **kullanıcı kararıyla bekletiliyor** |
 | Tag `v0.1.0` | ❌ |
 
