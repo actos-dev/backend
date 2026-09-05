@@ -114,19 +114,59 @@ yayılana kadar bekliyor.
 
 ## 5. Diğer repolara yayılan iş
 
-Bu repo hazır ama zincirin geri kalanı değil. Deployment turundan önce:
+### `actos-types` Apache-2.0'a çevrilecek — bu repoda yapılacak
 
-| Repo | Kritik eksik |
+**Karar verildi (kullanıcı, 2026-09-05).** Bugün SDK yayın turuna
+hazırlanırken çıktı ve gerçek bir engel:
+
+```
+crates/actos-types/Cargo.toml → license.workspace = true → AGPL-3.0-only
+rust SDK  (actos-dev/rust)    → Apache-2.0
+```
+
+**Apache-2.0 bir crate, AGPL bir kütüphaneye bağlanıp Apache-2.0
+kalamaz.** AGPL copyleft ve bulaşıcı: Rust SDK'sını kullanan herkesin
+uygulaması da AGPL olmak zorunda kalırdı. Bir SDK için bu istenenin tam
+tersi — SDK'lar tam bu yüzden izin verici lisansla dağıtılır.
+
+Desen yaygın ve temiz: **sunucu AGPL kalır, paylaşılan istemci tipleri
+izin verici olur.** `actos-types` zaten backend'e değil sözleşmeye ait —
+CLI ve dört SDK onu paylaşıyor.
+
+Yapılacaklar:
+
+- [ ] `crates/actos-types/Cargo.toml`: `license.workspace = true` yerine
+      kendi `license = "Apache-2.0"` satırı
+- [ ] O crate'in dizinine kendi `LICENSE` dosyası (Apache-2.0 metni)
+- [ ] `crates/actos-types/README.md` — crates.io paket sayfasında görünecek
+- [ ] Workspace'in geri kalanının AGPL kaldığını doğrula (`actos-api`,
+      `actos-core` değişmiyor)
+- [ ] `cargo publish -p actos-types` → crates.io (`actos-types` adı müsait,
+      kontrol edildi 2026-09-05)
+
+**Bu, `cli` ve `rust` repolarının yayınının önkoşulu:** ikisi de
+`actos-types`'ı path bağımlılığıyla çekiyor ve `cargo publish` path
+bağımlılığı kabul etmiyor. `actos-types` yayınlanmadan ikisi de
+yayınlanamaz. Ayrıntı: o repoların `PUBLISH.md` dosyaları.
+
+### Repo repo durum
+
+Aşağıdaki tablo 2026-09-03 tarihliydi ve **bayat**: o günden beri
+`cli`, `rust`, `python`, `node` ve `kotlin`'de yayın dışı bütün eksikler
+kapandı, `frontend` kodlandı. Her birinin kendi `YAPILACAKLAR.md`'si
+güncel durumu taşıyor; `cli`, `rust` ve `kotlin`'in ayrıca `PUBLISH.md`'si
+var.
+
+| Repo | Kalan tek iş |
 |---|---|
-| `cli` | `inbox`/`watch`/avatar/`--actor-type` komutları yok; `actos help --json` Ajan Sözleşmesi Türkçe; `cargo install` çalışmaz (path bağımlılığı) |
-| `rust` | `client.inbox()` yok; `Cargo.toml:13` path bağımlılığı → `cargo package` kırık; SDK hâlâ `"[silindi]"` bekliyor, backend `"[deleted]"` dönüyor |
-| `node` | `openapi.json` 42 yolda; `src/resources/inbox.ts` yok; CI kendi kopyasına baktığı için sürüklenme sessiz |
-| `python` | `generate_types.py --check` şu anda kırık; `inbox` kaynağı yok; `comments.list` yeni `body_html` parametresini almıyor |
-| `frontend` | Hiç kod yok |
-| `desktop` | Hiç kod yok; web ve Rust SDK'ya bağımlı |
-| `kotlin` | Hiç kod yok; planı güncel, bağımlılık engeli yok |
-
-Her birinin kendi `YAPILACAKLAR.md`'si var.
+| `cli` | yayın — path bağımlılığı + `actos` ad çakışması + Türkçe `description` |
+| `rust` | yayın — path bağımlılığı + lisans (yukarıdaki madde) |
+| `python` | PyPI yayını (trusted publishing planlanıyor, token gerekmiyor) |
+| `node` | npm yayını (`NPM_TOKEN` kondu) |
+| `kotlin` | Maven Central — namespace kararı bekliyor, bkz. `kotlin/PUBLISH.md` |
+| `dotnet` | NuGet yayını (trusted publishing) |
+| `frontend` | dağıtım — `actos.com.tr` nginx'te hazır, şimdilik 503 döndürüyor |
+| `desktop` | hiç kod yok |
 
 ## 6. Sıra önerisi — sunucu tarafındaki elle adımlar
 
