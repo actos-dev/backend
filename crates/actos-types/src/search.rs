@@ -1,43 +1,43 @@
-//! `GET /search` uçlarının yanıt tipleri.
+//! Response types for the `GET /search` endpoints.
 //!
-//! `crates/actos-types` kuralı gereği burada hiçbir sunucu bağımlılığı yok
-//! (bkz. crate kök dokümantasyonu) — yalnızca `serde`.
+//! As the `crates/actos-types` rule requires, there is no server dependency
+//! here (see the crate root documentation) — only `serde`.
 //!
-//! **İki ayrı yanıt şekli, tek yanıt şekli DEĞİL:** `?type=post`/
-//! `?type=comment` [`ContentSearchResponse`] (öğeler [`ContentSummary`]),
-//! `?type=actor` [`ActorSearchResponse`] (öğeler `ActorSummary`) döner.
-//! Tek bir birleşik "sonuç" tipi (ör. bir enum/`untagged` DTO) tercih
-//! edilmedi çünkü üç arama türü gerçekten farklı şeyler döndürüyor
-//! (içerik vs. actor) — bunları tek bir şemaya zorlamak ya alanların
-//! çoğunu `Option` yapıp "hangi durumda hangisi dolu" belirsizliğini
-//! istemciye (özellikle bir ajana) bırakırdı, ya da bir `variant` etiketi
-//! altında iç içe bir `content`/`actor` alanı gerektirirdi
-//! (`actos_types::content::CommentNodeResponse`'un `flatten` tercih etme
-//! gerekçesiyle aynı ilke: istemci `sonuc.title` yazabilmeli, `sonuc.
-//! content.title` değil). `?type=` zaten hangi şeklin geleceğini
-//! istekte önceden söylüyor, yanıtta ayrıca bir ayrım etiketine gerek yok.
+//! **Two response shapes, NOT one:** `?type=post` / `?type=comment` return
+//! [`ContentSearchResponse`] (items are [`ContentSummary`]), `?type=actor`
+//! returns [`ActorSearchResponse`] (items are [`ActorSummary`]). A single
+//! unified "result" type (an enum or an `untagged` DTO) was rejected because
+//! the three search kinds genuinely return different things (content vs.
+//! actor). Forcing them into one schema would either make most fields
+//! `Option` — leaving "which one is filled when" for the client (an agent in
+//! particular) to figure out — or require a nested `content`/`actor` field
+//! under a `variant` tag. That is the same principle behind
+//! [`CommentNodeResponse`](crate::content::CommentNodeResponse) preferring
+//! `flatten`: a client should be able to write `result.title`, not
+//! `result.content.title`. `?type=` already states in the request which shape
+//! is coming back, so no discriminator is needed in the response.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{auth::ActorSummary, content::ContentSummary};
 
-/// `GET /search?type=post` / `?type=comment` yanıtı.
+/// Response of `GET /search?type=post` / `?type=comment`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ContentSearchResponse {
     pub results: Vec<ContentSummary>,
-    /// `None` ise bu son sayfadır. **Yalnızca aynı `q` ile** sonraki
-    /// sayfayı istemek için anlamlıdır — bkz.
-    /// `actos_core::search` modül dokümantasyonu "Cursor" bölümü.
+    /// `None` means this is the last page. It is only meaningful for
+    /// requesting the next page **with the same `q`**: the cursor encodes a
+    /// position within the ranking produced by that query.
     pub next_cursor: Option<String>,
 }
 
-/// `GET /search?type=actor` yanıtı.
+/// Response of `GET /search?type=actor`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorSearchResponse {
     pub results: Vec<ActorSummary>,
-    /// `None` ise bu son sayfadır. Bkz. [`ContentSearchResponse::next_cursor`]
-    /// üzerindeki aynı not.
+    /// `None` means this is the last page. The same note as on
+    /// [`ContentSearchResponse::next_cursor`] applies.
     pub next_cursor: Option<String>,
 }

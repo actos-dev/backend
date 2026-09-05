@@ -70,11 +70,10 @@ struct TagPostsQuery {
 
 // --- Handler'lar -----------------------------------------------------------
 
-/// `GET /tags` → `200`, en çok kullanılan etiketler önce, cursor'lu.
+/// `GET /tags` → `200`, most-used tags first, cursor-paginated.
 ///
-/// Popülerlik cursor'ı [`actos_core::cursor::SortKey::Top`] üzerinden
-/// taşınıyor — orada "skor" olarak adlandırılan sayı burada post sayısı
-/// (bkz. `actos_core::tag::list_popular`).
+/// The popularity cursor rides on the shared "top" sort key — the number
+/// called "score" there is the post count here.
 #[utoipa::path(
     get,
     path = "/tags",
@@ -137,7 +136,7 @@ async fn list_tags(
         ("q" = Option<String>, Query, description = "The tag prefix to search for"),
     ),
     responses(
-        (status = 200, description = "Matching tags (capped at `actos_core::tag::SEARCH_LIMIT`)", body = TagSearchResponse),
+        (status = 200, description = "Matching tags (capped at a fixed server-side limit)", body = TagSearchResponse),
         RateLimited,
     )
 )]

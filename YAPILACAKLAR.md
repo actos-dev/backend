@@ -65,16 +65,12 @@ listesine geri düşmemeleri için burada:
   gerekçesiyle süresiz ertelendi. Tasarımın tamamı NOTES §9.2'de saklı;
   geri alınırsa oradan devam edilir. **Dört SDK ve CLI'ın planlarından da
   düşürüldü** — bu repoda bir uç açılırsa onların da güncellenmesi gerekir.
-- **Türkçe şema açıklamaları** (`NOTES.md` §10). `utoipa`,
-  `#[derive(ToSchema)]` tiplerinin `///` yorumlarını spec'e taşıyor;
-  56 şemanın 54'ü ve iki uç (`DELETE /auth/keys/{key_id}`, `GET /tags`)
-  `GET /openapi.json`'da Türkçe açıklama servis ediyor. **Kullanıcı kararı:
-  v1'de böyle kalır.** Faz 20'de repo public'e açılmadan önce "geliştirme
-  dili" sorusunun parçası olarak bütünsel ele alınacak.
-  - **Bilinen yan etki:** bu açıklamalar Python SDK'sının üretilen
-    tiplerine `Field(description=...)` olarak, Rust SDK'sının rustdoc'una
-    da doğrudan geçiyor (`actos-types` onun bağımlılığı). Yani karar
-    yalnızca spec'i değil SDK'ların kamuya açık yüzeyini de etkiliyor.
+- ~~**Türkçe şema açıklamaları** (`NOTES.md` §10)~~ → **ÇÖZÜLDÜ 2026-09-05.**
+  Karar Faz 20'de değiştirildi: projenin ana dili İngilizce. `docs/openapi.json`
+  116 Türkçe açıklamadan **0**'a indi; ayrıca public sözleşmeye sızmış 24 iç
+  Rust tip yolu (`[`actos_core::cursor::SortKey::Top`] gibi) temizlendi.
+  Yol/şema sayısı değişmedi (45/56) — yalnızca açıklamalar. Bkz. PLAN.md
+  Faz 20 → "Dil kararı".
 
 ## 3. Faz 19 — Paketleme ve deploy (kod tarafı bitti)
 
@@ -97,12 +93,24 @@ Bu repoda üretilenler:
 verisi olmadığı için ilk dağıtımdan sonraya kaldı. Doğrulanmamış yedek,
 yedek sayılmaz.
 
-## 4. Faz 20 — v1 çıkış listesi (ertelendi)
+## 4. Faz 20 — v1 çıkış listesi (kısmen bitti)
 
-8 madde: sırların prod'da değiştirilmesi (`ID_OBFUSCATION_KEY` dahil), ilk
-admin'in seed script'iyle oluşturulması, `docs/API.md` + `llms.txt`
-güncelliği, gerçekçi hız limitleri, README'ye "5 dakikada ilk post",
-LICENSE/CONTRIBUTING/CODE_OF_CONDUCT, repo public, tag `v0.1.0`.
+| Madde | Durum |
+|---|---|
+| Prod sırları değiştirildi | ✅ sunucuda `/opt/actos/.env.prod` (600), hepsi `openssl rand` |
+| README "5 dakikada ilk post" | ✅ yazıldı, İngilizce; her komut gerçekten koşturuldu |
+| LICENSE + CONTRIBUTING + CODE_OF_CONDUCT | ✅ (LICENSE zaten vardı) |
+| Dil kararı + spec çevirisi | ✅ 116 Türkçe açıklama → 0, 24 iç tip sızıntısı → 0 |
+| `docs/API.md` çevirisi | ❌ 452 satırın 155'i hâlâ Türkçe |
+| Gerçekçi rate limitler | ❌ |
+| İlk admin (`actos-seed`) | ❌ yığın canlıya çıkınca |
+| Repo public (push) | ❌ **kullanıcı kararıyla bekletiliyor** |
+| Tag `v0.1.0` | ❌ |
+
+**Repo hakkında önemli not:** `github.com/actos-dev/backend` GitHub'da
+zaten public ama **tamamen boş** — 79 commit hiç push edilmedi. Yani push
+sıradan bir senkronizasyon değil, kodu dünyaya açmak. Faz 20 bitene ve DNS
+yayılana kadar bekliyor.
 
 ## 5. Diğer repolara yayılan iş
 

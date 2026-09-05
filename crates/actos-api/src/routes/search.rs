@@ -70,7 +70,7 @@ struct SearchQuery {
     description = "`type` is required: `post`, `comment`, or `actor`. `?type=post`/`?type=comment` \
         return the `ContentSearchResponse` shape (documented below); `?type=actor` returns the same \
         envelope (`{\"results\": [...], \"next_cursor\": ...}`) but the items inside `results` are \
-        `ActorSummary` — see `actos_types::search::ActorSearchResponse`. If `q` is omitted, an empty \
+        `ActorSummary` objects. If `q` is omitted, an empty \
         result list is returned, not an error.",
     params(
         ("q" = Option<String>, Query, description = "Search query"),

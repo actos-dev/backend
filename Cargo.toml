@@ -12,7 +12,7 @@ edition = "2024"
 rust-version = "1.96"
 license = "AGPL-3.0-only"
 repository = "https://github.com/actos/actos-backend"
-authors = ["Actos katkıcıları"]
+authors = ["Actos contributors"]
 
 # Tüm sürümler burada pinlenir; crate'ler `workspace = true` ile alır.
 # Böylece iki crate aynı bağımlılığın iki farklı sürümünü çekemez.

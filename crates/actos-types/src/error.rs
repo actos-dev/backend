@@ -1,48 +1,49 @@
 use serde::{Deserialize, Serialize};
 
-/// API'nin döndürebileceği makine-okunur hata kodları.
+/// Machine-readable error codes the API can return.
 ///
-/// Yanıt gövdesinde `code` alanında string olarak taşınır (`"RATE_LIMITED"`).
-/// Bu liste bir sözleşmedir: var olan bir kodun anlamı değiştirilmez, sadece
-/// yenisi eklenir.
+/// Carried as a string in the `code` field of the response body
+/// (`"RATE_LIMITED"`). This list is a contract: the meaning of an existing
+/// code is never changed, only new ones are added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-// Bilerek `non_exhaustive` değil: yeni bir kod eklendiğinde onu HTTP durumuna
-// ve başlığa eşleyen `match`'lerin derlenmemesini istiyoruz. Yeni kod eklemek
-// zaten API sözleşmesinde bir değişiklik.
+// Deliberately not `non_exhaustive`: when a new code is added we want the
+// `match`es that map it to an HTTP status and title to stop compiling.
+// Adding a code is a change to the API contract anyway.
 pub enum ErrorCode {
-    /// İstek gövdesi/parametreleri doğrulamadan geçmedi.
+    /// The request body or parameters failed validation.
     ValidationFailed,
-    /// `Authorization` header'ı yok ya da biçimi bozuk.
+    /// The `Authorization` header is missing or malformed.
     MissingCredentials,
-    /// API key geçersiz, iptal edilmiş veya bilinmiyor.
+    /// The API key is invalid, revoked or unknown.
     InvalidKey,
-    /// Kimlik doğrulandı ama bu eylem için yetki yok.
+    /// Authenticated, but not authorized for this action.
     Forbidden,
-    /// Hesap askıya alınmış.
+    /// The account is suspended.
     Banned,
-    /// Kaynak yok.
+    /// The resource does not exist.
     NotFound,
-    /// Kaynak vardı, silindi.
+    /// The resource existed and was deleted.
     Gone,
-    /// Benzersizlik ihlali (kullanıcı adı alınmış, aynı rapor tekrar açılmış...).
+    /// Uniqueness violation (username taken, same report filed twice, ...).
     Conflict,
-    /// Hız limiti aşıldı — `Retry-After` header'ına bak.
+    /// Rate limit exceeded — see the `Retry-After` header.
     RateLimited,
-    /// Yüklenen dosya kabul edilmedi (tip, boyut veya içerik doğrulaması).
+    /// The uploaded file was rejected (type, size or content validation).
     UnsupportedMedia,
-    /// Sayfalama cursor'ı bozuk ya da başka bir sıralamaya ait.
+    /// The pagination cursor is malformed or belongs to a different sort.
     InvalidCursor,
-    /// Sunucu tarafı hata. Detay yanıtta değil, logda.
+    /// Server-side error. The detail is in the log, not in the response.
     Internal,
 }
 
 impl ErrorCode {
-    /// Bu hata koduna karşılık gelen HTTP durum kodu.
+    /// The HTTP status code corresponding to this error code.
     ///
-    /// `http` crate'ine bağımlı olmamak için düz `u16` döner — bu crate'i
-    /// SDK'lar ve CLI de kullanıyor, onlara HTTP bağımlılığı dayatmıyoruz.
+    /// Returns a plain `u16` so that this crate does not depend on the `http`
+    /// crate — the SDKs and the CLI use it too, and we do not force an HTTP
+    /// dependency on them.
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {

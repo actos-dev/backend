@@ -1,62 +1,62 @@
-//! Actos API'sinin paylaşılan tipleri.
+//! Shared types of the Actos API.
 //!
-//! Bu crate **hiçbir zorunlu** sunucu bağımlılığı içermez (veritabanı, HTTP
-//! framework yok) — çünkü aynı tipleri CLI, TUI ve Rust SDK de kullanacak.
-//! API'nin şekli değiştiğinde hepsi derleme zamanında kırılır,
-//! senkronizasyonu elle takip etmeye gerek kalmaz.
+//! This crate carries **no mandatory** server dependency (no database, no
+//! HTTP framework) — because the CLI, the TUI and the Rust SDK use the same
+//! types. When the shape of the API changes, all of them break at compile
+//! time, so nobody has to track the synchronization by hand.
 //!
-//! ## `openapi` feature'ı — ilke bozulmuyor, opsiyonel kalıyor
+//! ## The `openapi` feature — the principle holds, it stays optional
 //!
-//! `actos-api`'nin OpenAPI spec'i (Faz 16) her DTO için bir `utoipa::ToSchema`
-//! türetmesi istiyor, ve bu türetme `utoipa`'ya derleme zamanı bağımlılığı
-//! gerektiriyor. Bunu bu crate'e koşulsuz eklemek yukarıdaki ilkeyi bozardı:
-//! CLI/TUI/SDK gibi HTTP sunucusuyla hiç ilgisi olmayan tüketiciler `utoipa`
-//! ve onun proc-macro bağımlılıklarını (`syn`, `quote`, ...) boşuna
-//! derlemek zorunda kalırdı.
+//! The OpenAPI spec of `actos-api` needs a `utoipa::ToSchema` derive on every
+//! DTO, and that derive requires a compile-time dependency on `utoipa`.
+//! Adding it to this crate unconditionally would break the principle above:
+//! consumers with nothing to do with an HTTP server — the CLI, the TUI, the
+//! SDK — would have to compile `utoipa` and its proc-macro dependencies
+//! (`syn`, `quote`, ...) for nothing.
 //!
-//! Çözüm: `utoipa` bağımlılığı `optional = true` ve yalnızca bu crate'in
-//! `openapi` feature'ı açıkken çekiliyor (bkz. `Cargo.toml`). Her DTO'daki
-//! türetme de buna göre koşullu:
+//! The solution: the `utoipa` dependency is `optional = true` and is pulled
+//! in only when this crate's `openapi` feature is enabled (see `Cargo.toml`).
+//! The derive on each DTO is conditional to match:
 //! ```ignore
 //! #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 //! ```
-//! Feature kapalıyken (varsayılan — CLI/SDK'nın aldığı hâl) bu satır hiçbir
-//! iz bırakmıyor, tip yalnızca `serde` ile var oluyor. Yalnızca `actos-api`
-//! bu feature'ı açıyor (bkz. `crates/actos-api/Cargo.toml`) — ilke ("hiçbir
-//! sunucu bağımlılığı" değil, artık "hiçbir **zorunlu** sunucu bağımlılığı")
-//! feature bayrağının kendisiyle korunuyor.
+//! With the feature off (the default — what the CLI and the SDK get) that
+//! line leaves no trace and the type exists with `serde` alone. Only
+//! `actos-api` enables the feature, so the principle — no longer "no server
+//! dependency" but "no **mandatory** server dependency" — is enforced by the
+//! feature flag itself.
 
-/// Actor profilleri ve dizin/keşif uçlarının istek/yanıt tipleri.
+/// Request/response types for actor profiles and the directory endpoints.
 pub mod actor;
 
-/// Kimlik doğrulama uçlarının istek/yanıt tipleri.
+/// Request/response types for the authentication endpoints.
 pub mod auth;
 
-/// İçerik (post + yorum) uçlarının istek/yanıt tipleri.
+/// Request/response types for the content (post + comment) endpoints.
 pub mod content;
 
-/// Oy / takip / kaydetme uçlarının istek-yanıt tipleri.
+/// Request/response types for the vote, follow and save endpoints.
 pub mod interaction;
 
-/// Şikayet ve admin uçlarının istek-yanıt tipleri.
+/// Request/response types for the report and admin endpoints.
 pub mod moderation;
 
-/// `GET /me/inbox` ve okundu-işaretleme uçlarının yanıt/istek tipleri.
+/// Request/response types for `GET /me/inbox` and the mark-as-read endpoints.
 pub mod notification;
 
-/// Dosya yükleme uçlarının yanıt tipleri.
+/// Response types for the file upload endpoints.
 pub mod upload;
 
-/// Makine-okunur hata kodları.
+/// Machine-readable error codes.
 ///
-/// AI ajanların hatayı programatik olarak ele alabilmesi için, insan-okunur
-/// mesajdan daha önemli: mesaj metni değişebilir, bu kodlar değişmez.
+/// More important than the human-readable message for an AI agent handling
+/// errors programmatically: the message text may change, these codes do not.
 pub mod error;
 
-/// `GET /search` uçlarının yanıt tipleri.
+/// Response types for the `GET /search` endpoints.
 pub mod search;
 
-/// Etiket uçlarının yanıt tipleri.
+/// Response types for the tag endpoints.
 pub mod tag;
 
 pub use error::ErrorCode;

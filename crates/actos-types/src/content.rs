@@ -1,118 +1,115 @@
-//! İçerik (post + yorum) uçlarının istek/yanıt tipleri.
+//! Request/response types for the content (post + comment) endpoints.
 //!
-//! **Tek DTO, hem post hem yorum:** [`ContentSummary`] post'a özel değil,
-//! `contents` tablosunun kendisi gibi *içerik*'e geneldir — sebebi
-//! `actos_core::id` modülünün "Ortak ön ek" bölümündeki gerekçeyle aynı:
-//! post ve yorum aynı tabloda, aynı ID uzayında yaşıyor (`c_...`). Bu
-//! yanıt şeklinin ömrü bu fazı çok aşıyor: Faz 9 (yorumlar), Faz 10
-//! (`GET /tags/{name}/posts`), Faz 12 (feed) ve Faz 7'den devredilen
-//! `GET /actors/{username}/posts` hepsi bunu aynen yeniden kullanacak — bu
-//! yüzden burada post'a özgü hiçbir alan (ör. yorum sayısı hariç, o zaten
-//! post ve yorum ikisinde de anlamlı) yok.
+//! **One DTO for both posts and comments:** [`ContentSummary`] is not
+//! post-specific; like the contents table itself it is general to *content*.
+//! Posts and comments live in the same table and the same id space
+//! (`c_...`). This response shape outlives any single phase: the comment
+//! tree, `GET /tags/{name}/posts`, the feed and
+//! `GET /actors/{username}/posts` all reuse it verbatim — which is why there
+//! is no post-only field here (the comment count is an exception, and it is
+//! meaningful for both).
 //!
 //! ## `title: Option<String>`
 //!
-//! Yorumlarda her zaman `None` (bkz. `migrations/0005_contents.up.sql` →
-//! `ck_contents_shape`: `content_type='comment'` iken `title IS NULL`
-//! şema seviyesinde zorunlu).
+//! Always `None` on comments — a schema-level check constraint enforces
+//! `title IS NULL` when `content_type = 'comment'`.
 //!
-//! ## `deleted` alanı neden var — `GET /posts/{id}` zaten `410` dönüyorken
+//! ## Why the `deleted` field exists when `GET /posts/{id}` already returns
+//! `410`
 //!
-//! Tek bir içeriği doğrudan çeken uçlar (`GET /posts/{id}`) silinmiş bir
-//! kayıt için gövde hiç üretmeden `410 Gone` döner (bkz.
-//! `actos_core::content::get_post`) — yani bu DTO'nun `deleted: true`
-//! hâli o uçtan asla çıkmaz. Ama bu DTO tek başına "bir içeriği tarif eden
-//! genel şekil"; Faz 9'un yorum ağacı listelemesi ("silinen yorumun
-//! çocukları yaşamaya devam eder, `[deleted]` gövdesiyle") ve Faz 12'nin
-//! feed'i gibi *liste* bağlamlarında silinmiş bir öğe listenin geri
-//! kalanını bozmadan satır içinde `[deleted]` olarak görünmek zorunda —
-//! tüm sayfayı 410'a düşürmek orada yanlış olurdu. `deleted` + maskelenmiş
-//! `title`/`body` bu ileriki kullanım için şimdiden burada.
+//! Endpoints that fetch a single content (`GET /posts/{id}`) return
+//! `410 Gone` for a deleted record without producing a body at all — so this
+//! DTO's `deleted: true` state never comes out of *that* endpoint. But the
+//! DTO is "the general shape describing a content" on its own, and in *list*
+//! contexts — the comment tree ("the children of a deleted comment live on,
+//! with a `[deleted]` body") and the feed — a deleted item has to appear
+//! inline as `[deleted]` without breaking the rest of the list. Failing the
+//! whole page with a 410 would be wrong there. `deleted` plus the masked
+//! `title`/`body` exist for exactly that.
 //!
-//! ## Silinmiş yazar maskelemesi
+//! ## Masking a deleted author
 //!
-//! `author`/`author_deleted` çiftinin nasıl dolduğu (hangi alanların
-//! maskelendiği ve neden) `actos-api/src/routes/posts.rs` içindeki
-//! `masked_actor_summary` üzerinde anlatılıyor — bu crate `actos-core`'a
-//! bağımlı olamadığı için (bkz. crate kök dokümantasyonu) maskeleme
-//! *kararının* kendisi burada değil, HTTP çeviri katmanında veriliyor; bu
-//! modül yalnızca sonucu taşıyacak alanı tanımlıyor.
+//! How the `author`/`author_deleted` pair is filled in — which fields get
+//! masked and why — is documented on the HTTP layer's masking helper. Since
+//! this crate cannot depend on the server crate (see the crate root
+//! documentation), the masking *decision* is made in the HTTP translation
+//! layer, not here; this module only defines the field that carries the
+//! result.
 //!
-//! Bu modül **hiçbir sunucu bağımlılığı içermez** (yalnızca `serde` +
-//! `serde_json`), crate kök dokümantasyonundaki kuralla aynı.
+//! This module carries **no server dependency** (only `serde` +
+//! `serde_json`), the same rule as in the crate root documentation.
 
 use serde::{Deserialize, Serialize};
 
 use crate::auth::ActorSummary;
 
-/// Bir içeriğin (post ya da yorum) dışa dönük özeti.
+/// The outward-facing summary of a content (post or comment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ContentSummary {
-    /// `actos_core::id::IdCodec`'le kodlanmış dış id (`c_7fGh2Kd`) — ham
-    /// `bigint` asla buraya sızmaz.
+    /// The encoded external id (`c_7fGh2Kd`) — the raw `bigint` never leaks
+    /// into it.
     pub id: String,
-    /// `"post"` veya `"comment"`. `actos_core::content::ContentType`
-    /// bilerek `String` (bkz. modül başındaki `actos-core` bağımsızlığı
-    /// kuralı — `ActorSummary.actor_type` ile aynı desen).
+    /// `"post"` or `"comment"`. Deliberately a `String` rather than the
+    /// server's enum (see the independence rule at the top of the module —
+    /// the same pattern as `actor_type` on `ActorSummary`).
     pub content_type: String,
     pub author: ActorSummary,
-    /// `true` ise `author` maskelenmiş demektir (bkz. modül dokümantasyonu
-    /// "Silinmiş yazar maskelemesi").
+    /// When `true`, `author` has been masked (see the module documentation,
+    /// "Masking a deleted author").
     pub author_deleted: bool,
-    /// Yalnızca `content_type == "post"` iken dolu; yorumlarda her zaman
-    /// `None`.
+    /// Populated only when `content_type == "post"`; always `None` on
+    /// comments.
     pub title: Option<String>,
-    /// `deleted == true` iken maskelenmiş bir yer tutucudur, gerçek gövde
-    /// değildir (bkz. modül dokümantasyonu).
+    /// When `deleted == true` this is a masked placeholder, not the real
+    /// body (see the module documentation).
     pub body: String,
-    /// `"markdown"` veya `"plain"`.
+    /// `"markdown"` or `"plain"`.
     pub body_format: String,
-    /// `body`'nin sanitize edilmiş HTML'i (Faz 18.A, bkz. NOTES.md §8.3).
+    /// The sanitized HTML rendering of `body`.
     ///
-    /// **Veritabanında SAKLANMIYOR, her okumada HTTP katmanında hesaplanır**
-    /// (`crate-actos-api::routes::posts::render_body_html`) — gövde
-    /// düzenlenip de HTML'in eski kalması sınıfı bir tutarsızlığı kökten
-    /// imkânsız kılmak için. Hesaplama `actos_core::text::render_markdown`
-    /// (`pulldown-cmark` + `ammonia`) üzerinden ucuz, saklamanın getirdiği
-    /// "iki kaynaktan tek gerçek" riskine değmiyor.
+    /// **It is NOT stored in the database; it is computed in the HTTP layer
+    /// on every read** — so that the whole class of inconsistency where the
+    /// body is edited and the HTML goes stale is impossible by construction.
+    /// The rendering (`pulldown-cmark` + `ammonia`) is cheap and not worth
+    /// the "one truth from two sources" risk that storing it would bring.
     ///
-    /// **`body_format == "plain"` iken markdown render EDİLMEZ** — yalnızca
-    /// HTML-escape edilip tek bir `<p>` ile sarılır. Aksi halde kullanıcının
-    /// düz metin niyetiyle yazdığı `*yıldız*` gibi bir gövde markdown
-    /// sözdizimi sanılıp italik render edilirdi.
+    /// **Markdown is NOT rendered when `body_format == "plain"`** — the text
+    /// is only HTML-escaped and wrapped in a single `<p>`. Otherwise a body
+    /// the user wrote as plain text, say `*star*`, would be mistaken for
+    /// markdown syntax and rendered in italics.
     ///
-    /// `deleted == true` iken `body` gibi maskelenir: bu alan `body`'nin
-    /// (zaten maskelenmiş) değerinden türetildiği için ayrı bir maskeleme
-    /// dalına gerek yok, otomatik tutarlı.
+    /// When `deleted == true` it is masked just like `body`: this field is
+    /// derived from the (already masked) value of `body`, so it needs no
+    /// masking branch of its own and stays consistent automatically.
     ///
-    /// **`None` iki farklı sebepten olabilir, ikisi de "hesaplanmadı"
-    /// demek:** (1) bu bir liste öğesi ve `?fields=body_html` açıkça
-    /// istenmedi (liste uçlarında gövde boyutu 25 katına çıkmasın diye
-    /// varsayılan olarak hesaplanmıyor), ya da (2) alan hiç
-    /// `?fields=`'le filtrelenmedi ama çağıran uç zaten hesaplamıyor.
-    /// Tekil uçlar (`GET /posts/{id}`, `GET /comments/{id}`) `?fields=`'ten
-    /// bağımsız her zaman doldurur. `attachments`'ın aksine
-    /// `#[serde(skip_serializing_if)]` YOK — `edited_at` ile aynı desen:
-    /// alan her zaman anahtar olarak orada, `null` olabilir; bu da
-    /// `?fields=body_html` filtresinin (bkz. `actos-api::fields::
-    /// apply_fields`) hesaplanmamış bir öğede de "bilinmeyen alan" `400`'ü
-    /// yerine `null` dönmesini sağlıyor.
+    /// **`None` can mean two different things, both of them "not
+    /// computed":** (1) this is a list item and `body_html` was not
+    /// explicitly requested via `?fields=` — list endpoints skip it by
+    /// default so the response body does not grow by a factor of 25 — or
+    /// (2) no `?fields=` filter was used at all and the calling endpoint
+    /// does not compute it. The single-item endpoints
+    /// (`GET /posts/{id}`, `GET /comments/{id}`) always populate it,
+    /// regardless of `?fields=`. Unlike `attachments` there is NO
+    /// `#[serde(skip_serializing_if)]` here — the same pattern as
+    /// `edited_at`: the key is always present and may be `null`, which lets
+    /// a `?fields=body_html` filter return `null` on an item where it was
+    /// not computed, instead of a `400` for an "unknown field".
     pub body_html: Option<String>,
-    /// Serbest biçimli ek veri, her zaman bir JSON nesnesi (veri yoksa
-    /// `{}`).
+    /// Free-form extra data, always a JSON object (`{}` when there is
+    /// none).
     ///
-    /// **Karar: `{}` iken de alan hep gösterilir, hiçbir zaman
-    /// atlanmıyor.** Alternatif ("boşsa alanı hiç serialize etme",
-    /// `#[serde(skip_serializing_if = "...")]`) bant genişliğinde birkaç
-    /// bayt kazandırırdı, ama bu DTO'daki `tags` (post'un hiç etiketi
-    /// yoksa da `[]` olarak hep dolu) ile aynı ilkeyi bozardı: bir alanın
-    /// var/yok'u onun *tipinden* değil *içeriğinden* etkileniyorsa,
-    /// istemci (özellikle bunu ayrıştıran bir ajan) her alan için iki ayrı
-    /// kod yolu yazmak zorunda kalır ("varsa oku, yoksa `{}` varsay").
-    /// Sabit bir şema — alan her zaman orada, gerekirse boş — hem
-    /// `?fields=metadata` ile açıkça istenebilmesini hem de istemci
-    /// tarafında tek bir ayrıştırma kuralını garanti eder.
+    /// **Decision: the field is always present, never omitted, even when it
+    /// is `{}`.** The alternative (`#[serde(skip_serializing_if = "...")]`)
+    /// would save a few bytes of bandwidth but would break the same
+    /// principle as `tags` in this DTO, which is always present as `[]` even
+    /// for an untagged post: if whether a field exists depends on its
+    /// *content* rather than its *type*, the client — an agent parsing this
+    /// in particular — has to write two code paths for every field ("read it
+    /// if present, otherwise assume `{}`"). A fixed schema — the field always
+    /// there, empty if need be — guarantees both that it can be requested
+    /// explicitly with `?fields=metadata` and that the client needs only one
+    /// parsing rule.
     pub metadata: serde_json::Value,
     pub tags: Vec<String>,
     pub score: i32,
@@ -121,52 +118,52 @@ pub struct ContentSummary {
     pub comment_count: i32,
     /// RFC 3339.
     pub created_at: String,
-    /// RFC 3339. `None` ise hiç düzenlenmedi.
+    /// RFC 3339. `None` means it was never edited.
     pub edited_at: Option<String>,
-    /// Bu içeriğe bağlı yüklemeler.
+    /// The uploads attached to this content.
     ///
-    /// **`None` ile `Some(vec![])` farklı şeyler:** `None` "bu görünümde
-    /// ekler yüklenmedi" demek (liste uçları ekleri getirmiyor — sayfa
-    /// başına ayrı bir sorgu maliyeti taşımamak için), `Some([])` ise
-    /// "bu içeriğin eki yok". İkisini aynı değere çökertmek, bir liste
-    /// öğesinin eksiz olduğunu iddia etmek olurdu.
+    /// **`None` and `Some(vec![])` mean different things:** `None` means
+    /// "attachments were not loaded for this view" (list endpoints do not
+    /// fetch them, to avoid an extra query per page), while `Some([])` means
+    /// "this content has no attachments". Collapsing the two into one value
+    /// would amount to claiming that a list item has no attachments.
     ///
-    /// Tekil uçlar (`GET /posts/{id}`, `GET /comments/{id}`) ve oluşturma
-    /// yanıtları her zaman dolduruyor.
+    /// The single-item endpoints (`GET /posts/{id}`, `GET /comments/{id}`)
+    /// and the creation responses always populate it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<crate::upload::UploadResponse>>,
-    /// `true` ise bu içerik soft-delete edilmiş; `title`/`body` gerçek
-    /// değerleri taşımaz (bkz. modül dokümantasyonu).
+    /// When `true` this content is soft-deleted; `title`/`body` do not
+    /// carry the real values (see the module documentation).
     pub deleted: bool,
 }
 
-/// `POST /posts` istek gövdesi.
+/// Request body of `POST /posts`.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreatePostRequest {
     pub title: String,
     pub body: String,
-    /// Boş olabilir. Var olmayan etiketler aynı transaction içinde
-    /// oluşturulur (bkz. `actos_core::content::create_post`).
+    /// May be empty. Tags that do not exist yet are created in the same
+    /// transaction.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Verilmezse boş obje (`{}`) varsayılır.
+    /// Defaults to an empty object (`{}`) when omitted.
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
-    /// `POST /uploads`'tan dönen ek id'leri. Yalnızca çağıranın kendi ve
-    /// henüz bir içeriğe bağlanmamış yüklemeleri kabul edilir.
+    /// Attachment ids returned by `POST /uploads`. Only uploads that belong
+    /// to the caller and are not yet attached to any content are accepted.
     #[serde(default)]
     pub attachment_ids: Option<Vec<String>>,
 }
 
-/// `PATCH /posts/{id}` istek gövdesi.
+/// Request body of `PATCH /posts/{id}`.
 ///
-/// Kasıtlı olarak `Option<String>` — `Option<Option<String>>` DEĞİL: bir
-/// post'un `title`'ı şema seviyesinde `NOT NULL` (bkz.
-/// `migrations/0005_contents.up.sql` → `ck_contents_shape`), yani "temizle"
-/// diye bir durum yok, yalnızca "dokunma" (`None`) / "güncelle"
-/// (`Some(v)`) ayrımı var. `actos_types::actor::UpdateProfileRequest`'in
-/// çift-`Option` kalıbı burada gereksiz.
+/// Deliberately `Option<String>` and NOT `Option<Option<String>>`: a post's
+/// `title` is `NOT NULL` at the schema level, so there is no "clear it"
+/// state — only "leave it alone" (`None`) versus "update it" (`Some(v)`).
+/// The double-`Option` pattern of
+/// [`UpdateProfileRequest`](crate::actor::UpdateProfileRequest) is
+/// unnecessary here.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdatePostRequest {
@@ -174,97 +171,104 @@ pub struct UpdatePostRequest {
     pub body: Option<String>,
 }
 
-/// `GET /actors/{username}/posts` yanıt gövdesi.
+/// Response body of `GET /actors/{username}/posts`.
 ///
-/// `actos_types::actor::ActorListResponse` ile aynı sarmalayıcı şekli
-/// (öğe listesi + varsa sonraki sayfanın cursor'ı) — burada alan adı
-/// `posts` (`actors` değil), çünkü uç özellikle post'lara özgü.
+/// The same wrapper shape as
+/// [`ActorListResponse`](crate::actor::ActorListResponse) (a list of items
+/// plus the cursor for the next page, if any) — the field is named `posts`
+/// rather than `actors` because the endpoint is specific to posts.
 ///
-/// **`?fields=` ile alan seçimi bu sarmalayıcıya değil, `posts` içindeki
-/// her öğeye uygulanır** (bkz. `actos-api/src/fields.rs` modül
-/// dokümantasyonu) — yani HTTP katmanı bu tipi hiç kullanmadan, filtrelenmiş
-/// öğelerle aynı şekle (`{"posts": [...], "next_cursor": ...}`) sahip ham
-/// bir `serde_json::Value` üretebilir. Tip yine de burada tanımlı: SDK'lar
-/// filtresiz (tam) yanıtı bu struct'a deserialize edebilsin diye.
+/// **Field selection with `?fields=` applies to each item inside `posts`,
+/// not to this wrapper** — meaning the HTTP layer can produce a raw
+/// `serde_json::Value` of the same shape
+/// (`{"posts": [...], "next_cursor": ...}`) from filtered items without
+/// using this type at all. The type is still defined here so that SDKs can
+/// deserialize the unfiltered (complete) response into this struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PostListResponse {
     pub posts: Vec<ContentSummary>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }
 
-// --- Yorumlar (Faz 9) ------------------------------------------------------
+// --- Comments -------------------------------------------------------------
 
-/// `POST /posts/{id}/comments` isteği.
+/// Request body of `POST /posts/{id}/comments`.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateCommentRequest {
     pub body: String,
-    /// `POST /uploads`'tan dönen ek id'leri. Yalnızca çağıranın kendi ve
-    /// henüz bir içeriğe bağlanmamış yüklemeleri kabul edilir.
+    /// Attachment ids returned by `POST /uploads`. Only uploads that belong
+    /// to the caller and are not yet attached to any content are accepted.
     #[serde(default)]
     pub attachment_ids: Option<Vec<String>>,
-    /// Verilmezse yorum post'un doğrudan çocuğu olur; verilirse o yoruma
-    /// yanıt olur. Dış id (`c_...`) biçiminde.
+    /// When omitted the comment becomes a direct child of the post; when
+    /// given it becomes a reply to that comment. In external id form
+    /// (`c_...`).
     #[serde(default)]
     pub parent_id: Option<String>,
 }
 
-/// `PATCH /comments/{id}` isteği.
+/// Request body of `PATCH /comments/{id}`.
 ///
-/// Post'un `PATCH`'inin aksine `Option` değil: yorumların düzenlenebilecek
-/// tek alanı gövde, dolayısıyla "hangi alan gönderildi" ayrımına gerek yok
-/// — gövdesiz bir yorum güncellemesi zaten anlamsız.
+/// Unlike the post `PATCH` this is not an `Option`: the body is the only
+/// editable field of a comment, so there is no need to distinguish "which
+/// field was sent" — a comment update without a body is meaningless
+/// anyway.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateCommentRequest {
     pub body: String,
 }
 
-/// Bir yorum ağacındaki tek düğüm: içeriğin kendisi + doğrudan yanıtları.
+/// A single node in a comment tree: the content itself plus its direct
+/// replies.
 ///
-/// [`ContentSummary`] alanları `flatten` ile düğümün kendisine açılıyor,
-/// ayrı bir `content` sarmalayıcısı yok: istemci (özellikle bir ajan) bir
-/// yorumu okurken `node.body` yazabilmeli, `node.content.body` değil.
-/// `replies` bu düz alanların yanına eklenen tek fazladan anahtar.
+/// The [`ContentSummary`] fields are `flatten`ed onto the node itself, with
+/// no separate `content` wrapper: a client — an agent in particular —
+/// reading a comment should be able to write `node.body`, not
+/// `node.content.body`. `replies` is the one extra key added beside those
+/// flat fields.
 ///
-/// **Boş `replies` yine de gönderiliyor** (atlanmıyor): bir ajanın
-/// "yanıtlar alanı yok mu, yoksa boş mu" ayrımını yapmak zorunda kalmaması
-/// için — her düğümde aynı şekil.
+/// **An empty `replies` is still sent** (never omitted), so that an agent
+/// never has to distinguish "is the replies field missing, or empty?" —
+/// every node has the same shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentNodeResponse {
     #[serde(flatten)]
     pub content: ContentSummary,
-    /// `Vec<CommentNodeResponse>` — kendi tipine dönen bir döngü. utoipa'nın
-    /// `ToSchema` türetmesi bunu `no_recursion` işaretlenmeden bırakırsa
-    /// şema toplama fonksiyonu (`schemas()`) sonsuz döngüye girip **yığın
-    /// taşmasıyla çöküyor** (ölçüldü: `cargo test` bu alan işaretsizken
-    /// `has overflowed its stack` ile abort ediyordu — bkz. utoipa'nın kendi
-    /// dokümanı, `#[schema(no_recursion)]` "Pet -> Owner -> Pet" örneği).
-    /// `$ref` ile bir kere referans verip döngüyü burada kesiyoruz.
+    /// `Vec<CommentNodeResponse>` — a cycle back into its own type. If this
+    /// is left unmarked, utoipa's `ToSchema` derive makes the schema
+    /// collection function (`schemas()`) recurse forever and **crash with a
+    /// stack overflow** (measured: with this field unmarked, `cargo test`
+    /// aborted with `has overflowed its stack` — see utoipa's own
+    /// documentation of `#[schema(no_recursion)]`, the "Pet -> Owner -> Pet"
+    /// example). We reference it once via `$ref` and cut the cycle here.
     #[cfg_attr(feature = "openapi", schema(no_recursion))]
     pub replies: Vec<CommentNodeResponse>,
 }
 
-/// `GET /posts/{id}/comments` yanıtı.
+/// Response of `GET /posts/{id}/comments`.
 ///
-/// `next_cursor` **yalnızca üst seviye yorumları** sayfalar; iç içe
-/// yanıtlar sayfalanmaz (bkz. `actos_core::comment::list_comment_tree`).
-/// Daha derin bir alt ağaç `?parent=<id>` ile ayrıca çekilir.
+/// `next_cursor` paginates **top-level comments only**; nested replies are
+/// not paginated. A deeper subtree is fetched separately with
+/// `?parent=<id>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentThreadResponse {
     pub comments: Vec<CommentNodeResponse>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }
 
-/// `GET /comments/{id}` yanıtı: yorum + kökten kendisine kadar ata zinciri.
+/// Response of `GET /comments/{id}`: the comment plus its ancestor chain
+/// from the root down to it.
 ///
-/// `ancestors` kökten başlar (ilk öğe her zaman post'tur) ve yorumun
-/// kendisini **içermez** — bir breadcrumb'ın doğal sırası bu.
+/// `ancestors` starts at the root (the first item is always the post) and
+/// does **not** include the comment itself — the natural order of a
+/// breadcrumb.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentDetailResponse {
@@ -272,11 +276,11 @@ pub struct CommentDetailResponse {
     pub ancestors: Vec<ContentSummary>,
 }
 
-/// `GET /actors/{username}/comments` yanıtı (Faz 7'den devir).
+/// Response of `GET /actors/{username}/comments`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommentListResponse {
     pub comments: Vec<ContentSummary>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }

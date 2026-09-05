@@ -123,7 +123,7 @@ fn notification_summary(
     path = "/me/inbox",
     tag = "notifications",
     summary = "List your inbox (notifications)",
-    description = "Newest first, keyset-cursor paginated (see `actos_core::cursor` — no new pagination \
+    description = "Newest first, keyset-cursor paginated (the same scheme as everywhere else — no new \
         scheme was invented). `?unread=true` returns unread notifications only. `unread_count` is \
         always the TOTAL unread count, not the number of items on this page.",
     security(("api_key" = [])),

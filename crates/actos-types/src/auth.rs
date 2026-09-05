@@ -1,16 +1,16 @@
-//! Kimlik doğrulama uçlarının istek/yanıt tipleri.
+//! Request/response types for the authentication endpoints.
 //!
-//! Bu modül **hiçbir sunucu bağımlılığı içermez** (sadece `serde`) — bu
-//! crate'i backend'in yanı sıra CLI ve Rust SDK de kullanacak.
+//! This module carries **no server dependency** (only `serde`) — the CLI and
+//! the Rust SDK use this crate alongside the backend.
 //!
-//! `actor_type` bilerek `String` olarak taşınıyor,
-//! `actos_core::auth::ActorType` enum'una değil: `actos-types`'ın
-//! `actos-core`'a bağımlı olması yasak (bkz. crate'in kök dokümantasyonu).
-//! Aynı sebeple zaman alanları `chrono::DateTime` değil, RFC 3339 string.
+//! `actor_type` is deliberately carried as a `String` rather than the
+//! server's `ActorType` enum: `actos-types` is not allowed to depend on the
+//! server crate (see the crate root documentation). For the same reason the
+//! time fields are RFC 3339 strings, not `chrono::DateTime`.
 
 use serde::{Deserialize, Serialize};
 
-/// `POST /auth/register` istek gövdesi.
+/// Request body of `POST /auth/register`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegisterRequest {
@@ -20,11 +20,10 @@ pub struct RegisterRequest {
     pub display_name: Option<String>,
 }
 
-/// Bir actor'ün dışa dönük özeti.
+/// The outward-facing summary of an actor.
 ///
-/// `id` her zaman [`actos_core::id::IdCodec`]'le kodlanmış, base62 bir
-/// string'dir (`a_7fGh2Kd`) — ham `bigint` birincil anahtarı asla buraya
-/// sızmaz.
+/// `id` is always an encoded base62 string (`a_7fGh2Kd`) — the raw `bigint`
+/// primary key never leaks into it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorSummary {
@@ -35,38 +34,33 @@ pub struct ActorSummary {
     pub bio: Option<String>,
     /// RFC 3339.
     pub created_at: String,
-    /// Güven kademesi (0-2) — bkz. `actos_core::actor::recompute_trust_levels`
-    /// ve `migrations/0020_trust_levels.up.sql`. Hesap yaşı zaten
-    /// `created_at`'ten türetilebildiği için ayrı bir "yaş" alanı yok; bu
-    /// alan yalnızca sunucunun periyodik olarak hesapladığı kademeyi taşıyor.
+    /// Trust level (0-2), recomputed periodically by the server. There is no
+    /// separate "age" field because account age is already derivable from
+    /// `created_at`; this field carries only the computed level.
     pub trust_level: i16,
-    /// Avatarın herkese açık URL'i — `actors.avatar_object_key` set
-    /// değilse (hiç avatar seçilmemişse) `None`. Bucket public-read olduğu
-    /// için (bkz. `crate::upload::UploadResponse.url`) imzalama gerekmiyor,
-    /// URL doğrudan `<public_base_url>/<object_key>` biçiminde üretiliyor.
+    /// Public URL of the avatar — `None` when no avatar has been chosen.
+    /// The bucket is public-read (see
+    /// [`UploadResponse::url`](crate::upload::UploadResponse)), so no signing
+    /// is needed and the URL is built directly as
+    /// `<public_base_url>/<object_key>`.
     ///
-    /// **Yalnızca actor'ün kendi profilini temsil eden dönüşümlerde
-    /// (`GET /actors/{username}`, `PATCH /actors/me`, `GET /auth/whoami`,
-    /// takipçi/takip/keşif/arama listeleri) dolu döner.** Bir içeriğin
-    /// (post/yorum) yazarını özetleyen `ActorSummary`'lerde (bkz.
-    /// `actos-api/src/routes/posts.rs`) her zaman `None`'dur — o yol
-    /// `Content.author`'ın taşıdığı `ActorRecord` üzerinden geçiyor ve
-    /// `ActorRecord` bilerek avatar taşımıyor (gerekçe:
-    /// `actos_core::auth::AuthenticatedActor` ve `actos_core::actor::Profile`
-    /// üzerindeki yorumlar — `ActorRecord`, `crate::comment`/
-    /// `crate::interaction`/`crate::feed`/`crate::search` gibi avatarı hiç
-    /// bilmeyen birçok sorgu tarafından da paylaşılan, dar bir tip; avatarı
-    /// oraya eklemek o modüllerin hepsinin güncellenmesini gerektirirdi).
-    /// Silinmiş bir yazarın maskelenmiş özetinde de aynı sebeple ve ayrıca
-    /// **kasıtlı olarak** hep `None` (bkz.
-    /// `actos-api/src/routes/posts.rs::masked_actor_summary`).
+    /// **It is populated only where the `ActorSummary` represents the actor's
+    /// own profile** — `GET /actors/{username}`, `PATCH /actors/me`,
+    /// `GET /auth/whoami`, and the follower/following/discovery/search
+    /// listings. In an `ActorSummary` that summarizes the *author* of a post
+    /// or comment it is always `None`: that path goes through a narrower
+    /// internal record shared by many queries that know nothing about
+    /// avatars, and adding the avatar there would mean touching all of them.
+    /// The masked summary of a deleted author is `None` for the same reason
+    /// and, additionally, **on purpose**.
     pub avatar_url: Option<String>,
 }
 
-/// `POST /auth/register` yanıt gövdesi.
+/// Response body of `POST /auth/register`.
 ///
-/// `api_key` ve `recovery_codes` yalnızca bu yanıtta görünür, bir daha
-/// hiçbir uçtan geri alınamaz — istemci bunları o an saklamalı.
+/// `api_key` and `recovery_codes` appear in this response only and can never
+/// be retrieved from any endpoint again — the client must store them then and
+/// there.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegisterResponse {
@@ -75,13 +69,13 @@ pub struct RegisterResponse {
     pub recovery_codes: Vec<String>,
 }
 
-/// Bir API key'in dışa dönük özeti. Secret'in kendisi ya da hash'i **asla**
-/// bu tipte yer almaz.
+/// The outward-facing summary of an API key. Neither the secret itself nor
+/// its hash **ever** appears in this type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ApiKeySummary {
-    /// Ham UUID string'i (`api_keys.id`) — base62 kodlanmış değil. Zaten
-    /// rastgele üretilen bir UUID olduğu için numaralandırma riski yok.
+    /// The raw UUID string — not base62-encoded. It is a randomly generated
+    /// UUID already, so there is no enumeration risk.
     pub id: String,
     pub label: Option<String>,
     /// RFC 3339.
@@ -92,41 +86,41 @@ pub struct ApiKeySummary {
     pub revoked_at: Option<String>,
 }
 
-/// `GET /auth/whoami` yanıt gövdesi.
+/// Response body of `GET /auth/whoami`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WhoamiResponse {
     pub actor: ActorSummary,
-    /// `"admin"`, `"moderator"` — çoğu actor için boş.
+    /// `"admin"`, `"moderator"` — empty for most actors.
     pub roles: Vec<String>,
-    /// İsteği doğrulamakta kullanılan key'in özeti.
+    /// Summary of the key that authenticated this request.
     pub key: ApiKeySummary,
 }
 
-/// `POST /auth/keys` istek gövdesi.
+/// Request body of `POST /auth/keys`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateKeyRequest {
     pub label: Option<String>,
 }
 
-/// `POST /auth/keys` yanıt gövdesi.
+/// Response body of `POST /auth/keys`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateKeyResponse {
     pub key: ApiKeySummary,
-    /// Ham key, **bir kez** gösterilir.
+    /// The raw key, shown **once**.
     pub api_key: String,
 }
 
-/// `GET /auth/keys` yanıt gövdesi.
+/// Response body of `GET /auth/keys`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ListKeysResponse {
     pub keys: Vec<ApiKeySummary>,
 }
 
-/// `POST /auth/recover` istek gövdesi.
+/// Request body of `POST /auth/recover`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RecoverRequest {
@@ -134,19 +128,19 @@ pub struct RecoverRequest {
     pub recovery_code: String,
 }
 
-/// `POST /auth/recover` yanıt gövdesi.
+/// Response body of `POST /auth/recover`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RecoverResponse {
-    /// Kurtarma sonucu üretilen yeni ham key, **bir kez** gösterilir.
+    /// The new raw key produced by the recovery, shown **once**.
     pub api_key: String,
     pub remaining_recovery_codes: i64,
 }
 
-/// `POST /auth/recovery-codes/regenerate` yanıt gövdesi.
+/// Response body of `POST /auth/recovery-codes/regenerate`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegenerateRecoveryCodesResponse {
-    /// Yeni 10 kurtarma kodu, **bir kez** gösterilir; eskileri artık geçersiz.
+    /// Ten new recovery codes, shown **once**; the old ones are now void.
     pub recovery_codes: Vec<String>,
 }

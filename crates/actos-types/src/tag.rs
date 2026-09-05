@@ -1,47 +1,46 @@
-//! Etiket uçlarının yanıt tipleri.
+//! Response types for the tag endpoints.
 //!
-//! `crates/actos-types` kuralı gereği burada hiçbir sunucu bağımlılığı yok
-//! (bkz. crate kök dokümantasyonu) — yalnızca `serde`.
+//! As the `crates/actos-types` rule requires, there is no server dependency
+//! here (see the crate root documentation) — only `serde`.
 
 use serde::{Deserialize, Serialize};
 
-/// `GET /tags` listesindeki tek etiket.
+/// A single tag in the `GET /tags` listing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagSummary {
     pub name: String,
-    /// Bu etiketi taşıyan **canlı** post sayısı (silinmişler sayılmaz).
+    /// Number of **live** posts carrying this tag (deleted ones excluded).
     pub post_count: i32,
     /// RFC 3339.
     pub created_at: String,
 }
 
-/// `GET /tags` yanıtı: popülerliğe göre sıralı, cursor'lu.
+/// Response of `GET /tags`: ordered by popularity, cursor-paginated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagListResponse {
     pub tags: Vec<TagSummary>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }
 
-/// `GET /tags/search` yanıtındaki tek eşleşme.
+/// A single match in the `GET /tags/search` response.
 ///
-/// `post_count` **yok**: otomatik tamamlama sorgusu her tuş vuruşunda
-/// etiket başına post saymıyor (bkz. `actos_core::tag::TagMatch`), ve
-/// hesaplanmamış bir sayıyı `0` olarak göndermek yanlış bir değeri
-/// doğruymuş gibi taşımak olurdu.
+/// There is **no** `post_count`: the autocomplete query does not count posts
+/// per tag on every keystroke, and sending an uncomputed number as `0` would
+/// carry a wrong value as if it were right.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagMatch {
     pub name: String,
 }
 
-/// `GET /tags/search?q=` yanıtı.
+/// Response of `GET /tags/search?q=`.
 ///
-/// Sayfalama yok: sonuç sayısı `actos_core::tag::SEARCH_LIMIT` ile sabit
-/// bir tavana bağlı — otomatik tamamlama listesinin ikinci sayfası diye bir
-/// şey yok, kullanıcı yazmaya devam ederek daraltır.
+/// No pagination: the number of results is bounded by a fixed server-side
+/// ceiling — there is no such thing as a second page of an autocomplete
+/// list, the user narrows it by typing more.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TagSearchResponse {

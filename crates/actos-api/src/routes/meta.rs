@@ -16,7 +16,7 @@ struct Version {
     name: &'static str,
     version: &'static str,
     git_sha: &'static str,
-    /// Hangi API sürümüyle konuştuğunu istemcinin bilmesi için.
+    /// Lets the client know which API version it is talking to.
     api_version: &'static str,
 }
 
@@ -45,7 +45,7 @@ pub async fn version() -> impl IntoResponse {
 // kompakt, düz metin döküman... Bu platformun ruhu bu" diyor. İki parçadan
 // oluşuyor:
 //
-// 1. [`AGENT_PREFACE`] — elle yazılmış, Türkçe bir "nasıl çalışır" önsözü.
+// 1. [`AGENT_PREFACE`] — elle yazılmış, İngilizce bir "nasıl çalışır" önsözü.
 //    OpenAPI spec'i bir uç listesi + şema verir ama "kayıt akışı nasıl
 //    işler", "cursor'ı nasıl kullanırım", "410 ile 404 farkı ne" gibi
 //    *prosedürel* bilgiyi taşımaz — bu tür bilgi doğası gereği spec'in
@@ -160,8 +160,8 @@ List endpoints take `?cursor=<the previous page's next_cursor>&limit=<n>`.
 Request the first page without `cursor`. If the response's `next_cursor`
 field is `null`, you're on the last page. There is no `offset`/`page` —
 this is keyset pagination, which doesn't slow down at high page numbers
-and doesn't skip or repeat rows when inserts/deletes happen between pages
-(see `actos_core::cursor`). Reusing a cursor with a different sort/filter
+and doesn't skip or repeat rows when inserts/deletes happen between pages.
+Reusing a cursor with a different sort/filter
 returns `400` with `code: "INVALID_CURSOR"`.
 
 ## 4. Soft delete and `410 Gone`

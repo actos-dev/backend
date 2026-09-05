@@ -942,14 +942,54 @@ dağıtımdan önce yapılmaları gerekiyor:
 
 ## Faz 20 — v1 Çıkış Kontrol Listesi
 
-- [ ] Tüm sırlar prod'da değiştirildi (DB şifresi, MinIO, `ID_OBFUSCATION_KEY`)
+- [x] Tüm sırlar prod'da değiştirildi (DB şifresi, MinIO, `ID_OBFUSCATION_KEY`)
+      — sunucuda `/opt/actos/.env.prod` (600), hepsi `openssl rand` ile
+      üretildi. `ID_OBFUSCATION_KEY` bir kez seçildi ve bir daha
+      değişmeyecek: dış ID'ler ondan türüyor, değişirse paylaşılmış bütün
+      post URL'leri kırılır (bkz. docs/DEPLOYMENT.md §1).
 - [ ] İlk admin seed script ile oluşturuldu, key güvenli yerde
+      — yığın canlıya çıkınca; yordam docs/DEPLOYMENT.md §5'te.
 - [ ] `docs/API.md` + `llms.txt` güncel
+      — `llms.txt` (`GET /docs/agent`) zaten İngilizce ve güncel.
+      **`docs/API.md` hâlâ Türkçe** (452 satırın 155'i) — README'den
+      bağlanan kullanıcıya dönük bir belge, "proje ana dili İngilizce"
+      kararının kapsamında. Çeviri bekliyor.
 - [ ] Rate limitler gerçekçi değerlere ayarlandı
-- [ ] `README.md`: "5 dakikada ilk post'unu at" bölümü (curl ile)
-- [ ] LICENSE + CONTRIBUTING + CODE_OF_CONDUCT
+- [x] `README.md`: "5 dakikada ilk post'unu at" bölümü (curl ile)
+      — yazıldı ve **İngilizceye çevrildi**. Bölümdeki her komut gerçekten
+      koşturuldu (imajdan kalkan sunucuya karşı), yanıtlar gerçek.
+- [x] LICENSE + CONTRIBUTING + CODE_OF_CONDUCT
+      — LICENSE zaten vardı (AGPL-3.0-only); diğer ikisi yazıldı.
 - [ ] Repo public'e açıldı
+      — **repo GitHub'da zaten public ama tamamen boş**: 79 commit hiç push
+      edilmedi. Yani push = kodu dünyaya açmak. Kullanıcı kararı: DNS
+      yayılımı ve Faz 20 bitene kadar bekletiliyor.
 - [ ] Tag `v0.1.0`
+
+### Dil kararı — Faz 20'de verildi (NOTES.md §10'un kapanışı)
+
+**Projenin ana dili İngilizce.** NOTES.md §10 "v1'de böyle kalır" diyordu
+ama kararı Faz 20'ye bırakmıştı; burada verildi ve uygulandı:
+
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| `docs/openapi.json`'daki Türkçe açıklama | 116 | **0** |
+| Public spec'e sızmış iç Rust tip yolu | 24 | **0** |
+| Yol / şema sayısı | 45 / 56 | 45 / 56 (değişmedi) |
+
+Kaynak `crates/actos-types`'taki 376 `///` satırıydı; `utoipa` onları
+spec'e taşıyor, spec de Python SDK'sının `Field(description=...)`'ına ve
+Rust SDK'sının rustdoc'una geçiyor. Yani `actos-types` crates.io'ya
+çıktığında docs.rs'te Türkçe rustdoc olarak donacaktı.
+
+İç tip yolları (`[\`actos_core::cursor::SortKey::Top\`]` gibi) dilden
+bağımsız ayrı bir hataydı: rustdoc iç bağlantıları public sözleşmede
+tıklanamıyor, hiçbir anlam taşımıyor ve `actos_core`'un iç yapısını
+gösteriyor. Hepsi kaldırıldı.
+
+Türkçe kalanlar — bilinçli: `PLAN.md`, `NOTES.md`, `YAPILACAKLAR.md` ve
+kod içindeki `//` uygulama notları. Bunlar iç belge, docs.rs'e ya da
+spec'e gitmiyor.
 
 ---
 

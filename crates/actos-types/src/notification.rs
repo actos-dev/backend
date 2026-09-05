@@ -1,69 +1,67 @@
-//! `GET /me/inbox` ve okundu-işaretleme uçlarının istek/yanıt tipleri.
+//! Request/response types for `GET /me/inbox` and the mark-as-read endpoints.
 //!
-//! Bu crate **hiçbir sunucu bağımlılığı içermez** (crate kök
-//! dokümantasyonundaki kuralla aynı) — bu yüzden `actos_core::notification::
-//! NotificationKind` burada tekrar edilmiyor, `kind` alanı bilerek `String`
-//! (bkz. `actos_types::content::ContentSummary.content_type` üzerindeki aynı
-//! desen).
+//! This crate carries **no server dependency** (the same rule as in the crate
+//! root documentation) — which is why the server's notification-kind enum is
+//! not repeated here and the `kind` field is deliberately a `String` (the
+//! same pattern as `content_type` on
+//! [`ContentSummary`](crate::content::ContentSummary)).
 
 use serde::{Deserialize, Serialize};
 
 use crate::auth::ActorSummary;
 
-/// Tek bir bildirim satırının dışa dönük özeti.
+/// The outward-facing summary of a single notification row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct NotificationSummary {
     pub id: String,
-    /// `"comment_on_post"`, `"reply_to_comment"`, `"new_follower"` ya da
-    /// `"moderation_action"` (bkz. `actos_core::notification::NotificationKind`).
+    /// One of `"comment_on_post"`, `"reply_to_comment"`, `"new_follower"` or
+    /// `"moderation_action"`.
     pub kind: String,
-    /// Bildirimi tetikleyen actor. `None` yalnızca sistem kaynaklı olaylarda
-    /// (bugün üreten bir yol yok, bkz. `actos_core::notification` modül
-    /// dokümantasyonu).
+    /// The actor that triggered the notification. `None` only for
+    /// system-originated events (no path produces one today).
     pub actor: Option<ActorSummary>,
-    /// `"content"` ya da `"actor"` — `target_id`'nin hangi id uzayına ait
-    /// olduğunu belirler.
+    /// `"content"` or `"actor"` — determines which id space `target_id`
+    /// belongs to.
     pub target_type: String,
-    /// `target_type`'a göre kodlanmış dış id (`c_...` ya da `a_...`).
+    /// The encoded external id, in the space given by `target_type`
+    /// (`c_...` or `a_...`).
     ///
-    /// **Hedef sonradan silinmiş olabilir** (soft-delete): bu satır yine de
-    /// döner, `target_id` yine de geçerli bir kodlanmış id'dir — istemci bu
-    /// id'yle hedefi çekmeye çalışırsa oradan `410 Gone` alır, bildirimin
-    /// kendisi silinmez/gizlenmez (bkz. `migrations/0021_notifications.up.sql`
-    /// tablo yorumu).
+    /// **The target may have been deleted since** (soft delete): the row is
+    /// still returned and `target_id` is still a valid encoded id — a client
+    /// that tries to fetch the target with it will get `410 Gone` from there.
+    /// The notification itself is neither removed nor hidden.
     pub target_id: String,
-    /// Tür başına opsiyonel ek veri, her zaman bir JSON nesnesi (veri yoksa
-    /// `{}`). **Bilerek zorunlu bir "önizleme" alanı yok** — bkz.
-    /// `migrations/0021_notifications.up.sql` → `payload` sütun yorumu ve
-    /// NOTES.md §5.
+    /// Optional per-kind extra data, always a JSON object (`{}` when there is
+    /// none). There is deliberately **no mandatory "preview" field**.
     pub payload: serde_json::Value,
     /// RFC 3339.
     pub created_at: String,
-    /// RFC 3339. `None` ise henüz okunmadı.
+    /// RFC 3339. `None` means it has not been read yet.
     pub read_at: Option<String>,
 }
 
-/// `GET /me/inbox` yanıtı.
+/// Response of `GET /me/inbox`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct InboxResponse {
     pub notifications: Vec<NotificationSummary>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
-    /// Çağıranın toplam okunmamış bildirim sayısı — istemcinin (özellikle
-    /// bir ajanın) "yeni bir şey var mı" sorusunu sayfanın içeriğine
-    /// bakmadan, tek bir alandan yanıtlayabilmesi için. Sayfa `?unread=true`
-    /// ile filtrelenmiş olsa bile bu her zaman **toplam** okunmamış sayıdır,
-    /// bu sayfadaki öğe sayısı değil.
+    /// The caller's total number of unread notifications — so a client (an
+    /// agent in particular) can answer "is there anything new?" from a single
+    /// field without inspecting the page contents. Even when the page is
+    /// filtered with `?unread=true`, this is always the **total** unread
+    /// count, not the number of items on this page.
     pub unread_count: i64,
 }
 
-/// `POST /me/inbox/read` yanıtı.
+/// Response of `POST /me/inbox/read`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct MarkAllReadResponse {
-    /// Bu çağrıda **yeni** okundu işaretlenen bildirim sayısı (zaten okunmuş
-    /// olanlar sayılmaz — bkz. idempotency gerekçesi).
+    /// How many notifications this call marked read **for the first time**
+    /// (already-read ones are not counted — that is what makes the call
+    /// idempotent).
     pub marked: i64,
 }

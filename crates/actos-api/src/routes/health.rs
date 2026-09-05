@@ -32,8 +32,8 @@ pub async fn live() -> impl IntoResponse {
     (StatusCode::OK, Json(serde_json::json!({ "status": "ok" })))
 }
 
-/// `GET /health` yanıt şekli — yalnızca dokümantasyon için, handler
-/// gerçekte `serde_json::json!` ile ham `Value` üretiyor (bkz. `live`).
+/// The response shape of `GET /health` — for documentation only; the handler
+/// actually produces a raw `Value` with `serde_json::json!` (see `live`).
 #[derive(Debug, Serialize, ToSchema)]
 struct LivenessResponse {
     status: String,

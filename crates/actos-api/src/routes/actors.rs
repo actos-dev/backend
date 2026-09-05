@@ -188,7 +188,7 @@ async fn get_profile(
     tag = "actors",
     summary = "Partially update your own profile",
     description = "A field that is absent from the JSON is left untouched; sending `null` clears it; \
-        sending a value updates it (see `actos_types::actor::UpdateProfileRequest`). The id given for \
+        sending a value updates it. The id given for \
         `avatar` must be an upload id returned by `POST /uploads`; `403` if it belongs to someone else, \
         `404` if it doesn't exist, `409` if it's already attached to a piece of content.",
     security(("api_key" = [])),
@@ -289,7 +289,7 @@ async fn delete_account(
     params(
         ("username" = String, Path, description = "The actor's username"),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
-        ("limit" = Option<String>, Query, description = "Items per page (see `actos_core::actor::clamp_page_size` for the default/max)"),
+        ("limit" = Option<String>, Query, description = "Items per page (clamped to the server's default/maximum)"),
     ),
     responses(
         (status = 200, description = "Follower list, with a cursor", body = ActorListResponse),

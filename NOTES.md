@@ -502,7 +502,25 @@ verisiz alınmamalı.
 
 ---
 
-## 10. Spec'te kalan Türkçe şema açıklamaları (2026-09-03) — v1'de kalıyor
+## 10. Spec'te kalan Türkçe şema açıklamaları — **ÇÖZÜLDÜ (2026-09-05)**
+
+> **Bu bölüm artık tarihsel kayıt.** Aşağıdaki bulgu doğruydu ve o gün
+> "v1'de kalıyor" kararı verilmişti; karar Faz 20'de gözden geçirildi ve
+> **değiştirildi**. Projenin ana dili İngilizce olarak sabitlendi ve çeviri
+> yapıldı:
+>
+> | Ölçüm | Önce | Sonra |
+> |---|---|---|
+> | `docs/openapi.json`'daki Türkçe açıklama | 116 | **0** |
+> | Public spec'e sızmış iç Rust tip yolu | 24 | **0** |
+> | Yol / şema sayısı | 45 / 56 | 45 / 56 (değişmedi) |
+>
+> Aşağıda anlatılan yayılım (Python SDK'sının `Field(description=...)`'ı,
+> Rust SDK'sının rustdoc'u) tam da bu yüzden çözüldü: `actos-types`
+> crates.io'ya çıktığında docs.rs'te Türkçe rustdoc olarak donacaktı.
+> Ayrıntı ve gerekçe: PLAN.md Faz 20 → "Dil kararı".
+
+### Özgün bulgu (2026-09-03)
 
 **Bulgu.** Faz 18.A'nın "dışa dönük metinler İngilizce" hedefi utoipa
 makrolarındaki `summary`/`description` literalleriyle sınırlı kaldı. Oysa

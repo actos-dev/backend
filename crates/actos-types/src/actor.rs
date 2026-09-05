@@ -1,17 +1,17 @@
-//! Actor profilleri ve dizin/keşif uçlarının istek/yanıt tipleri.
+//! Request/response types for actor profiles and the directory/discovery
+//! endpoints.
 //!
-//! `actos-types`'ın kök dokümantasyonundaki kural burada da geçerli: bu
-//! modül hiçbir sunucu bağımlılığı içermez, yalnızca `serde`.
+//! The rule from the `actos-types` crate root applies here too: this module
+//! carries no server dependency, only `serde`.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::auth::ActorSummary;
 
-/// `GET /actors/{username}` yanıtındaki istatistik bloğu.
+/// The statistics block in the `GET /actors/{username}` response.
 ///
-/// `contents` tablosundan (yalnızca canlı — `deleted_at IS NULL` — satırlar
-/// üzerinden) tek bir agrega sorguyla hesaplanır; actor başına ayrı bir
-/// sorgu atılmaz (bkz. `actos_core::actor::get_profile`).
+/// Computed with a single aggregate query over the contents table (live rows
+/// only), not with one query per actor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorStats {
@@ -20,7 +20,7 @@ pub struct ActorStats {
     pub total_score: i64,
 }
 
-/// `GET /actors/{username}` yanıt gövdesi.
+/// Response body of `GET /actors/{username}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorProfileResponse {
@@ -28,22 +28,23 @@ pub struct ActorProfileResponse {
     pub stats: ActorStats,
 }
 
-/// `PATCH /actors/me` istek gövdesi.
+/// Request body of `PATCH /actors/me`.
 ///
-/// **`Option<Option<T>>` kalıbı — kısmi güncelleme:** alan JSON'da hiç
-/// yoksa dış `Option` `None` kalır ("dokunma"); alan açıkça `null` olarak
-/// gönderilmişse dış `Option` `Some(None)` olur ("temizle"); bir değer
-/// gönderilmişse `Some(Some(v))` olur ("güncelle"). Sıradan
-/// `#[serde(default)]` + `Option<T>` bu üç durumu ayırt edemez — `null` ile
-/// "alan hiç gönderilmedi" aynı `None`'a çökerdi, istemci bir alanı
-/// temizleyemezdi.
+/// **The `Option<Option<T>>` pattern — partial update:** if the field is
+/// absent from the JSON the outer `Option` stays `None` ("leave it alone");
+/// if it is sent explicitly as `null` the outer `Option` becomes `Some(None)`
+/// ("clear it"); if a value is sent it becomes `Some(Some(v))` ("update it").
+/// A plain `#[serde(default)]` + `Option<T>` cannot tell these three apart —
+/// `null` and "field not sent at all" would collapse into the same `None`,
+/// and a client could never clear a field.
 ///
-/// [`double_option`] bunu şöyle sağlıyor: `#[serde(default)]` sayesinde alan
-/// JSON'da hiç yoksa `deserialize_with` fonksiyonu **hiç çağrılmaz**, alan
-/// `Default::default()` (yani `None`) kalır. Alan varsa (değeri `null` da
-/// olsa) fonksiyon çağrılır ve içteki `Option<T>::deserialize` zaten
-/// `null` → `None`, değer → `Some(value)` ayrımını doğru yapar; biz bunu
-/// bir `Some(...)` ile sarmalayıp dış katmanı ekliyoruz.
+/// `double_option` achieves this as follows: thanks to `#[serde(default)]`,
+/// when the field is absent from the JSON the `deserialize_with` function is
+/// **never called** and the field stays `Default::default()` (that is,
+/// `None`). When the field is present — even with a `null` value — the
+/// function is called, and the inner `Option<T>::deserialize` already draws
+/// the right distinction (`null` → `None`, a value → `Some(value)`); we wrap
+/// that in a `Some(...)` to add the outer layer.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateProfileRequest {
@@ -51,18 +52,17 @@ pub struct UpdateProfileRequest {
     pub display_name: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     pub bio: Option<Option<String>>,
-    /// Yeni avatar olarak kullanılacak yüklemenin **dış** id'si (`f_...` —
-    /// `POST /uploads`'un döndürdüğü `id`). `display_name`/`bio` ile aynı
-    /// `Option<Option<T>>` deseni: alan hiç gönderilmezse avatara dokunulmaz,
-    /// `null` gönderilirse avatar kaldırılır (`actors.avatar_object_key`
-    /// `NULL` olur), bir id gönderilirse o yükleme avatar yapılır.
+    /// The **external** id of the upload to use as the new avatar (`f_...`
+    /// — the `id` returned by `POST /uploads`). Same `Option<Option<T>>`
+    /// pattern as `display_name`/`bio`: if the field is absent the avatar is
+    /// left alone, if `null` is sent the avatar is removed, and if an id is
+    /// sent that upload becomes the avatar.
     ///
-    /// Sunucu bu id'yi kabul etmeden önce üç şeyi doğrular (bkz.
-    /// `actos_core::attachment::resolve_as_avatar`): yükleme var mı (`404`),
-    /// **çağıran actor'e mi ait** (`403`), ve henüz bir içeriğe **bağlanmamış
-    /// mı** (`409` — bir posta/yoruma zaten iliştirilmiş bir dosya avatar
-    /// olarak yeniden kullanılamaz, iki farklı yaşam döngüsü aynı satırda
-    /// çakışırdı).
+    /// Before accepting the id the server checks three things: that the
+    /// upload exists (`404`), that it **belongs to the calling actor**
+    /// (`403`), and that it is **not yet attached** to any content (`409` — a
+    /// file already attached to a post or comment cannot be reused as an
+    /// avatar, since two different lifecycles would collide on one row).
     #[serde(default, deserialize_with = "double_option")]
     pub avatar: Option<Option<String>>,
 }
@@ -75,31 +75,31 @@ where
     Ok(Some(Option::deserialize(deserializer)?))
 }
 
-/// `PATCH /actors/me` yanıt gövdesi — güncellenmiş profil.
+/// Response body of `PATCH /actors/me` — the updated profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateProfileResponse {
     pub actor: ActorSummary,
 }
 
-/// `DELETE /actors/me` istek gövdesi.
+/// Request body of `DELETE /actors/me`.
 ///
-/// Hesap silme geri alınamaz bir işlem olduğu için onay, kimlik bilgisinin
-/// (API key) yanı sıra ikinci bir kanıt — geçerli bir kurtarma kodu —
-/// gerektiriyor. Kod aynı zamanda tüketilir (bkz.
-/// `actos_core::actor::delete_account`).
+/// Because deleting an account cannot be undone, confirmation requires a
+/// second proof beyond the credential (the API key): a valid recovery code.
+/// The code is consumed in the process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DeleteAccountRequest {
     pub recovery_code: String,
 }
 
-/// Actor listeleyen uçların (`followers`, `following`, keşif dizini) ortak
-/// yanıt biçimi: bir sayfa actor + varsa sonraki sayfanın cursor'ı.
+/// The shared response shape of the actor-listing endpoints (`followers`,
+/// `following`, the discovery directory): one page of actors plus the cursor
+/// for the next page, if any.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ActorListResponse {
     pub actors: Vec<ActorSummary>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }

@@ -75,27 +75,28 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
-/// RFC 9457 "problem details" gövdesi.
+/// An RFC 9457 "problem details" body.
 ///
-/// `pub(crate)` (özel değil): Faz 16'nın OpenAPI şeması bu tipi tek bir
-/// bileşen (`components.schemas.ProblemDetails`) olarak her hata yanıtında
-/// referans veriyor (bkz. `crate::openapi` modülü) — bunun için diğer
-/// `routes/*.rs` dosyalarından görünür olması gerekiyor.
+/// `pub(crate)` rather than private: the OpenAPI schema references this type
+/// as a single component (`components.schemas.ProblemDetails`) from every
+/// error response, so it has to be visible from the other `routes/*.rs`
+/// files.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ProblemDetails {
-    /// Hata tipini tanımlayan URI (dokümantasyona işaret eder).
+    /// URI identifying the error type (it points at the documentation).
     #[serde(rename = "type")]
     type_uri: String,
-    /// Kısa, insan-okunur özet.
+    /// A short, human-readable summary.
     title: String,
-    /// HTTP durum kodu (gövdede de bulunması RFC'nin önerisi).
+    /// The HTTP status code (the RFC recommends repeating it in the body).
     status: u16,
-    /// Bu spesifik oluşuma dair açıklama. İç hatalarda yok.
+    /// An explanation of this specific occurrence. Absent on internal errors.
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
-    /// Makine-okunur kod — istemciler `title` metnine değil buna bakmalı.
+    /// The machine-readable code — clients should branch on this, not on the
+    /// `title` text.
     code: ErrorCode,
-    /// Destek/hata ayıklama için istek kimliği.
+    /// Request id, for support and debugging.
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<String>,
 }

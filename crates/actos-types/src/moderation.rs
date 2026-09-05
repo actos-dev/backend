@@ -1,18 +1,18 @@
-//! Şikayet ve admin uçlarının istek-yanıt tipleri.
+//! Request/response types for the report and admin endpoints.
 
 use serde::{Deserialize, Serialize};
 
-/// `POST /reports` isteği.
+/// Request body of `POST /reports`.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateReportRequest {
-    /// `"post"` veya `"comment"`. İçeriğin gerçek türüyle uyuşmalı.
+    /// `"post"` or `"comment"`. Must match the content's actual type.
     pub target_type: String,
     pub target_id: String,
     pub reason: String,
 }
 
-/// Bir şikayet kaydı.
+/// A report record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ReportSummary {
@@ -20,25 +20,25 @@ pub struct ReportSummary {
     pub target_type: String,
     pub target_id: String,
     pub reason: String,
-    /// `"pending"`, `"resolved"` veya `"dismissed"`.
+    /// One of `"pending"`, `"resolved"` or `"dismissed"`.
     pub status: String,
     pub notes: Option<String>,
     /// RFC 3339.
     pub created_at: String,
-    /// RFC 3339. `None` ise henüz çözülmedi.
+    /// RFC 3339. `None` means it has not been resolved yet.
     pub resolved_at: Option<String>,
 }
 
-/// `GET /admin/reports` yanıtı.
+/// Response of `GET /admin/reports`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ReportListResponse {
     pub reports: Vec<ReportSummary>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }
 
-/// `PATCH /admin/reports/{id}` isteği.
+/// Request body of `PATCH /admin/reports/{id}`.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateReportRequest {
@@ -47,28 +47,28 @@ pub struct UpdateReportRequest {
     pub notes: Option<String>,
 }
 
-/// `DELETE /admin/contents/{id}` isteği.
+/// Request body of `DELETE /admin/contents/{id}`.
 ///
-/// Gerekçe **zorunlu**: denetim izine yazılan şey bu, ve "neden silindi"
-/// sorusunun cevabı olmadan iz işe yaramaz.
+/// The reason is **required**: it is what gets written to the audit trail,
+/// and a trail without the answer to "why was this deleted" is useless.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ModerateDeleteRequest {
     pub reason: String,
 }
 
-/// `POST /admin/bans` isteği.
+/// Request body of `POST /admin/bans`.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateBanRequest {
     pub username: String,
     pub reason: String,
-    /// RFC 3339. Verilmezse ban kalıcı.
+    /// RFC 3339. When omitted, the ban is permanent.
     #[serde(default)]
     pub expires_at: Option<String>,
 }
 
-/// Bir ban kaydı.
+/// A ban record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BanSummary {
@@ -76,26 +76,27 @@ pub struct BanSummary {
     pub reason: String,
     /// RFC 3339.
     pub banned_at: String,
-    /// RFC 3339. `None` ise kalıcı.
+    /// RFC 3339. `None` means permanent.
     pub expires_at: Option<String>,
 }
 
-/// `POST /admin/roles` isteği.
+/// Request body of `POST /admin/roles`.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SetRoleRequest {
     pub username: String,
-    /// `"admin"`, `"moderator"` ya da `null` (rolü kaldır).
+    /// One of `"admin"`, `"moderator"`, or `null` to remove the role.
     #[serde(default)]
     pub role: Option<String>,
 }
 
-/// Bir denetim izi kaydı.
+/// An audit trail record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AdminActionSummary {
     pub id: String,
-    /// Eylemi yapan admin'in kullanıcı adı — ham id yerine okunabilir olan.
+    /// Username of the admin who performed the action — readable, rather
+    /// than a raw id.
     pub admin_username: String,
     pub action_type: String,
     pub target_type: String,
@@ -105,11 +106,11 @@ pub struct AdminActionSummary {
     pub created_at: String,
 }
 
-/// `GET /admin/actions` yanıtı.
+/// Response of `GET /admin/actions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct AdminActionListResponse {
     pub actions: Vec<AdminActionSummary>,
-    /// `None` ise bu son sayfadır.
+    /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }

@@ -520,7 +520,7 @@ async fn create_post(
     params(
         ("id" = String, Path, description = "The post's external id (`c_...`)"),
         ("fields" = Option<String>, Query,
-            description = "Comma-separated field names — only these are returned (see `crate::fields`). \
+            description = "Comma-separated field names — only these are returned. \
                 E.g. `fields=id,title,score`."),
     ),
     responses(

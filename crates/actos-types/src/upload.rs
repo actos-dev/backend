@@ -1,25 +1,25 @@
-//! Dosya yükleme uçlarının yanıt tipleri.
+//! Response types for the file upload endpoints.
 
 use serde::{Deserialize, Serialize};
 
-/// `POST /uploads` yanıtı ve bir içeriğin eklerinin gösterimi.
+/// Response of `POST /uploads`, and how a content's attachments are shown.
 ///
-/// `url` ve `thumbnail_url` **doğrudan kullanılabilir**: bucket public-read
-/// olduğu için imzalama ya da ikinci bir çağrı gerekmiyor (bkz. PLAN.md
-/// Faz 13 — ileride private + presigned URL'ye geçilebilir, o zaman bu
-/// alanların anlamı değil yalnızca ömrü değişir).
+/// `url` and `thumbnail_url` are **directly usable**: the bucket is
+/// public-read, so neither signing nor a second call is needed (see PLAN.md
+/// phase 13 — a move to private + presigned URLs is possible later, and it
+/// would change only the lifetime of these fields, not their meaning).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UploadResponse {
     pub id: String,
     pub url: String,
     pub thumbnail_url: String,
-    /// Normalize sonrası her zaman `image/webp`.
+    /// Always `image/webp` after normalization.
     pub mime_type: String,
     pub byte_size: i64,
     pub width: Option<i32>,
     pub height: Option<i32>,
-    /// Saklanan (normalize edilmiş) dosyanın SHA-256'sı, hex.
+    /// SHA-256 of the stored (normalized) file, hex-encoded.
     pub checksum_sha256: String,
     /// RFC 3339.
     pub created_at: String,

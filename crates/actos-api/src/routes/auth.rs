@@ -302,11 +302,11 @@ async fn list_keys(
 
 /// `DELETE /auth/keys/{key_id}` → `204`.
 ///
-/// `key_id` ham UUID string'i olarak ayrıştırılır (base62 değil — zaten
-/// rastgele bir UUID, numaralandırma riski yok). Ayrıştırılamıyorsa
-/// [`Error::NotFound`] dönülür, [`Error::Validation`] değil: "bu biçim
-/// geçerli ama böyle bir key yok" ile "biçim bozuk" ayrımı saldırgana bilgi
-/// verirdi.
+/// `key_id` is parsed as a raw UUID string (not base62 — it is a random UUID
+/// already, so there is no enumeration risk). If it cannot be parsed, a
+/// not-found error is returned rather than a validation error: distinguishing
+/// "the format is valid but no such key exists" from "the format is
+/// malformed" would leak information to an attacker.
 #[utoipa::path(
     delete,
     path = "/auth/keys/{key_id}",

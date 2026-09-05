@@ -41,16 +41,17 @@ pub fn router() -> OpenApiRouter<AppState> {
 /// Yüklemenin beklendiği multipart alan adı.
 const FILE_FIELD: &str = "file";
 
-/// `POST /uploads` istek gövdesinin dokümantasyon amaçlı şeması.
+/// A documentation-only schema for the `POST /uploads` request body.
 ///
-/// Gerçek ayrıştırma `axum::extract::Multipart` ile elle yapılıyor (bkz.
-/// `create_upload`) — bu struct hiç örneklenmiyor, yalnızca OpenAPI spec'inin
-/// `multipart/form-data` gövdesini tarif edebilmesi için var.
+/// The real parsing is done by hand with `axum::extract::Multipart` (see
+/// `create_upload`) — this struct is never instantiated; it exists only so
+/// the OpenAPI spec can describe the `multipart/form-data` body.
 #[derive(utoipa::ToSchema)]
 #[allow(dead_code)]
 struct UploadRequestBody {
-    /// Yüklenecek görsel dosyası. Kabul edilen biçimler: jpeg, png, gif, webp
-    /// (magic byte ile tespit edilir, uzantı/`Content-Type`'a güvenilmez).
+    /// The image file to upload. Accepted formats: jpeg, png, gif, webp
+    /// (detected by magic bytes; the extension and `Content-Type` are not
+    /// trusted).
     #[schema(content_media_type = "application/octet-stream")]
     file: Vec<u8>,
 }
