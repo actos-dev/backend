@@ -28,7 +28,13 @@ trap 'rm -f "$GECICI"' EXIT
     echo "# OTOMATİK ÜRETİLDİ — elle düzenleme, cloudflare-realip.sh üzerine yazar."
     echo "# Üretim: $(date -Is)"
     for url in https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6; do
-        curl -fsS --max-time 20 "$url" | while read -r aralik; do
+        # `|| [ -n "$aralik" ]`: Cloudflare'in listeleri sonda yeni satır
+        # TAŞIMIYOR (doğrulandı 2026-09-05 — son bayt "2"). Düz bir
+        # `while read` böyle bir dosyanın son satırını sessizce düşürür;
+        # ilk kurulumda tam olarak bu oldu, 22 aralık yerine 20 yazıldı ve
+        # 131.0.72.0/22 ile 2c0f:f248::/32 dışarıda kaldı. O iki aralıktan
+        # gelen ziyaretçilerin gerçek IP'si çözülmez, hepsi tek kovaya düşerdi.
+        curl -fsS --max-time 20 "$url" | while read -r aralik || [ -n "$aralik" ]; do
             [ -n "$aralik" ] && echo "set_real_ip_from $aralik;"
         done
     done
@@ -40,7 +46,7 @@ trap 'rm -f "$GECICI"' EXIT
 
 # Boş/kısa çıktı = curl sessizce başarısız oldu; çalışan yapılandırmayı
 # ezip nginx'i kırmaktansa hiç dokunmamak iyidir.
-if [ "$(wc -l < "$GECICI")" -lt 10 ]; then
+if [ "$(grep -c set_real_ip_from "$GECICI")" -lt 20 ]; then
     echo "hata: beklenenden az aralık alındı, $CIKTI'e dokunulmadı" >&2
     exit 1
 fi
