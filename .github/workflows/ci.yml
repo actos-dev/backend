@@ -43,7 +43,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # `--all-targets` testleri ve örnekleri de kapsıyor: yalnızca kütüphane
       # lint'lenirse test kodundaki uyarılar sessizce birikiyor.
+      #
+      # `SQLX_OFFLINE` şart: bu işte veritabanı yok, ve `--all-targets`
+      # entegrasyon testlerini de derlediği için oradaki `query!` makroları
+      # da çözülmek zorunda. Bayrak olmadan sqlx önce online moda düşüp
+      # `DATABASE_URL` istiyor; bayrakla `.sqlx` önbelleğini kullanıyor ve
+      # önbellek bayatsa **burada kırılıyor** — istenen davranış bu.
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        env:
+          SQLX_OFFLINE: "true"
 
   test:
     name: test
@@ -59,7 +67,24 @@ jobs:
       - name: Altyapıyı kaldır (postgres + redis + minio)
         run: |
           cp .env.example .env
-          docker compose up -d --wait
+
+          # `--wait` yalnızca uzun ömürlü üç servise veriliyor. `minio_init`
+          # işini bitirip 0 ile çıkan tek seferlik bir konteyner ve runner'ın
+          # compose sürümü çıkmış bir konteyneri `--wait` başarısızlığı
+          # sayıyor (çıkış kodu 0 olsa bile) — ilk CI koşusunda tam olarak bu
+          # oldu. Yerel compose v5 kabul ediyor, runner'ınki etmiyor.
+          docker compose up -d --wait postgres redis minio
+
+          # Bucket'ı kuran job ayrı çalıştırılıp çıkış kodu AÇIKÇA
+          # doğrulanıyor: sessizce başarısız olursa testler anlaşılmaz bir
+          # S3 hatasıyla düşerdi.
+          docker compose up -d minio_init
+          kod=$(docker wait actos_minio_init)
+          if [ "$kod" != "0" ]; then
+            echo "minio_init $kod ile çıktı — bucket kurulamadı:"
+            docker logs actos_minio_init
+            exit 1
+          fi
 
       # `.sqlx` bayatsa burada kırılsın: `SQLX_OFFLINE=true` ile derleyip
       # canlı DB'ye karşı koşmak, offline meta verinin gerçekten şemayla
