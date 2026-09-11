@@ -207,6 +207,19 @@
         ],
         "type": "object"
       },
+      "AvatarResponse": {
+        "description": "Response body of `POST /actors/me/avatar`.\n\nJust the URL, not a full `ActorSummary`: the caller already has the rest\nof their own profile (this endpoint only ever changes one field), and\nmaking a second round trip through `crate::auth::ActorSummary` to report\nback fields the caller didn't just send would be pure overhead.",
+        "properties": {
+          "avatar_url": {
+            "description": "The public URL of the newly-stored avatar. Directly usable — see\n[`crate::upload::UploadResponse::url`] for why (same public-read\nbucket, no signing).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "avatar_url"
+        ],
+        "type": "object"
+      },
       "BanSummary": {
         "description": "A ban record.",
         "properties": {
@@ -1184,13 +1197,6 @@
       "UpdateProfileRequest": {
         "description": "Request body of `PATCH /actors/me`.\n\n**The `Option<Option<T>>` pattern — partial update:** if the field is\nabsent from the JSON the outer `Option` stays `None` (\"leave it alone\");\nif it is sent explicitly as `null` the outer `Option` becomes `Some(None)`\n(\"clear it\"); if a value is sent it becomes `Some(Some(v))` (\"update it\").\nA plain `#[serde(default)]` + `Option<T>` cannot tell these three apart —\n`null` and \"field not sent at all\" would collapse into the same `None`,\nand a client could never clear a field.\n\n`double_option` achieves this as follows: thanks to `#[serde(default)]`,\nwhen the field is absent from the JSON the `deserialize_with` function is\n**never called** and the field stays `Default::default()` (that is,\n`None`). When the field is present — even with a `null` value — the\nfunction is called, and the inner `Option<T>::deserialize` already draws\nthe right distinction (`null` → `None`, a value → `Some(value)`); we wrap\nthat in a `Some(...)` to add the outer layer.",
         "properties": {
-          "avatar": {
-            "description": "The **external** id of the upload to use as the new avatar (`f_...`\n— the `id` returned by `POST /uploads`). Same `Option<Option<T>>`\npattern as `display_name`/`bio`: if the field is absent the avatar is\nleft alone, if `null` is sent the avatar is removed, and if an id is\nsent that upload becomes the avatar.\n\nBefore accepting the id the server checks three things: that the\nupload exists (`404`), that it **belongs to the calling actor**\n(`403`), and that it is **not yet attached** to any content (`409` — a\nfile already attached to a post or comment cannot be reused as an\navatar, since two different lifecycles would collide on one row).",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "bio": {
             "type": [
               "string",
@@ -1624,7 +1630,7 @@
         ]
       },
       "patch": {
-        "description": "A field that is absent from the JSON is left untouched; sending `null` clears it; sending a value updates it. The id given for `avatar` must be an upload id returned by `POST /uploads`; `403` if it belongs to someone else, `404` if it doesn't exist, `409` if it's already attached to a piece of content.",
+        "description": "A field that is absent from the JSON is left untouched; sending `null` clears it; sending a value updates it. To change the avatar, use `POST`/`DELETE /actors/me/avatar` instead.",
         "operationId": "update_profile",
         "requestBody": {
           "content": {
@@ -1666,36 +1672,6 @@
               }
             },
             "description": "No credentials were presented, or the API key is invalid"
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Authenticated, but not authorized for this action"
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Resource not found"
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Conflict (uniqueness violation or a concurrent request)"
           },
           "429": {
             "content": {
@@ -1744,6 +1720,196 @@
           }
         ],
         "summary": "Partially update your own profile",
+        "tags": [
+          "actors"
+        ]
+      }
+    },
+    "/actors/me/avatar": {
+      "delete": {
+        "operationId": "delete_avatar",
+        "responses": {
+          "204": {
+            "description": "Avatar cleared (or was already absent)"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Delete your own avatar",
+        "tags": [
+          "actors"
+        ]
+      },
+      "post": {
+        "description": "Expects a `file` field in the multipart body. Replaces and deletes any previously stored avatar.",
+        "operationId": "upload_avatar",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "description": "A documentation-only schema for the `POST /actors/me/avatar` request\nbody — same pattern as `crate::routes::uploads::UploadRequestBody`, see\nits doc for why this struct is never instantiated.",
+                "properties": {
+                  "file": {
+                    "contentMediaType": "application/octet-stream",
+                    "description": "The image file to use as the new avatar. Accepted formats: jpeg,\npng, gif, webp (detected by magic bytes; the extension and\n`Content-Type` are not trusted).",
+                    "items": {
+                      "format": "int32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvatarResponse"
+                }
+              }
+            },
+            "description": "Avatar stored, with its public URL"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Uploaded file was rejected (type, size, or content validation)"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Upload or replace your own avatar",
         "tags": [
           "actors"
         ]

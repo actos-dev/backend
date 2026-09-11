@@ -505,6 +505,8 @@ const MATRIX_OPERATIONS: &[(&str, &str)] = &[
     ("GET", "/actors/{username}"),
     ("PATCH", "/actors/me"),
     ("DELETE", "/actors/me"),
+    ("POST", "/actors/me/avatar"),
+    ("DELETE", "/actors/me/avatar"),
     ("GET", "/actors/{username}/followers"),
     ("GET", "/actors/{username}/following"),
     // --- post_uclarinin_yetki_matrisi ---
@@ -936,7 +938,7 @@ async fn auth_uclarinin_yetki_matrisi(pool: PgPool) {
 }
 
 // ============================================================================
-// actor_profil_uclarinin_yetki_matrisi — 6 operasyon
+// actor_profil_uclarinin_yetki_matrisi — 8 operasyon
 // ============================================================================
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
@@ -1080,6 +1082,75 @@ async fn actor_profil_uclarinin_yetki_matrisi(pool: PgPool) {
         )
         .await;
     }
+
+    // --- POST /actors/me/avatar — "PATCH /actors/me" ile aynı gerekçe:
+    // path'te username yok, her zaman kendi avatarın, sahip/normal ayrımı
+    // anlamsız. ---
+    assert_code(
+        &router,
+        multipart_upload_req("POST", "/actors/me/avatar", None, &tiny_png()),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /actors/me/avatar [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("sahip", &normal_key), // bu uçta "sahip" == "kendi profilin", normal ile aynı davranış
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
+        assert_status(
+            &router,
+            multipart_upload_req("POST", "/actors/me/avatar", Some(token), &tiny_png()),
+            StatusCode::CREATED,
+            &format!("POST /actors/me/avatar [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        multipart_upload_req("POST", "/actors/me/avatar", Some(&banned_key), &tiny_png()),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /actors/me/avatar [banli]",
+    )
+    .await;
+
+    // --- DELETE /actors/me/avatar — idempotent (bkz.
+    // `actos_core::avatar::clear_avatar`): the avatar doesn't need to exist
+    // beforehand for this to return `204`, so no seeding step is needed
+    // per role. ---
+    assert_code(
+        &router,
+        empty_req("DELETE", "/actors/me/avatar"),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "DELETE /actors/me/avatar [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("sahip", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
+        assert_status(
+            &router,
+            auth_req("DELETE", "/actors/me/avatar", token),
+            StatusCode::NO_CONTENT,
+            &format!("DELETE /actors/me/avatar [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_req("DELETE", "/actors/me/avatar", &banned_key),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "DELETE /actors/me/avatar [banli]",
+    )
+    .await;
 }
 
 // ============================================================================

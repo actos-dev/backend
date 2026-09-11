@@ -286,6 +286,14 @@ Yüklenen dosyalar. Yükleme ile bir içeriğe bağlanma iki ayrı adımdır: do
 önce object storage'a yüklenir (`content_id` NULL), sonra post/yorum
 kaydedilirken `content_id` set edilir.
 
+**Avatars do not use this table.** `POST`/`DELETE /actors/me/avatar` write
+`actors.avatar_object_key` directly and never create a row here — see
+`crates/actos-core/src/avatar.rs`. Before this endpoint existed, an avatar
+WAS a row in this table with `content_id` permanently `NULL`, which is why
+`migrations/0026_drop_avatar_attachments.up.sql` had to sweep up the
+already-existing ones: `idx_attachments_orphaned` below no longer excludes
+them.
+
 | Kolon | Tip | Açıklama |
 |---|---|---|
 | `id` | `bigint` (PK, IDENTITY) | |

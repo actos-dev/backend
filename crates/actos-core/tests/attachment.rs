@@ -1,16 +1,18 @@
 //! `actos_core::attachment` entegrasyon testleri.
 //!
-//! **Faz 18.A odak noktası: [`attachment::cleanup_orphaned`]'in avatar
-//! dışlaması.** Bir avatar `attachments.content_id`'yi hiçbir zaman
-//! doldurmaz (`actos_core::actor::update_profile` onu yalnızca
-//! `actors.avatar_object_key`'e yazar, bkz. `actos_core::attachment::
-//! resolve_as_avatar` dokümanı) — yani şema düzeyinde bir avatar,
-//! `content_id IS NULL AND created_at < eşik` kuralına göre sıradan bir
-//! yetim yüklemeden **ayırt edilemez**. Bu testin konusu tam olarak bu:
-//! [`attachment::cleanup_orphaned`]'in `NOT EXISTS (... actors.
-//! avatar_object_key ...)` dışlamasının gerçekten çalıştığını, avatar
-//! olarak kullanılan bir ekin yaşı ne olursa olsun hayatta kaldığını, ama
-//! aynı yaştaki **gerçek** bir yetimin hâlâ silindiğini kanıtlamak.
+//! **Avatar exclusion coverage removed.** This file used to pin
+//! `cleanup_orphaned`'s `NOT EXISTS (... actors.avatar_object_key ...)`
+//! guard, which protected an avatar's bookkeeping row (permanently
+//! `content_id IS NULL`) from being swept up as an ordinary orphan. Avatars
+//! no longer create a row in `attachments` at all — they get their own
+//! endpoints, `POST`/`DELETE /actors/me/avatar` (see `actos_core::avatar`),
+//! writing `actors.avatar_object_key` directly — so the guard itself was
+//! removed from `cleanup_orphaned`'s query, and there is nothing left here
+//! to test. See `migrations/0026_drop_avatar_attachments.up.sql` for how
+//! the already-existing avatar rows were retired safely alongside that
+//! change.
+//!
+//! What remains is `cleanup_orphaned`'s ordinary age-threshold behavior.
 //!
 //! **Depolamaya gerçekten bağlanılmıyor:** `crates/actos-api/tests/*`'teki
 //! aynı desen — `Storage`, bilerek erişilemez bir adrese (`http://
@@ -99,58 +101,9 @@ async fn attachment_var_mi(pool: &PgPool, id: i64) -> bool {
     .expect("sorgulanabilmeli")
 }
 
-/// **⚠️ Bu test, SESSİZ VERİ KAYBI tuzağının bekçisi.** Bu test olmadan (ya
-/// da `cleanup_orphaned`'deki `NOT EXISTS` dışlaması geri alınırsa), bir
-/// actor avatarını ayarladıktan `ORPHAN_MAX_AGE_HOURS` saat sonra bu iş onu
-/// sessizce siler — ne istemciye ne loga bir hata düşer, `avatar_url`
-/// yalnızca bir sonraki okumada kırık bir bağlantıya döner.
-#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn avatar_olarak_kullanilan_ek_yetim_temizligine_takilmiyor(pool: PgPool) {
-    let storage = test_storage();
-    let actor_id = seed_actor(&pool, "avatar_sahibi").await;
-
-    // İkisi de yaşça eşik üstü (`content_id IS NULL`, eski) — aralarındaki
-    // TEK fark biri `actors.avatar_object_key`'e yazılmış olması.
-    let age_hours = attachment::ORPHAN_MAX_AGE_HOURS + 10;
-    let avatar_key = format!("{actor_id}/avatar.webp");
-    let avatar_attachment_id =
-        seed_orphan_attachment(&pool, actor_id, &avatar_key, age_hours).await;
-    let real_orphan_key = format!("{actor_id}/gercekten-yetim.webp");
-    let real_orphan_id = seed_orphan_attachment(&pool, actor_id, &real_orphan_key, age_hours).await;
-
-    sqlx::query!(
-        r#"UPDATE actors SET avatar_object_key = $1 WHERE id = $2"#,
-        avatar_key,
-        actor_id,
-    )
-    .execute(&pool)
-    .await
-    .expect("avatar_object_key yazılabilmeli");
-
-    let silinen = attachment::cleanup_orphaned(&pool, &storage)
-        .await
-        .expect("temizlik çalışabilmeli");
-
-    assert_eq!(
-        silinen, 1,
-        "yalnızca gerçek yetim silinmeli, avatar hariç tutulmalı"
-    );
-    assert!(
-        attachment_var_mi(&pool, avatar_attachment_id).await,
-        "avatar olarak kullanılan ek temizliğe takılmamalı"
-    );
-    assert!(
-        !attachment_var_mi(&pool, real_orphan_id).await,
-        "avatar OLMAYAN gerçek bir yetim hâlâ silinmeli — dışlama çok geniş olmamalı"
-    );
-}
-
-/// Eşik altındaki (henüz `ORPHAN_MAX_AGE_HOURS` saati doldurmamış) sıradan
-/// bir yükleme — avatar olsun olmasın — hiç dokunulmamalı. Avatar
-/// dışlamasının "her avatarı sonsuza dek hariç tut" değil "yalnızca yanlış
-/// yere düşmesin" olduğunu göstermek için: bu test avatar OLMAYAN taze bir
-/// satırla, yukarıdaki test de avatar OLAN eski bir satırla aynı işi
-/// tamamlıyor.
+/// An ordinary upload that hasn't crossed [`attachment::ORPHAN_MAX_AGE_HOURS`]
+/// yet must be left alone — `cleanup_orphaned` only sweeps rows strictly
+/// older than the threshold.
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
 async fn taze_yukleme_yasi_dolmadan_temizlige_takilmiyor(pool: PgPool) {
     let storage = test_storage();

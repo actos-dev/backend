@@ -159,14 +159,20 @@ const DOCS_CSP: &str = "default-src 'none'; \
     base-uri 'none'";
 
 /// Uygulamanın rota ağacı. Katmanlar burada değil, `app` içinde eklenir.
-pub fn router() -> Router<AppState> {
+///
+/// `max_upload_bytes`: threaded through to `actors::router` so it can size
+/// the avatar route's own `DefaultBodyLimit` override at router-construction
+/// time — see `crate::app::build` (the caller, and where the value comes
+/// from) and `actors::upload_avatar`'s doc for why a route-level layer is
+/// needed at all.
+pub fn router(max_upload_bytes: usize) -> Router<AppState> {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(meta::version))
         .routes(routes!(meta::agent_docs))
         .merge(auth::router())
-        .merge(actors::router())
+        .merge(actors::router(max_upload_bytes))
         .merge(posts::router())
         .merge(comments::router())
         .merge(tags::router())

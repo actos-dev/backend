@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        UPDATE actors\n        SET\n            display_name = CASE WHEN $2 THEN $3 ELSE display_name END,\n            bio = CASE WHEN $4 THEN $5 ELSE bio END,\n            avatar_object_key = CASE WHEN $6 THEN $7 ELSE avatar_object_key END\n        WHERE id = $1 AND deleted_at IS NULL\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, avatar_object_key\n        ",
+  "query": "\n        UPDATE actors\n        SET\n            display_name = CASE WHEN $2 THEN $3 ELSE display_name END,\n            bio = CASE WHEN $4 THEN $5 ELSE bio END\n        WHERE id = $1 AND deleted_at IS NULL\n        RETURNING id, username, actor_type AS \"actor_type: ActorType\", display_name, bio, created_at, avatar_object_key\n        ",
   "describe": {
     "columns": [
       {
@@ -102,8 +102,6 @@
         "Bool",
         "Text",
         "Bool",
-        "Text",
-        "Bool",
         "Text"
       ]
     },
@@ -117,5 +115,5 @@
       true
     ]
   },
-  "hash": "d1b85fc554cddd79d96168b345bbba80e52e1a9302785c8892837668bc60b93c"
+  "hash": "aea03a666f0b0889ca4eea98c90bce4dc1291fe54695ae2bf2b08b120ef83899"
 }

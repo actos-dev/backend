@@ -1,0 +1,15 @@
+-- Intentionally a no-op — this migration is NOT reversible, and does not
+-- need to be.
+--
+-- The rows the `up` migration deleted were pure bookkeeping: by the time
+-- this deploy ships, nothing reads an `attachments` row to serve an
+-- avatar any more (`attachment::resolve_as_avatar` is deleted in the same
+-- deploy, and the new avatar endpoints never touch this table). Recreating
+-- them would require guessing at `byte_size`, `mime_type`, `width`,
+-- `height`, and `checksum_sha256` — none of which this migration recorded,
+-- because none of it is needed by any reader that still exists.
+--
+-- `actors.avatar_object_key` was never touched by the `up` migration (it
+-- still points at the same live S3 object it always did), so there is
+-- nothing about the actual avatar to restore either — only a defunct
+-- bookkeeping row this codebase no longer knows how to use.

@@ -156,29 +156,24 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
 
 // --- Profil güncelleme ---------------------------------------------------
 
-/// `PATCH /actors/me`: `display_name`/`bio`/`avatar`'ı kısmi günceller.
+/// `PATCH /actors/me`: `display_name`/`bio`'yu kısmi günceller.
 ///
-/// Üç parametre de `Option<Option<T>>`: dış `None` "bu alana dokunma",
+/// İki parametre de `Option<Option<T>>`: dış `None` "bu alana dokunma",
 /// `Some(None)` "temizle (NULL yap)", `Some(Some(v))` "`v`'ye güncelle"
 /// anlamına gelir — HTTP katmanı JSON'daki alan var/yok ayrımını buraya
 /// kadar aynen taşıyor (bkz. `actos_types::actor::UpdateProfileRequest`
 /// üzerindeki yorum).
 ///
-/// `avatar_attachment_id`'nin iç (`bigint`) bir id olması bilinçli: `IdCodec`
-/// yalnızca HTTP katmanında kullanılıyor kuralı burada da geçerli (bkz.
-/// `actos-api/src/routes/actors.rs` — dış `f_...` id'sini çözen taraf o).
+/// **Avatar artık burada değil.** Avatarın kendi uçları var — `POST`/`DELETE
+/// /actors/me/avatar` (bkz. `crate::avatar`) — ve `attachments` tablosuna
+/// hiç uğramıyor, doğrudan `actors.avatar_object_key`'i yazıyor. Bu
+/// fonksiyon o kolona hâlâ dokunmuyor (aşağıdaki `RETURNING` yalnızca
+/// **okuyor**), sadece artık kabul ettiği bir güncelleme değil.
 ///
 /// **Tek statik SQL, dinamik `UPDATE` string birleştirmesi yok:** `CASE
 /// WHEN $touch THEN $value ELSE mevcut_kolon END` kalıbı, sqlx'in derleme
 /// zamanı doğruladığı sabit bir sorguyla "dokunma/temizle/güncelle" üçlü
-/// mantığını ifade ediyor — `avatar_object_key` de aynı kalıba katıldı.
-///
-/// **Neden transaction:** avatar `Some(Some(id))` ise, asıl `UPDATE`'ten
-/// önce [`crate::attachment::resolve_as_avatar`] ile o ekin çağırana ait ve
-/// henüz bir içeriğe bağlanmamış olduğu doğrulanmalı. Doğrulama başarısız
-/// olursa (404/403/409) `display_name`/`bio` için istenen değişiklikler de
-/// **uygulanmamalı** — `PATCH` tek bir atomik istek, "avatar reddedildi ama
-/// bio güncellendi" gibi yarım bir sonuç istemciyi şaşırtırdı.
+/// mantığını ifade ediyor.
 ///
 /// `actors.updated_at`'e burada elle dokunulmuyor:
 /// `migrations/0017_triggers.up.sql`'deki `trg_actors_set_updated_at`
@@ -192,22 +187,20 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
 ///
 /// Dönüş: `(güncellenmiş actor, güncel avatar_object_key)` — ikincisi ayrı
 /// çünkü `ActorRecord` avatar taşımıyor (bkz. `crate::auth::
-/// AuthenticatedActor` üzerindeki gerekçe). Avatar bu çağrıda hiç
-/// dokunulmamışsa bile mevcut değeri (varsa) taşır — `RETURNING` her zaman
-/// satırın güncel hâlini verir.
+/// AuthenticatedActor` üzerindeki gerekçe). `RETURNING` her zaman satırın
+/// güncel hâlini verdiği için çağıranın (`crate::routes::actors::
+/// update_profile`) `avatar_url`'i yeniden hesaplayabilmesi için ayrıca bir
+/// okuma yapmasına gerek kalmıyor.
 ///
 /// # Errors
-/// `display_name`/`bio` doğrulamadan geçmezse [`Error::Validation`]; avatar
-/// olarak verilen ek yoksa [`Error::NotFound`], çağırana ait değilse
-/// [`Error::Forbidden`], zaten bir içeriğe bağlıysa [`Error::Conflict`]
-/// (bkz. [`crate::attachment::resolve_as_avatar`]); yukarıdaki tutarsızlık
-/// durumunda [`Error::Internal`]; veritabanı hatası [`Error::Database`].
+/// `display_name`/`bio` doğrulamadan geçmezse [`Error::Validation`];
+/// yukarıdaki tutarsızlık durumunda [`Error::Internal`]; veritabanı hatası
+/// [`Error::Database`].
 pub async fn update_profile(
     pool: &PgPool,
     actor_id: i64,
     display_name: Option<Option<String>>,
     bio: Option<Option<String>>,
-    avatar_attachment_id: Option<Option<i64>>,
 ) -> Result<(ActorRecord, Option<String>)> {
     let display_name = validate_optional_update(display_name, text::validate_display_name)?;
     let bio = validate_optional_update(bio, text::validate_bio)?;
@@ -217,29 +210,13 @@ pub async fn update_profile(
     let touch_bio = bio.is_some();
     let new_bio = bio.flatten();
 
-    let touch_avatar = avatar_attachment_id.is_some();
-
-    let mut tx = pool.begin().await?;
-
-    // `Some(Some(id))` → doğrulanmış `object_key`; `Some(None)` (temizleme)
-    // ve `None` (dokunmama) → `None` (ilkinde CASE WHEN NULL yazar, ikincisinde
-    // `touch_avatar=false` olduğu için CASE WHEN mevcut değeri zaten korur,
-    // bu `None` hiç kullanılmaz).
-    let new_avatar_object_key: Option<String> = match avatar_attachment_id.flatten() {
-        Some(attachment_id) => {
-            Some(crate::attachment::resolve_as_avatar(&mut tx, attachment_id, actor_id).await?)
-        }
-        None => None,
-    };
-
     let row = sqlx::query_as!(
         UpdateProfileRow,
         r#"
         UPDATE actors
         SET
             display_name = CASE WHEN $2 THEN $3 ELSE display_name END,
-            bio = CASE WHEN $4 THEN $5 ELSE bio END,
-            avatar_object_key = CASE WHEN $6 THEN $7 ELSE avatar_object_key END
+            bio = CASE WHEN $4 THEN $5 ELSE bio END
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, avatar_object_key
         "#,
@@ -248,10 +225,8 @@ pub async fn update_profile(
         new_display_name,
         touch_bio,
         new_bio,
-        touch_avatar,
-        new_avatar_object_key,
     )
-    .fetch_optional(&mut *tx)
+    .fetch_optional(pool)
     .await?;
 
     let row = row.ok_or_else(|| {
@@ -259,8 +234,6 @@ pub async fn update_profile(
             "could not update profile: actor {actor_id} not found (should not happen after authenticate())"
         ))
     })?;
-
-    tx.commit().await?;
 
     Ok((
         ActorRecord {

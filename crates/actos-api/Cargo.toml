@@ -44,5 +44,13 @@ utoipa-axum = { workspace = true }
 # `Scalar` UI için (`GET /docs`, bkz. `crate::routes::mod` dokümantasyonu).
 utoipa-scalar = { workspace = true, features = ["axum"] }
 
+[dev-dependencies]
+# Generates real PNG/JPEG bytes in-memory for the multipart upload tests
+# (`tests/avatar_api.rs`) — see that file's doc for why: sending an actual
+# image through the router, not a fixture, is the whole point of that test
+# file, and committing binary fixtures for this would be worse than just
+# encoding a tiny image at test time.
+image = { workspace = true }
+
 [lints]
 workspace = true

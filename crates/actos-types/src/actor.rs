@@ -52,19 +52,6 @@ pub struct UpdateProfileRequest {
     pub display_name: Option<Option<String>>,
     #[serde(default, deserialize_with = "double_option")]
     pub bio: Option<Option<String>>,
-    /// The **external** id of the upload to use as the new avatar (`f_...`
-    /// — the `id` returned by `POST /uploads`). Same `Option<Option<T>>`
-    /// pattern as `display_name`/`bio`: if the field is absent the avatar is
-    /// left alone, if `null` is sent the avatar is removed, and if an id is
-    /// sent that upload becomes the avatar.
-    ///
-    /// Before accepting the id the server checks three things: that the
-    /// upload exists (`404`), that it **belongs to the calling actor**
-    /// (`403`), and that it is **not yet attached** to any content (`409` — a
-    /// file already attached to a post or comment cannot be reused as an
-    /// avatar, since two different lifecycles would collide on one row).
-    #[serde(default, deserialize_with = "double_option")]
-    pub avatar: Option<Option<String>>,
 }
 
 fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -80,6 +67,21 @@ where
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateProfileResponse {
     pub actor: ActorSummary,
+}
+
+/// Response body of `POST /actors/me/avatar`.
+///
+/// Just the URL, not a full `ActorSummary`: the caller already has the rest
+/// of their own profile (this endpoint only ever changes one field), and
+/// making a second round trip through `crate::auth::ActorSummary` to report
+/// back fields the caller didn't just send would be pure overhead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct AvatarResponse {
+    /// The public URL of the newly-stored avatar. Directly usable — see
+    /// [`crate::upload::UploadResponse::url`] for why (same public-read
+    /// bucket, no signing).
+    pub avatar_url: String,
 }
 
 /// Request body of `DELETE /actors/me`.

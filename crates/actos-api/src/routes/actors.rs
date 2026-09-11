@@ -15,15 +15,16 @@
 use actos_core::{
     Error, actor as core_actor,
     auth::ActorRecord,
+    avatar as core_avatar,
     cursor::{Cursor, CursorCodec, SortKind},
 };
 use actos_types::actor::{
-    ActorListResponse, ActorProfileResponse, ActorStats, DeleteAccountRequest,
+    ActorListResponse, ActorProfileResponse, ActorStats, AvatarResponse, DeleteAccountRequest,
     UpdateProfileRequest, UpdateProfileResponse,
 };
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
 use serde::Deserialize;
@@ -32,18 +33,26 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::{
     auth::CurrentActor,
     error::ApiError,
-    openapi::{Conflict, Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
+    openapi::{Gone, NotFound, RateLimited, Unauthorized, UnsupportedMedia, ValidationFailed},
     routes::auth::{actor_summary, parse_actor_type},
     state::AppState,
 };
 
-pub fn router() -> OpenApiRouter<AppState> {
+/// `max_upload_bytes`: see [`upload_avatar`]'s doc for why the avatar route
+/// needs its own `DefaultBodyLimit` layer, and `crate::app::build`'s doc
+/// for the app-wide default this overrides.
+pub fn router(max_upload_bytes: usize) -> OpenApiRouter<AppState> {
+    let avatar = OpenApiRouter::new()
+        .routes(routes!(upload_avatar, delete_avatar))
+        .layer(DefaultBodyLimit::max(max_upload_bytes));
+
     OpenApiRouter::new()
         .routes(routes!(list_directory))
         .routes(routes!(update_profile, delete_account))
         .routes(routes!(get_profile))
         .routes(routes!(list_followers))
         .routes(routes!(list_following))
+        .merge(avatar)
 }
 
 // --- Query param tipleri -------------------------------------------------
@@ -175,31 +184,27 @@ async fn get_profile(
     }))
 }
 
-/// `PATCH /actors/me` → `200`, `404` (avatar için verilen ek yok), `403`
-/// (ek başkasına ait), `409` (ek zaten bir içeriğe bağlı). Kısmi güncelleme:
-/// `req.display_name`/`req.bio`/`req.avatar` `Option<Option<T>>` olarak
-/// aynen `actos_core::actor::update_profile`'a geçiriliyor (bkz.
-/// `actos_types::actor::UpdateProfileRequest` dokümanı) — `avatar` yalnızca
-/// dış `f_...` id'sinin iç `bigint`'e çözülmesi burada, HTTP katmanında
-/// yapılıyor (`IdCodec` kuralı, bkz. modül dokümantasyonu).
+/// `PATCH /actors/me` → `200`. Kısmi güncelleme: `req.display_name`/
+/// `req.bio` `Option<Option<T>>` olarak aynen `actos_core::actor::
+/// update_profile`'a geçiriliyor (bkz. `actos_types::actor::
+/// UpdateProfileRequest` dokümanı).
+///
+/// **The avatar is not part of this request.** It has its own endpoints,
+/// [`upload_avatar`]/[`delete_avatar`] below — see `actos_core::avatar`
+/// module doc for why it was pulled out of this handler.
 #[utoipa::path(
     patch,
     path = "/actors/me",
     tag = "actors",
     summary = "Partially update your own profile",
     description = "A field that is absent from the JSON is left untouched; sending `null` clears it; \
-        sending a value updates it. The id given for \
-        `avatar` must be an upload id returned by `POST /uploads`; `403` if it belongs to someone else, \
-        `404` if it doesn't exist, `409` if it's already attached to a piece of content.",
+        sending a value updates it. To change the avatar, use `POST`/`DELETE /actors/me/avatar` instead.",
     security(("api_key" = [])),
     request_body = UpdateProfileRequest,
     responses(
         (status = 200, description = "Updated profile", body = UpdateProfileResponse),
         Unauthorized,
         ValidationFailed,
-        Forbidden,
-        NotFound,
-        Conflict,
         RateLimited,
     )
 )]
@@ -209,37 +214,10 @@ async fn update_profile(
     headers: HeaderMap,
     Json(req): Json<UpdateProfileRequest>,
 ) -> Result<Json<UpdateProfileResponse>, ApiError> {
-    // Dış `f_...` id'sini iç `bigint`'e çözüyoruz — `req.avatar`'ın
-    // `Option<Option<String>>` şeklini (dokunma/temizle/güncelle)
-    // `Option<Option<i64>>`'a birebir taşıyarak. Çözülemeyen bir id
-    // (yanlış prefix, bozuk base62, ya da hiç var olmayan bir attachment)
-    // burada `404` olur — `crate::routes::uploads::delete_upload`'daki aynı
-    // gerekçe: "biçim geçerli ama böyle bir kayıt yok" ile "biçim bozuk"
-    // ayrımı saldırgana bilgi verirdi, ikisi de aynı hataya çöküyor.
-    let avatar_attachment_id = req
-        .avatar
-        .map(|inner| {
-            inner
-                .map(|id| {
-                    state
-                        .id_codec()
-                        .decode::<actos_core::id::Attachment>(&id)
-                        .map_err(|_| Error::NotFound("attachment"))
-                })
-                .transpose()
-        })
-        .transpose()
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
-
-    let (updated, avatar_object_key) = core_actor::update_profile(
-        state.db(),
-        current.actor.id,
-        req.display_name,
-        req.bio,
-        avatar_attachment_id,
-    )
-    .await
-    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    let (updated, avatar_object_key) =
+        core_actor::update_profile(state.db(), current.actor.id, req.display_name, req.bio)
+            .await
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let avatar_url = avatar_object_key
         .as_deref()
@@ -248,6 +226,136 @@ async fn update_profile(
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(Json(UpdateProfileResponse { actor }))
+}
+
+/// `POST /actors/me/avatar` → `201`, `400` (alan yok / dosya bozuk / çok
+/// büyük), `415` (desteklenmeyen biçim), `401`.
+///
+/// **Body limit override:** the router-level `.layer(DefaultBodyLimit::
+/// max(max_upload_bytes))` in [`router`] raises the axum default-body-limit
+/// extension for this one route above the app-wide default set in
+/// `crate::app::build` — see that function's doc for the mechanism (an
+/// inner, route-specific `DefaultBodyLimit` overwrites the outer, app-wide
+/// one's extension value before the `Multipart` extractor ever reads it).
+/// Without it, any file over the app-wide default would never reach
+/// [`actos_core::media::process_image`] at all.
+#[utoipa::path(
+    post,
+    path = "/actors/me/avatar",
+    tag = "actors",
+    summary = "Upload or replace your own avatar",
+    description = "Expects a `file` field in the multipart body. Replaces and deletes any previously \
+        stored avatar.",
+    security(("api_key" = [])),
+    request_body(content = inline(AvatarRequestBody), content_type = "multipart/form-data"),
+    responses(
+        (status = 201, description = "Avatar stored, with its public URL", body = AvatarResponse),
+        Unauthorized,
+        ValidationFailed,
+        UnsupportedMedia,
+        RateLimited,
+    )
+)]
+async fn upload_avatar(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<AvatarResponse>), ApiError> {
+    let max_bytes = state.config().server.max_upload_bytes;
+
+    let mut bytes: Option<Vec<u8>> = None;
+
+    while let Some(alan) = multipart.next_field().await.map_err(|e| {
+        ApiError::new(Error::Validation(format!("could not read multipart: {e}")))
+            .with_request_id(&headers)
+    })? {
+        // Aynı desen: `crate::routes::uploads::create_upload` — yalnızca
+        // beklenen alan okunuyor, diğerleri sessizce atlanıyor.
+        if alan.name() != Some(AVATAR_FILE_FIELD) {
+            continue;
+        }
+
+        let veri = alan.bytes().await.map_err(|e| {
+            ApiError::new(Error::Validation(format!("could not read file: {e}")))
+                .with_request_id(&headers)
+        })?;
+
+        if veri.len() > max_bytes {
+            return Err(ApiError::new(Error::Validation(format!(
+                "file too large: {} bytes, limit {max_bytes} bytes",
+                veri.len()
+            )))
+            .with_request_id(&headers));
+        }
+
+        bytes = Some(veri.to_vec());
+        break;
+    }
+
+    let Some(bytes) = bytes else {
+        return Err(ApiError::new(Error::Validation(format!(
+            "multipart body is missing the \"{AVATAR_FILE_FIELD}\" field"
+        )))
+        .with_request_id(&headers));
+    };
+
+    let object_key = core_avatar::set_avatar(
+        state.db(),
+        state.storage(),
+        state.id_codec(),
+        current.actor.id,
+        &bytes,
+        max_bytes,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let avatar_url = state.storage().public_url(&object_key);
+
+    Ok((StatusCode::CREATED, Json(AvatarResponse { avatar_url })))
+}
+
+/// The multipart field name `POST /actors/me/avatar` expects.
+const AVATAR_FILE_FIELD: &str = "file";
+
+/// A documentation-only schema for the `POST /actors/me/avatar` request
+/// body — same pattern as `crate::routes::uploads::UploadRequestBody`, see
+/// its doc for why this struct is never instantiated.
+#[derive(utoipa::ToSchema)]
+#[allow(dead_code)]
+struct AvatarRequestBody {
+    /// The image file to use as the new avatar. Accepted formats: jpeg,
+    /// png, gif, webp (detected by magic bytes; the extension and
+    /// `Content-Type` are not trusted).
+    #[schema(content_media_type = "application/octet-stream")]
+    file: Vec<u8>,
+}
+
+/// `DELETE /actors/me/avatar` → `204`, `401`. Idempotent — a `204` even if
+/// the actor had no avatar set (see `actos_core::avatar::clear_avatar`).
+#[utoipa::path(
+    delete,
+    path = "/actors/me/avatar",
+    tag = "actors",
+    summary = "Delete your own avatar",
+    security(("api_key" = [])),
+    responses(
+        (status = 204, description = "Avatar cleared (or was already absent)"),
+        Unauthorized,
+        RateLimited,
+    )
+)]
+async fn delete_avatar(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    core_avatar::clear_avatar(state.db(), state.storage(), current.actor.id)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `DELETE /actors/me` → `204`. Gövdede geçerli bir kurtarma kodu şart —

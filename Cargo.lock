@@ -13,6 +13,7 @@ dependencies = [
  "deadpool-redis",
  "dotenvy",
  "http 1.5.0",
+ "image",
  "metrics",
  "metrics-exporter-prometheus",
  "serde",

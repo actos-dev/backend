@@ -6,7 +6,7 @@
 //! `axum::extract::MatchedPath` yalnızca axum'un kendi rota eşleştirmesi
 //! **tamamlandıktan sonra** istek extension'larına konur. `crate::app::build`
 //! içindeki `ServiceBuilder` zinciri (`SetRequestId`, `Trace`, ...,
-//! `RequestBodyLimit`) `routes::router()`'ın **dışını** sarmalıyor —
+//! `DefaultBodyLimit`) `routes::router()`'ın **dışını** sarmalıyor —
 //! yani bu katmanlardaki bir `from_fn` middleware'i çalıştığında rota
 //! eşleştirmesi henüz olmamıştır, `MatchedPath` orada hep `None` gelir. Bu
 //! yüzden [`observe`] dış katmana değil, `crate::routes::router`'ın

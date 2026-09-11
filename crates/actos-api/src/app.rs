@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::{HeaderName, HeaderValue, StatusCode},
     middleware::from_fn_with_state,
 };
@@ -12,7 +13,6 @@ use tower_http::{
     LatencyUnit,
     catch_panic::CatchPanicLayer,
     cors::{Any, CorsLayer},
-    limit::RequestBodyLimitLayer,
     request_id::{PropagateRequestIdLayer, SetRequestIdLayer},
     sensitive_headers::SetSensitiveRequestHeadersLayer,
     set_header::SetResponseHeaderLayer,
@@ -54,10 +54,35 @@ use crate::{
 ///     çalışıyor — kabul edilmeyecek (doygunlukta reddedilen) bir istek için
 ///     boşuna veritabanına gitmesin.
 /// 11. `ratelimit::enforce` — `identity`'den **sonra** (Subject'e ihtiyacı
-///     var), `RequestBodyLimit`'ten **önce** (gövdeye hiç dokunmuyor, erken
+///     var), gövde sınırından **önce** (gövdeye hiç dokunmuyor, erken
 ///     reddetmek daha ucuz). `X-RateLimit-*`/`Retry-After` header'larını
 ///     buradan sonraki her yanıta (401/404 dahil) ekler.
-/// 12. `RequestBodyLimit` — en içte, gövde okunmadan hemen önce
+/// 12. `DefaultBodyLimit::max(cfg.max_body_bytes)` — en içte, `routes::
+///     router()`'ı doğrudan sarıyor.
+///
+///     **Not `tower_http::limit::RequestBodyLimitLayer` — a per-route
+///     override needs to be possible.** `RequestBodyLimitLayer` checks
+///     `Content-Length` and wraps the raw body unconditionally, before axum
+///     ever routes the request; nothing registered *inside* `routes::
+///     router()` (i.e. on any individual route) runs early enough to change
+///     that decision. `axum::extract::DefaultBodyLimit` works differently:
+///     each layer that runs just stores a limit value on the request
+///     (overwriting whatever value, if any, a previous `DefaultBodyLimit`
+///     layer already stored there), and it's only actually enforced later,
+///     lazily, by whichever extractor reads the body (`Json`, `Multipart`,
+///     ...). Layers registered inside `routes::router()` — like the avatar
+///     upload route's own `.layer(DefaultBodyLimit::max(max_upload_bytes))`
+///     in `crate::routes::actors::router` — sit *inside* this one in the
+///     tower stack, so they run *after* it and overwrite its value for
+///     their own route before the extractor ever reads it. That's exactly
+///     the override this fixes: without it, `POST /actors/me/avatar`'s own
+///     limit was unreachable, because the outer `RequestBodyLimitLayer`
+///     rejected anything past `max_body_bytes` (1 MiB) before the handler,
+///     or even axum's router, ever ran — see REFACTOR.md §4's "Uploads
+///     over 1 MB do not work at default config" for the bug this replaces.
+///     `max_upload_bytes` is threaded down to `routes::router()` from here
+///     (see that function's doc) because it, not this module, decides the
+///     route's shape — this module only owns the app-wide default.
 ///
 /// Bunların **hiçbiri** `MatchedPath`'e ihtiyaç duymuyor — Faz 17'nin
 /// istek-metrikleri/yapılandırılmış-log middleware'i (`telemetry::observe`)
@@ -131,9 +156,11 @@ pub fn build(state: AppState) -> Router {
         ))
         .layer(from_fn_with_state(state.clone(), identity::resolve))
         .layer(from_fn_with_state(state.clone(), ratelimit::enforce))
-        .layer(RequestBodyLimitLayer::new(cfg.max_body_bytes));
+        .layer(DefaultBodyLimit::max(cfg.max_body_bytes));
 
-    routes::router().layer(middleware).with_state(state)
+    routes::router(cfg.max_upload_bytes)
+        .layer(middleware)
+        .with_state(state)
 }
 
 /// `Referrer-Policy` seçimi: `no-referrer`.

@@ -138,16 +138,16 @@ impl Attachment {
 /// hatası [`Error::Database`].
 ///
 /// **Neden `Validation`, `Forbidden` değil:** bu kod tabanında `Forbidden`
-/// bir *yetki/sahiplik* ihlalini işaret ediyor (bkz. [`resolve_as_avatar`] —
+/// bir *yetki/sahiplik* ihlalini işaret ediyor (bkz. [`delete_attachment`] —
 /// "bu senin değil"), kotanın anlamı bu değil; actor'ün yükleme *yetkisi*
 /// hâlâ var, yalnızca şu anki *isteği* (bu boyutta, bu anda) mevcut
 /// durumuyla (kullanımı) çakışıyor. Bu tam olarak [`Error::Validation`]'ın
 /// `max_bytes`/görsel format kontrolleri için zaten kullandığı aile: girdi
 /// biçimsel olarak geçerli ama bağlamıyla (kota) birlikte kabul edilemez.
 /// `Conflict` (409) de düşünülebilirdi ama o bu kod tabanında "kaynağın şu
-/// anki durumu" (ör. zaten bağlı bir ek) için ayrılmış (bkz.
-/// [`resolve_as_avatar`]); burada çakışan kaynağın kendisi değil, isteğin
-/// hacmi — `400 Validation` daha doğru. Mesaj kullanıcının **ne kadar
+/// anki durumu" (ör. zaten alınmış bir kullanıcı adı, bkz.
+/// `crate::auth::register`) için ayrılmış; burada çakışan kaynağın kendisi
+/// değil, isteğin hacmi — `400 Validation` daha doğru. Mesaj kullanıcının **ne kadar
 /// kullandığını ve sınırın ne olduğunu** taşıyor (bkz. aşağıdaki
 /// `format!`) — yalnızca "kota doldu" demek, istemcinin (özellikle bir
 /// ajanın, bu platformda birinci sınıf vatandaş) bir sonraki adımı
@@ -282,7 +282,11 @@ pub async fn total_storage_bytes(pool: &PgPool, actor_id: i64) -> Result<i64> {
 /// UUIDv7 zaman sıralı: aynı actor'ün yüklemeleri bucket listelemesinde
 /// kronolojik görünüyor, ve rastgele bir v4'ün aksine tahmin edilebilir bir
 /// sıra vermiyor (zaman damgası dışındaki bitler rastgele).
-fn object_key_uret(id_codec: &IdCodec, actor_id: i64) -> Result<String> {
+///
+/// `pub(crate)`: `crate::avatar` da aynı isim biçimini kullanıyor — bir
+/// avatar da bu bucket'ta yaşayan bir nesne, yalnızca `attachments`
+/// tablosunda bir satırı yok (bkz. `crate::avatar` modül dokümanı).
+pub(crate) fn object_key_uret(id_codec: &IdCodec, actor_id: i64) -> Result<String> {
     let dis_id = id_codec.encode::<crate::id::Actor>(actor_id)?;
     Ok(format!("{dis_id}/{}.webp", Uuid::now_v7()))
 }
@@ -348,66 +352,6 @@ pub async fn attach_to_content(
     }
 
     Ok(())
-}
-
-/// `PATCH /actors/me`'nin `avatar` alanı için: bir ekin **çağıranın kendi**
-/// ve **henüz bir içeriğe bağlanmamış** bir yüklemesi olduğunu doğrular,
-/// doğrularsa `object_key`'ini döner — bu değer doğrudan
-/// `actors.avatar_object_key`'e yazılır (bkz. `crate::actor::update_profile`).
-///
-/// **Neden burada, `crate::actor`'de değil:** bu, [`attach_to_content`] ile
-/// aynı aile — ikisi de `attachments` tablosunun "sahiplik + henüz
-/// bağlanmamışlık" kuralını uyguluyor, tek fark hedefin bir içerik değil
-/// `actors.avatar_object_key` olması. `attachments`'a dair kurallar bu
-/// modülde toplu kalsın diye `actor.rs`'e taşınmadı.
-///
-/// **`FOR UPDATE` ile satır kilitleniyor:** çağıran zaten bir transaction
-/// içinde ([`crate::actor::update_profile`]) — kilit, bu fonksiyonun
-/// `SELECT`'i ile çağıranın asıl `UPDATE actors ...`'ı arasındaki küçük
-/// pencerede aynı ekin eşzamanlı bir [`attach_to_content`] çağrısıyla bir
-/// içeriğe bağlanmasını engelliyor. Kilit yalnızca çağıranın transaction'ı
-/// commit/rollback olana kadar tutulur — [`attach_to_content`] de kendi
-/// transaction'ı içinde çalıştığı için burada çıkmaza (deadlock) yol açmaz,
-/// yalnızca kısa bir bekleme olur.
-///
-/// **`content_id IS NOT NULL` neden `404`/`403` değil `409`:** istek
-/// biçimsel olarak geçerli ve ek gerçekten var/çağırana ait — sorun
-/// kaynağın (attachment satırının) **şu anki durumunun** istenen işlemle
-/// çakışması (zaten başka bir yaşam döngüsüne, bir içeriğe, girmiş). Bu tam
-/// olarak HTTP `409 Conflict`'in tanımı; `400 Validation` istekteki
-/// biçimsel bir hata olduğunda daha doğru olurdu (id formatı bozuk gibi),
-/// burada öyle değil.
-///
-/// # Errors
-/// Ek yoksa [`Error::NotFound`]; çağırana ait değilse [`Error::Forbidden`];
-/// zaten bir içeriğe bağlıysa [`Error::Conflict`]; veritabanı hatası
-/// [`Error::Database`].
-pub async fn resolve_as_avatar(
-    tx: &mut PgConnection,
-    attachment_id: i64,
-    actor_id: i64,
-) -> Result<String> {
-    let kayit = sqlx::query!(
-        r#"SELECT actor_id, content_id, object_key FROM attachments WHERE id = $1 FOR UPDATE"#,
-        attachment_id,
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(Error::NotFound("attachment"))?;
-
-    if kayit.actor_id != actor_id {
-        return Err(Error::Forbidden);
-    }
-
-    if kayit.content_id.is_some() {
-        return Err(Error::Conflict(
-            "this attachment is already attached to a content item and cannot be used as an \
-             avatar"
-                .to_owned(),
-        ));
-    }
-
-    Ok(kayit.object_key)
 }
 
 /// Bir içeriğe bağlı ekleri döner.
@@ -494,23 +438,19 @@ async fn nesneleri_sil(storage: &Storage, object_key: &str) {
 /// `idx_attachments_orphaned` (kısmi index, `WHERE content_id IS NULL`)
 /// tam bu sorgu için var — bkz. `migrations/0008_attachments.up.sql`.
 ///
-/// **⚠️ Avatar olarak kullanılan ekler bilerek dışlanıyor.** Bir avatar
-/// hiçbir zaman bir içeriğe bağlanmaz — `crate::actor::update_profile` onu
-/// yalnızca `actors.avatar_object_key`'e yazar, `attachments.content_id`
-/// hep `NULL` kalır (bkz. [`resolve_as_avatar`]). Bu filtre olmadan, bir
-/// actor avatarını ayarladıktan [`ORPHAN_MAX_AGE_HOURS`] saat sonra bu iş
-/// onu "hiçbir içeriğe bağlanmamış yükleme" sanıp **hem depolamadan hem
-/// veritabanından siler** — avatar sessizce kırık bir bağlantıya döner, ne
-/// istemciye ne loga bir hata düşer (silme başarıyla tamamlanır, sadece
-/// yanlış satırı hedef alır). Dışlama `NOT EXISTS` ile: `attachments.
-/// object_key`'i `actors.avatar_object_key`'e eşit olan hiçbir satır
-/// (yaşı ne olursa olsun) bu iş tarafından adaya alınmaz.
-///
-/// Performans notu: `actors` üzerinde `avatar_object_key`'e bir index yok
-/// (bu görev bir migration eklemedi); Postgres `NOT EXISTS`'i tipik olarak
-/// tek bir anti-join'e çeviriyor (satır başına ayrı bir tarama değil), yani
-/// bugünkü ölçekte sorun değil — `actors` tablosu büyüdükçe `avatar_object_key
-/// IS NOT NULL` üzerinde kısmi bir index eklemek gerekebilir.
+/// **No more avatar exclusion here.** Earlier this query carried a `NOT
+/// EXISTS (... actors.avatar_object_key ...)` guard, because an avatar's
+/// bookkeeping row in this table never got a `content_id` and would
+/// otherwise look like an ordinary orphan. Avatars no longer create a row
+/// in `attachments` at all (see `crate::avatar` — `POST`/`DELETE
+/// /actors/me/avatar` write `actors.avatar_object_key` directly and never
+/// touch this table), so there is nothing left for the guard to protect
+/// going forward. The bookkeeping rows for avatars that existed before this
+/// change were removed in `migrations/0026_drop_avatar_attachments.up.sql`
+/// — **that migration must ship before this guard's removal reaches
+/// production**, or every one of those old rows would look like a genuine
+/// orphan to this query and get its S3 object deleted along with it. See
+/// that migration's comment for the full reasoning.
 ///
 /// # Errors
 /// Veritabanı hatası [`Error::Database`].
@@ -542,10 +482,6 @@ pub async fn cleanup_orphaned(pool: &PgPool, storage: &Storage) -> Result<u64> {
             FROM attachments
             WHERE attachments.content_id IS NULL
               AND attachments.created_at < $1
-              AND NOT EXISTS (
-                  SELECT 1 FROM actors
-                  WHERE actors.avatar_object_key = attachments.object_key
-              )
             ORDER BY attachments.created_at
             LIMIT $2
         )

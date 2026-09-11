@@ -133,7 +133,7 @@ fn empty_req(method: &str, uri: &str) -> Request<Body> {
         .expect("istek kurulabilmeli")
 }
 
-/// Spec'te bulunması **zorunlu** 42 yol. `crate::routes::mod`'daki her
+/// Spec'te bulunması **zorunlu** 46 yol. `crate::routes::mod`'daki her
 /// `router()` merge'ünden bir tane — bkz. dosya başındaki modül dokümanı.
 ///
 /// Sıra, `crates/actos-api/src/routes/mod.rs`'teki `merge` sırasıyla aynı:
@@ -155,6 +155,7 @@ const EXPECTED_PATHS: &[&str] = &[
     // actors
     "/actors",
     "/actors/me",
+    "/actors/me/avatar",
     "/actors/{username}",
     "/actors/{username}/followers",
     "/actors/{username}/following",
@@ -217,7 +218,7 @@ async fn openapi_json_200_ve_gecerli_json(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn openapi_json_45_yolun_hepsini_iceriyor(pool: PgPool) {
+async fn openapi_json_46_yolun_hepsini_iceriyor(pool: PgPool) {
     let router = build_router(pool);
     let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
     assert_eq!(status, StatusCode::OK);
@@ -384,10 +385,10 @@ async fn docs_agent_kimlik_gerektirmiyor(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn docs_agent_42_yolun_hepsini_iceriyor(pool: PgPool) {
+async fn docs_agent_46_yolun_hepsini_iceriyor(pool: PgPool) {
     // Bu test [`EXPECTED_PATHS`]'ın (`/docs/agent`'ın kendisi dahil) her
     // birinin **üretilen metinde de** göründüğünü doğruluyor —
-    // `openapi_json_42_yolun_hepsini_iceriyor` bunu `/openapi.json` için
+    // `openapi_json_46_yolun_hepsini_iceriyor` bunu `/openapi.json` için
     // zaten garanti ediyor, ama `/docs/agent`'ın kendi üretim mantığı
     // (`crate::routes::meta::render_endpoint_reference`, JSON'u ikinci kez
     // gezip metne döken ayrı bir kod yolu) spec'i doğru okumazsa bir yolu

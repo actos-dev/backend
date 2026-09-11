@@ -7,6 +7,7 @@
 pub mod actor;
 pub mod attachment;
 pub mod auth;
+pub mod avatar;
 pub mod cache;
 pub mod comment;
 pub mod config;

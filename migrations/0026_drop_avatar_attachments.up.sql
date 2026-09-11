@@ -1,0 +1,38 @@
+-- Avatars get their own endpoint (`POST`/`DELETE /actors/me/avatar`) and no
+-- longer create a row in `attachments` — `actors.avatar_object_key` is now
+-- the sole source of truth for an avatar's object key (see
+-- `crates/actos-core/src/avatar.rs`). This is the prerequisite for making
+-- `attachments.content_id` NOT NULL in a later migration: today an avatar's
+-- `attachments` row is the ONLY row whose `content_id` stays NULL forever.
+--
+-- This migration deletes the bookkeeping rows for every avatar that is
+-- already live in production, and it MUST run before the code that removes
+-- `attachment::cleanup_orphaned`'s `NOT EXISTS` guard is deployed.
+--
+-- Why the ordering matters, precisely: today, an avatar's row in
+-- `attachments` has `content_id IS NULL` (it was never attached to a post
+-- or comment) and is typically well past `ORPHAN_MAX_AGE_HOURS` old. The
+-- ONLY thing keeping `cleanup_orphaned` from sweeping it up as a "real"
+-- orphan is a `NOT EXISTS (SELECT 1 FROM actors WHERE actors.
+-- avatar_object_key = attachments.object_key)` clause in its query. This
+-- deploy removes that clause from the Rust source (it no longer has
+-- anything to protect once avatars stop living in this table going
+-- forward) — but removing the guard alone, on a database that still has
+-- old avatar bookkeeping rows in `attachments`, would make every one of
+-- those rows look like a genuine orphan on the very next scheduled run.
+-- `cleanup_orphaned` doesn't just delete the row: it deletes the row's S3
+-- object too. Deploying the guard removal without this migration first
+-- would delete every existing user's avatar image from storage within
+-- `ORPHAN_MAX_AGE_HOURS` hours of going out.
+--
+-- The fix is to make the rows this migration deletes disappear BEFORE the
+-- guard does, via a plain SQL `DELETE` rather than through the application
+-- code path (`attachment::delete_attachment`, which also deletes the S3
+-- object): a `DELETE` here touches only the bookkeeping row in Postgres.
+-- It never calls S3. The object itself, and the `actors.avatar_object_key`
+-- value that already points directly at it, are both left completely
+-- untouched — so every avatar keeps working exactly as before, just
+-- without a now-pointless row shadowing it in `attachments`.
+DELETE FROM attachments
+USING actors
+WHERE actors.avatar_object_key = attachments.object_key;
