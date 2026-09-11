@@ -44,7 +44,7 @@ const MAX_UPLOAD: usize = 8 * 1024 * 1024;
 /// değişkenleri process ortamından okuyor. Daha önce burada `dotenv()`
 /// çağrısı yoktu ve iş yalnızca `#[sqlx::test]`'in kendi kurulumunda `.env`'i
 /// yüklemesiyle yürüyordu — yani saf `#[test]` olan
-/// [`for_trust_level_kademeleri_doğru_eşler_ve_aralık_dışını_kenetler`] bir
+/// [`storage_quota_bytes_pozitif`] bir
 /// **yarışa** bağlıydı: test thread'leri paralel koştuğu için o test bir
 /// `#[sqlx::test]` kardeşinden önce çalışırsa `Missing("DATABASE_URL")` ile
 /// panikliyordu (`--exact` ile tek başına koşturulduğunda %100 kırılıyor).
@@ -118,26 +118,18 @@ fn islenmis_boyut(png: &[u8]) -> i64 {
     i64::try_from(islenmis.data.len()).expect("boyut i64'e sığmalı")
 }
 
-// --- `StorageQuotaConfig::for_trust_level` (saf fonksiyon, DB/depolama yok) -
+// --- `StorageQuotaConfig` (plain configuration, no DB/storage) -----------
 
+/// Trust level was removed (see REFACTOR.md §3): the quota is no longer
+/// split into three tiers (`for_trust_level`), it's now a single flat
+/// `bytes` field. The only claim being made here is that the field is
+/// positive — a condition `StorageQuotaConfig::validate` already
+/// guarantees inside `Config::from_env()`, tested again here (to verify
+/// the documented assumption).
 #[test]
-fn for_trust_level_kademeleri_doğru_eşler_ve_aralık_dışını_kenetler() {
+fn storage_quota_bytes_pozitif() {
     let quota = real_env().storage_quota;
-
-    assert_eq!(quota.for_trust_level(0), quota.trust_level_0_bytes);
-    assert_eq!(quota.for_trust_level(1), quota.trust_level_1_bytes);
-    assert_eq!(quota.for_trust_level(2), quota.trust_level_2_bytes);
-
-    // Şema `CHECK (trust_level BETWEEN 0 AND 2)` ile garanti veriyor ama bu
-    // fonksiyon savunmacı — aralık dışı bir değer en yakın uca kenetlenir.
-    assert_eq!(quota.for_trust_level(-1), quota.trust_level_0_bytes);
-    assert_eq!(quota.for_trust_level(99), quota.trust_level_2_bytes);
-
-    // Kademeler artan sırada olmalı — `StorageQuotaConfig::validate`'in
-    // `Config::from_env()` içinde zaten doğruladığı şart, burada da
-    // (belgelenmiş varsayımı doğrulamak için) tekrar sınanıyor.
-    assert!(quota.trust_level_0_bytes <= quota.trust_level_1_bytes);
-    assert!(quota.trust_level_1_bytes <= quota.trust_level_2_bytes);
+    assert!(quota.bytes > 0);
 }
 
 // --- `total_storage_bytes` ------------------------------------------------

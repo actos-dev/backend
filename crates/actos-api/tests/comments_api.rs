@@ -49,7 +49,6 @@ fn test_config() -> Config {
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
             orphan_cleanup_interval: std::time::Duration::ZERO,
-            trust_level_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -382,23 +381,14 @@ async fn silinmis_posta_yorum_410_doner(pool: PgPool) {
 async fn derinlik_limiti_asimi_400_ile_reddediliyor(pool: PgPool) {
     let raw_pool = pool.clone();
     let router = build_router(pool);
-    let (actor_id, api_key) = seed_actor(&raw_pool, "derinlesen").await;
+    let (_actor_id, api_key) = seed_actor(&raw_pool, "derinlesen").await;
     let post_id = seed_post(&router, &api_key, "Derin").await;
 
-    // Bu test derinlik limitini sınıyor, güven kademesine bağlı hız
-    // sınırlamasını (Faz 18.A) değil — ama 32 yorumu tek saatte tek
-    // actor'den atmak, taze bir hesabın (kademe 0, `comment` kovasında
-    // taban kapasitenin yarısı — bkz. `actos_core::config::
-    // TRUST_LEVEL_CAPACITY_MULTIPLIER`) rate limitine takılır ve testi
-    // yanlış sebeple (429, 400 değil) düşürür. Actor'ü kademe 1'e ("normal",
-    // 1.0× — bugüne kadarki değişmemiş davranış) çekmek, bu testi rate
-    // limitten izole ediyor; `recompute_trust_levels`'ı beklemeden doğrudan
-    // `UPDATE` ile (bkz. `crates/actos-core/tests/trust_level.rs`'teki
-    // "geçmişe UPDATE" deseni, burada kademeye uygulanmış hâli).
-    sqlx::query!("UPDATE actors SET trust_level = 1 WHERE id = $1", actor_id)
-        .execute(&raw_pool)
-        .await
-        .expect("trust_level güncellenebilmeli");
+    // This test checks the depth limit, not rate limiting — firing 32
+    // comments from a single actor in one hour is well under the capacity
+    // of the single `comment` bucket after trust level was removed
+    // (200/hour, see `actos_core::config::LimitTable::from_env`), so
+    // there's no need for a separate tier adjustment anymore.
 
     // depth 1..=32 → 32 yorum. Post depth 0.
     let mut parent: Option<String> = None;

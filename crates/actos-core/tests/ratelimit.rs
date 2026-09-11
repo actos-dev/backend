@@ -13,7 +13,6 @@ use std::{
 };
 
 use actos_core::{
-    auth::ActorType,
     config::{AnonymousLimits, LimitTable, ScopeLimits},
     ratelimit::{self, RateLimitConfig, RateLimiter, Scope, Subject},
 };
@@ -48,21 +47,11 @@ fn dummy_limit_table() -> LimitTable {
         window: Duration::from_secs(60),
     };
     LimitTable {
-        human: ScopeLimits {
+        actor: ScopeLimits {
             post: cfg,
             comment: cfg,
             vote: cfg,
             read: cfg,
-            upload: cfg,
-            search: cfg,
-            inbox: cfg,
-        },
-        ai_agent: ScopeLimits {
-            post: cfg,
-            comment: cfg,
-            vote: cfg,
-            read: cfg,
-            upload: cfg,
             search: cfg,
             inbox: cfg,
         },
@@ -86,29 +75,18 @@ fn make_limiter() -> (RateLimiter, deadpool_redis::Pool) {
 /// Rastgele bir `actor_id` — 2^32'lik alan, testler arası çakışma pratikte
 /// imkânsız (`auth.rs` testlerindeki `split_key` gibi, testin kendi ürettiği
 /// bir girdi, yapısal olarak başarısız olmaz).
-///
-/// `actor_type`/`trust_level` çoğu testte önemsiz (bu testler `override_cfg`
-/// ile kademeyi zaten ezer) — bu yüzden burada sabit `Human` + `trust_level:
-/// 1` ("normal" kademe, bkz. `config::TRUST_LEVEL_CAPACITY_MULTIPLIER`
-/// üzerindeki gerekçe) kullanılır; kademe seçiminin kendisini sınayan
-/// testler kendi `Subject`'lerini elle kurar (bkz.
-/// `subjectin_actor_type_ı_doğru_kademeyi_otomatik_seçiyor` ve "Güven
-/// kademesi" bölümü).
 fn rand_actor() -> Subject {
     Subject::Actor {
         id: i64::from(rand::random::<u32>()),
-        actor_type: ActorType::Human,
-        trust_level: 1,
     }
 }
 
-/// [`actos_core::ratelimit`] içindeki `bucket_key`'in testteki karşılığı —
-/// sadece temizlik için, modülün kendi anahtar şemasını (bkz. modül
-/// dokümantasyonu) tekrar üretir. `actor_type` anahtara girmediği için
-/// burada da yok sayılır.
+/// The test-side counterpart of `bucket_key` in [`actos_core::ratelimit`] —
+/// only for cleanup, it reproduces the module's own key scheme (see the
+/// module documentation).
 fn bucket_key(scope: Scope, subject: &Subject) -> String {
     match subject {
-        Subject::Actor { id, .. } => format!("rl:{}:a:{id}", scope.as_key_str()),
+        Subject::Actor { id } => format!("rl:{}:a:{id}", scope.as_key_str()),
         Subject::Ip(ip) => format!("rl:{}:i:{ip}", scope.as_key_str()),
     }
 }
@@ -301,195 +279,66 @@ async fn farklı_scopelar_birbirini_etkilemiyor() {
     cleanup(&pool, Scope::Comment, &subject).await;
 }
 
-// --- Kademe seçimi: `Subject`'in `actor_type`'ı `check` içinde otomatik --
+// --- Single table: every authenticated actor gets the same capacity (REFACTOR.md §1) -
 
+/// The trust-level and `actor_type`-dependent tier tables were removed
+/// (see REFACTOR.md §1 and §3) — all authenticated actors now share a
+/// single `LimitTable::actor` table. To reflect this, `Subject::Actor` now
+/// only carries `id`; regardless of identity (and thus `actor_type`),
+/// `resolve` always returns the same capacity for two different actors.
 #[tokio::test]
-async fn subjectin_actor_type_ı_doğru_kademeyi_otomatik_seçiyor() {
-    // `dummy_limit_table`'ın aksine, human/ai_agent için **farklı**
-    // kapasiteler kuruyoruz — amaç, `check`'in `override_cfg` verilmeden
-    // (yani `None`) doğru kademeyi kendi başına seçtiğini kanıtlamak.
-    let human_cfg = RateLimitConfig {
-        capacity: 5,
-        window: Duration::from_secs(60),
-    };
-    let ai_agent_cfg = RateLimitConfig {
-        capacity: 15, // insanın tam üç katı
-        window: Duration::from_secs(60),
-    };
+async fn iki_farklı_actor_aynı_kapasiteyi_alıyor() {
     let mut table = dummy_limit_table();
-    table.human.post = human_cfg;
-    table.ai_agent.post = ai_agent_cfg;
-
+    table.actor.post = RateLimitConfig {
+        capacity: 7,
+        window: Duration::from_secs(60),
+    };
     let pool = make_pool();
     let limiter = RateLimiter::new(pool.clone(), table);
 
-    // `trust_level: 1` ("normal" kademe, 1.0× çarpan) — bu test yalnızca
-    // `actor_type`'ın seçimini sınıyor, güven kademesinin ölçeklemesini
-    // değil (bu, ayrı "Güven kademesi" testlerinin işi), o yüzden çarpanı
-    // nötr tutuyoruz ki `human_cfg`/`ai_agent_cfg` değerleri değişmeden
-    // gözlemlenebilsin.
-    let human_subject = Subject::Actor {
+    let subject_a = Subject::Actor {
         id: i64::from(rand::random::<u32>()),
-        actor_type: ActorType::Human,
-        trust_level: 1,
     };
-    let ai_subject = Subject::Actor {
+    let subject_b = Subject::Actor {
         id: i64::from(rand::random::<u32>()),
-        actor_type: ActorType::AiAgent,
-        trust_level: 1,
     };
 
-    // override_cfg = None: kademe seçimi tamamen `check`'in işi.
-    let human_first = limiter
-        .check_at(Scope::Post, &human_subject, None, BASE_MS)
+    // override_cfg = None: the capacity comes entirely from the single
+    // table's default — there's no branch that looks at identity.
+    let a = limiter
+        .check_at(Scope::Post, &subject_a, None, BASE_MS)
         .await;
-    assert_eq!(
-        human_first.limit, 5,
-        "human subject human kademesini almalı"
-    );
-
-    let ai_first = limiter
-        .check_at(Scope::Post, &ai_subject, None, BASE_MS)
+    let b = limiter
+        .check_at(Scope::Post, &subject_b, None, BASE_MS)
         .await;
-    assert_eq!(
-        ai_first.limit, 15,
-        "ai_agent subject ai_agent kademesini almalı"
-    );
-    assert_eq!(
-        ai_first.limit,
-        human_first.limit * 3,
-        "ai_agent kapasitesi insanın tam üç katı olmalı"
-    );
+    assert_eq!(a.limit, 7);
+    assert_eq!(b.limit, 7, "iki farklı actor aynı kapasiteyi almalı");
 
-    // İnsan kovasını tüket (1 zaten tüketildi, 4 kaldı).
-    for _ in 0..4 {
-        let decision = limiter
-            .check_at(Scope::Post, &human_subject, None, BASE_MS)
-            .await;
-        assert!(decision.allowed);
-    }
-    let human_exhausted = limiter
-        .check_at(Scope::Post, &human_subject, None, BASE_MS)
-        .await;
-    assert!(
-        !human_exhausted.allowed,
-        "insan kovası 5 istekten sonra tükenmeli"
-    );
-
-    // ai_agent aynı scope'ta, insanın tükendiği noktada hâlâ istek
-    // geçirebiliyor olmalı (1 zaten tüketildi, 14 kaldı — tam kapasite).
-    for _ in 0..14 {
-        let decision = limiter
-            .check_at(Scope::Post, &ai_subject, None, BASE_MS)
-            .await;
-        assert!(
-            decision.allowed,
-            "ai_agent insanın tükendiği noktada hâlâ istek geçirebilmeli"
-        );
-    }
-    let ai_exhausted = limiter
-        .check_at(Scope::Post, &ai_subject, None, BASE_MS)
-        .await;
-    assert!(
-        !ai_exhausted.allowed,
-        "ai_agent kovası da kendi kapasitesi (15) dolunca tükenmeli"
-    );
-
-    cleanup(&pool, Scope::Post, &human_subject).await;
-    cleanup(&pool, Scope::Post, &ai_subject).await;
+    // Buckets are separate: exhausting `a` doesn't affect `b` (see
+    // `farklı_subjectler_birbirini_etkilemiyor`) — what's actually being
+    // tested here is that both start from the same base capacity.
+    cleanup(&pool, Scope::Post, &subject_a).await;
+    cleanup(&pool, Scope::Post, &subject_b).await;
 }
 
-// --- Güven kademesi: `Subject.trust_level` kapasiteyi otomatik ölçekliyor -
-//
-// Faz 18.A (bkz. NOTES.md §9.3, §9.8) — `config::TRUST_LEVEL_CAPACITY_
-// MULTIPLIER` ([0.5, 1.0, 2.0]) `LimitTable::resolve` içinde `for_actor_type`
-// çıktısına uygulanıyor. Aşağıdaki testler taban kapasiteyi 10 seçiyor:
-// 10 × 0.5 = 5 (kademe 0), 10 × 1.0 = 10 (kademe 1), 10 × 2.0 = 20 (kademe 2)
-// — hepsi tam sayı, yuvarlama belirsizliği testin dışında kalsın diye.
-
+/// A per-actor `rate_limit_config` override **completely replaces** the
+/// single table's default — it neither stacks on top of it nor acts merely
+/// as a floor/ceiling. Tested in both directions: the override can be
+/// either wider or narrower than the default, and it wins either way.
 #[tokio::test]
-async fn guven_kademesi_0_dar_kademe_2_geniş_limit_alıyor() {
+async fn kişiye_özel_override_varsayılan_tabloyu_tamamen_eziyor() {
     let mut table = dummy_limit_table();
-    table.human.post = RateLimitConfig {
+    table.actor.post = RateLimitConfig {
         capacity: 10,
         window: Duration::from_secs(60),
     };
     let pool = make_pool();
     let limiter = RateLimiter::new(pool.clone(), table);
 
-    let level0 = Subject::Actor {
+    // The default capacity would be 10 — the operator has deliberately set
+    // an exception for this actor: an override with capacity 100.
+    let genis_override_subject = Subject::Actor {
         id: i64::from(rand::random::<u32>()),
-        actor_type: ActorType::Human,
-        trust_level: 0,
-    };
-    let level2 = Subject::Actor {
-        id: i64::from(rand::random::<u32>()),
-        actor_type: ActorType::Human,
-        trust_level: 2,
-    };
-
-    // override_cfg = None: kapasite tamamen `resolve`'un otomatik seçtiği
-    // (actor_type × trust_level) değerden geliyor.
-    let d0 = limiter.check_at(Scope::Post, &level0, None, BASE_MS).await;
-    assert_eq!(
-        d0.limit, 5,
-        "kademe 0, taban kapasitenin (10) yarısını almalı"
-    );
-
-    let d2 = limiter.check_at(Scope::Post, &level2, None, BASE_MS).await;
-    assert_eq!(
-        d2.limit, 20,
-        "kademe 2, taban kapasitenin (10) iki katını almalı"
-    );
-
-    // Kademe 0 kovasını tüket (1 istek zaten yukarıda gitti, 4 kaldı).
-    for _ in 0..4 {
-        let d = limiter.check_at(Scope::Post, &level0, None, BASE_MS).await;
-        assert!(d.allowed);
-    }
-    let level0_tukendi = limiter.check_at(Scope::Post, &level0, None, BASE_MS).await;
-    assert!(
-        !level0_tukendi.allowed,
-        "kademe 0 (kapasite 5) 5 istekten sonra tükenmeli — bu \
-         gecede-100-hesap senaryosunun (NOTES.md §9.3) doğrudan savunması"
-    );
-
-    // Kademe 2, kademe 0'ın tükendiği toplam istek sayısında (6) hâlâ rahat:
-    // kendi kapasitesi 20, buraya kadar yalnızca 5 istek yaptı.
-    for _ in 0..4 {
-        let d = limiter.check_at(Scope::Post, &level2, None, BASE_MS).await;
-        assert!(
-            d.allowed,
-            "kademe 2, kademe 0'ın tükendiği istek sayısında hâlâ izinli olmalı"
-        );
-    }
-
-    cleanup(&pool, Scope::Post, &level0).await;
-    cleanup(&pool, Scope::Post, &level2).await;
-}
-
-/// Öncelik sırası: kişiye özel `rate_limit_config` override'ı, otomatik
-/// seçilen güven kademesi çarpanının **yerine tamamen geçer** — ne üstüne
-/// biner (ör. çarpanı override'a da uygulamaz) ne de yalnızca bir taban/tavan
-/// olarak davranır. İki yönde de sınanıyor: override otomatik seçilenden
-/// hem daha geniş hem daha dar olabilir, ikisinde de override kazanır.
-#[tokio::test]
-async fn kişiye_özel_override_güven_kademesi_çarpanını_tamamen_eziyor() {
-    let mut table = dummy_limit_table();
-    table.human.post = RateLimitConfig {
-        capacity: 10,
-        window: Duration::from_secs(60),
-    };
-    let pool = make_pool();
-    let limiter = RateLimiter::new(pool.clone(), table);
-
-    // Kademe 0: otomatik seçilen kapasite 5 (10 × 0.5) olurdu — ama operatör
-    // bu actor'e bilinçli bir istisna koymuş (ör. güvenilir olduğu bilinen
-    // ama henüz kademesi düşmüş bir hesap): 100 kapasiteli bir override.
-    let dar_kademe_geniş_override = Subject::Actor {
-        id: i64::from(rand::random::<u32>()),
-        actor_type: ActorType::Human,
-        trust_level: 0,
     };
     let genis_override = RateLimitConfig {
         capacity: 100,
@@ -498,23 +347,20 @@ async fn kişiye_özel_override_güven_kademesi_çarpanını_tamamen_eziyor() {
     let d1 = limiter
         .check_at(
             Scope::Post,
-            &dar_kademe_geniş_override,
+            &genis_override_subject,
             Some(&genis_override),
             BASE_MS,
         )
         .await;
     assert_eq!(
         d1.limit, 100,
-        "override, kademe 0'ın dar otomatik kapasitesini (5) tamamen ezmeli"
+        "override, tablonun varsayılan kapasitesini (10) tamamen ezmeli"
     );
 
-    // Kademe 2: otomatik seçilen kapasite 20 (10 × 2.0) olurdu — operatör
-    // ters yönde bir istisna koymuş (ör. kötüye kullanım şüphesiyle
-    // daraltılmış kıdemli bir hesap): 3 kapasiteli bir override.
-    let genis_kademe_dar_override = Subject::Actor {
+    // An exception in the opposite direction: an account narrowed on
+    // suspicion of abuse, with an override of capacity 3.
+    let dar_override_subject = Subject::Actor {
         id: i64::from(rand::random::<u32>()),
-        actor_type: ActorType::Human,
-        trust_level: 2,
     };
     let dar_override = RateLimitConfig {
         capacity: 3,
@@ -523,19 +369,18 @@ async fn kişiye_özel_override_güven_kademesi_çarpanını_tamamen_eziyor() {
     let d2 = limiter
         .check_at(
             Scope::Post,
-            &genis_kademe_dar_override,
+            &dar_override_subject,
             Some(&dar_override),
             BASE_MS,
         )
         .await;
     assert_eq!(
         d2.limit, 3,
-        "override, kademe 2'nin geniş otomatik kapasitesini (20) tamamen ezmeli \
-         — çarpan override'ın üstüne de binmemeli (3 × 2.0 = 6 değil, tam 3)"
+        "override, tablonun varsayılan kapasitesini (10) tamamen ezmeli"
     );
 
-    cleanup(&pool, Scope::Post, &dar_kademe_geniş_override).await;
-    cleanup(&pool, Scope::Post, &genis_kademe_dar_override).await;
+    cleanup(&pool, Scope::Post, &genis_override_subject).await;
+    cleanup(&pool, Scope::Post, &dar_override_subject).await;
 }
 
 // --- Eşzamanlılık: Lua atomikliğinin asıl kanıtı ------------------------

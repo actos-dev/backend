@@ -101,21 +101,22 @@ impl Attachment {
 /// ihtimalle sahipsiz bir nesne kalıyor — görünmez, zararsız ve
 /// [`cleanup_orphaned`]'in tarayabileceği bir çöp.
 ///
-/// ## Depolama kotası (Faz 18.A, bkz. NOTES.md §9.8)
+/// ## Storage quota (see NOTES.md §9.8)
 ///
-/// `quota_bytes`, çağıranın (`actos-api::routes::uploads`) actor'ün güven
-/// kademesine göre önceden hesapladığı **toplam** bayt sınırı (bkz.
-/// `crate::config::StorageQuotaConfig::for_trust_level`). Bu modül
-/// `trust_level` kavramını hiç bilmiyor — yalnızca nihai sayıyı uyguluyor,
-/// tıpkı `max_bytes`'ın (tek dosya sınırı) zaten yaptığı gibi. Kontrol
-/// [`total_storage_bytes`] ile `SUM(attachments.byte_size)` okuyup bu
-/// yüklemenin ekleyeceği baytla toplayarak yapılıyor; **sayaç kolonuna
-/// çevrilmedi** — bu ölçekte (aktör başına yüzlerce/binlerce satır, kotayla
-/// zaten sınırlı) her yüklemede bir `SUM` sorgusu ölçülebilir bir maliyet
-/// değil, ayrı bir sayaç kolonu tutarlılığını (silme/geri alma gibi her
-/// yol için doğru artır/azalt) elle garanti etmek gerektirir ve bu ölçekte
-/// karşılığı yok. Ölçek büyürse (`docs/query-plans.md` benzeri bir eşikte)
-/// bu kararın gözden geçirilmesi gerekir.
+/// `quota_bytes` is the flat **total** byte limit applied by the caller
+/// (`actos-api::routes::uploads`) (see `crate::config::StorageQuotaConfig`).
+/// This module has no idea how the quota is determined — it just enforces
+/// the final number, exactly like `max_bytes` (the single-file limit)
+/// already does. The check is done via [`total_storage_bytes`], which
+/// reads `SUM(attachments.byte_size)` and adds the bytes this upload would
+/// contribute; **it wasn't turned into a counter column** — at this scale
+/// (hundreds/thousands of rows per actor, already bounded by the quota
+/// itself) a `SUM` query on every upload isn't a measurable cost, whereas
+/// a separate counter column would require manually guaranteeing its
+/// consistency (correct increment/decrement on every path, including
+/// delete/undo) with no payoff at this scale. If scale grows (at a
+/// threshold similar to `docs/query-plans.md`), this decision should be
+/// revisited.
 ///
 /// Kontrol **normalize edilmiş** (WebP) boyut üzerinden, `media::
 /// process_image`'ın çıktısı hazır olduktan ama depolamaya hiç yazılmadan
@@ -180,7 +181,7 @@ pub async fn create_attachment(
     if mevcut_kullanim.saturating_add(byte_size) > quota_bytes {
         return Err(Error::Validation(format!(
             "storage quota exceeded: you are currently using {mevcut_kullanim} bytes, \
-             your tier limit is {quota_bytes} bytes, and this upload would add {byte_size} \
+             your quota limit is {quota_bytes} bytes, and this upload would add {byte_size} \
              more bytes — you may need to delete some of your attachments first"
         )));
     }

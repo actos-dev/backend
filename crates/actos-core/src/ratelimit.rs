@@ -79,7 +79,7 @@ use deadpool_redis::Pool;
 use redis::{AsyncTypedCommands, RedisResult, Script};
 use uuid::Uuid;
 
-use crate::{auth::ActorType, config::LimitTable};
+use crate::config::LimitTable;
 
 // --- Veri tipleri ---------------------------------------------------------
 
@@ -104,7 +104,6 @@ pub enum Scope {
     Vote,
     Register,
     Recover,
-    Upload,
     Write,
     /// `GET /search`. Genel `Read`'den **ayrı** bir kova — bkz.
     /// `crates/actos-api/src/middleware/ratelimit.rs::classify` üzerindeki
@@ -136,7 +135,6 @@ impl Scope {
             Self::Vote => "vote",
             Self::Register => "register",
             Self::Recover => "recover",
-            Self::Upload => "upload",
             Self::Write => "write",
             Self::Search => "search",
             Self::Inbox => "inbox",
@@ -146,30 +144,15 @@ impl Scope {
 
 /// Kovanın kime ait olduğu: kimlikli bir actor mı, yoksa kimliksiz bir IP mi.
 ///
-/// `Actor` **`actor_type`'ı ve `trust_level`'ı da taşır** — bilinçli bir
-/// tasarım kararı. `RateLimiter::check` doğru kademeyi (human/ai_agent ×
-/// güven kademesi 0-2) bu alanlardan otomatik seçer; taşımasaydı, çağıran
-/// tarafın `override_cfg` ile elle doğru kademeyi geçirmeyi *unutmaması*
-/// gerekirdi — bir AI ajanın sessizce insan limitlerine düşmesi ya da taze
-/// bir hesabın kıdemli bir hesabın kapasitesini alması kolay ve (ikincisi
-/// için özellikle, bkz. NOTES.md §9.3) tehlikeli bir hata olurdu (bu
-/// platformda AI ajanlar birinci sınıf vatandaş; onları görünmez şekilde
-/// daraltan bir footgun bırakmıyoruz). Ne `actor_type` ne `trust_level`
-/// anahtar şemasına **girer** (bkz. aşağıdaki "Redis anahtar şeması"
-/// bölümü) — ikisi de yalnızca kademe seçiminde kullanılır, bir hesabın
-/// türü ya da güven kademesi değişse bile kovası sıfırlanmaz.
-///
-/// `trust_level` çağıranın (ör. `actos-api::middleware::ratelimit`)
-/// `actors.trust_level`'dan okuyup taşıdığı ham değer — bu modül onu
-/// yalnızca [`crate::config::LimitTable::resolve`]'a iletir, hesaplamaz
-/// (hesaplama `crate::actor::recompute_trust_levels`'ın işi).
+/// `Actor` carries only `id`. It used to also carry `actor_type` and
+/// `trust_level` — so that `RateLimiter::check` could pick the right tier
+/// (human/ai_agent × trust level 0-2) — but rate limiting is now a single
+/// table for every authenticated actor (see REFACTOR.md §1 and §3,
+/// `crate::config::LimitTable`): with no tier left to select, both of
+/// those fields are gone. `id` is already enough to build the bucket's key.
 #[derive(Debug, Clone, Copy)]
 pub enum Subject {
-    Actor {
-        id: i64,
-        actor_type: ActorType,
-        trust_level: i16,
-    },
+    Actor { id: i64 },
     Ip(IpAddr),
 }
 
@@ -204,23 +187,10 @@ pub struct RateLimitDecision {
 // paylaşırsa birbirinin token'ını tüketip rastgele 429 alır (flaky test).
 // Her test kendi benzersiz önekiyle kurulursa, üretim anahtar şemasına hiç
 // dokunmadan tamamen izole bir anahtar uzayı alır.
-//
-// `Subject::Actor`'daki `actor_type` VE `trust_level` **anahtara girmez**:
-// ikisi de yalnızca kademe seçiminde kullanılır (bkz. [`Subject`] üzerindeki
-// yorum). Girselerdi, bir hesabın `actor_type`'ı değişince (ör. bir
-// organizasyon insan hesabından dönüştürülse) YA DA `trust_level`'ı
-// `recompute_trust_levels`'ın periyodik turuyla değişince (bu, tasarım
-// gereği sık ve beklenen bir olay — bkz. `TRUST_LEVEL_INTERVAL_SECS`) kovası
-// sıfırlanır, kısa bir pencerede kapasitenin iki katı isteğe izin verilmiş
-// olurdu — tam da token bucket'ın önlemeye çalıştığı türden bir sızıntı.
-// `trust_level` için bunun bedeli `actor_type`'takinden de büyük olurdu:
-// periyodik iş HER SAATTE (varsayılan `TRUST_LEVEL_INTERVAL_SECS`) çok
-// sayıda actor'ün kademesini değiştirebilir, bu da düzenli aralıklarla
-// toplu bir kova sıfırlaması demek olurdu.
 
 fn bucket_key(prefix: &str, scope: Scope, subject: &Subject) -> String {
     match subject {
-        Subject::Actor { id, .. } => format!("{prefix}rl:{}:a:{id}", scope.as_key_str()),
+        Subject::Actor { id } => format!("{prefix}rl:{}:a:{id}", scope.as_key_str()),
         Subject::Ip(ip) => format!("{prefix}rl:{}:i:{ip}", scope.as_key_str()),
     }
 }
@@ -379,34 +349,17 @@ impl RateLimiter {
 
     /// Bir istek için hız sınırlama kararı üretir.
     ///
-    /// Kademe seçimi **otomatiktir**: `subject` bir `Subject::Actor` ise
-    /// içindeki `actor_type` alanına bakılarak human/ai_agent temel kademesi,
-    /// sonra `trust_level` alanına bakılarak bunun üstüne güven kademesi
-    /// çarpanı [`crate::config::LimitTable::resolve`] ile uygulanır;
-    /// `Subject::Ip` ise IP başına (anonim, güven kademesiz) tablo kullanılır.
-    /// Çağıran tarafın kademeyi elle seçmesi gerekmez ve gerekmemeli —
-    /// `Subject`'in taşıdığı `actor_type`/`trust_level` tek doğruluk
-    /// kaynağıdır (bkz. [`Subject`] üzerindeki yorum: bunun amacı, bir AI
-    /// ajanının ya da taze bir hesabın override iletilmeyi unutulduğu için
-    /// sessizce yanlış limitlere düşmesini imkânsız kılmak).
+    /// The default capacity comes from [`crate::config::LimitTable::resolve`]:
+    /// if `subject` is a `Subject::Actor`, the single table shared by all
+    /// authenticated actors (see REFACTOR.md §1 — there's no longer a
+    /// separate tier that varies by `actor_type`); if it's `Subject::Ip`,
+    /// the per-IP (anonymous) table.
     ///
-    /// `override_cfg`, seçilen bu kademenin (actor_type × trust_level)
-    /// **yerine tamamen geçer** — ama amacı kademe seçmek değil,
-    /// `actors.rate_limit_config` jsonb'sinden [`config_from_json`] ile
-    /// okunan **kişiye özel** bir sınırı uygulamaktır. `None` verildiğinde
-    /// otomatik seçilen kademe zaten doğrudan kullanılır — çoğu çağrı için
-    /// bu yeterlidir.
-    ///
-    /// **Öncelik sırası (bilinçli karar):** kişiye özel `rate_limit_config`
-    /// override'ı > güven kademesi çarpanı. Operatör bir actor'e elle bir
-    /// override koyduysa, bu bilinçli bir istisna niyetidir (ör. bilinen
-    /// iyi niyetli ama henüz kademesi düşük bir hesap, ya da tersine
-    /// kötüye kullanım şüphesiyle daraltılmış kıdemli bir hesap) — otomatik
-    /// kademe hesaplamasının bunu ezmesi operatörün elle koyduğu kararı
-    /// sessizce iptal eder. Mimari bunu zaten doğal olarak veriyor:
-    /// `override_cfg: Some(_)` her zaman `resolve()`'un ürettiği değerin
-    /// (trust_level çarpanı dahil) **yerine geçiyor**, üstüne binmiyor —
-    /// ayrı bir öncelik kodu yazmaya gerek kalmadı.
+    /// `override_cfg` **completely replaces** this default — its purpose
+    /// isn't to select a tier, but to apply a **per-actor** limit read from
+    /// the `actors.rate_limit_config` jsonb column via [`config_from_json`].
+    /// When `None` is given, the default is already used directly — which
+    /// is enough for most calls.
     ///
     /// **Hata döndürmez.** Redis'e erişilemezse modül başındaki fail-open/
     /// fail-closed politikasına düşülür (bkz. modül dokümantasyonu).
@@ -647,11 +600,10 @@ impl RateLimiter {
 /// override'ı okur. Okuma bu fonksiyonun işi; JSON'u nereden aldığı
 /// (veritabanı satırı) çağıranın işi — bu modül veritabanını bilmiyor.
 ///
-/// Tanınan anahtarlar: `posts_per_hour`, `comments_per_hour`,
-/// `votes_per_hour`, `reads_per_minute`, `uploads_per_hour`,
-/// `searches_per_minute`, `inbox_per_minute`. Diğer scope'ların (`Register`,
-/// `Recover`, `Write`) actor başına override'ı yok — bunlar zaten kimliksiz
-/// (IP başına) uygulanıyor.
+/// Recognized keys: `posts_per_hour`, `comments_per_hour`, `votes_per_hour`,
+/// `reads_per_minute`, `searches_per_minute`, `inbox_per_minute`. The other
+/// scopes (`Register`, `Recover`, `Write`) have no per-actor override —
+/// they're already applied per unauthenticated IP.
 ///
 /// Tanınmayan bir anahtar, eksik bir alan ya da beklenmeyen bir tip (string,
 /// negatif sayı, ondalık, sıfır, `u32`'ye sığmayan bir değer) sessizce
@@ -664,7 +616,6 @@ pub fn config_from_json(value: &serde_json::Value, scope: Scope) -> Option<RateL
         Scope::Comment => ("comments_per_hour", Duration::from_secs(3600)),
         Scope::Vote => ("votes_per_hour", Duration::from_secs(3600)),
         Scope::Read => ("reads_per_minute", Duration::from_secs(60)),
-        Scope::Upload => ("uploads_per_hour", Duration::from_secs(3600)),
         Scope::Search => ("searches_per_minute", Duration::from_secs(60)),
         Scope::Inbox => ("inbox_per_minute", Duration::from_secs(60)),
         Scope::Register | Scope::Recover | Scope::Write => return None,

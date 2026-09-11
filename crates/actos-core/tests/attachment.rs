@@ -39,11 +39,12 @@ fn test_storage() -> Storage {
     })
 }
 
-/// Kimlik doğrulama yolundan (Argon2id, 10 kurtarma kodu) geçmeden bir
-/// actor oluşturur — bkz. `crates/actos-core/tests/trust_level.rs`'teki
-/// aynı gerekçe. `register` burada `crate::actor.rs`'teki gibi ham `INSERT`
-/// değil `core_auth::register` kullanıyor çünkü bu dosyada tek satırlık bir
-/// yardımcı yeterli, `actor_type` enum'unu elle yazmaya gerek yok.
+/// Creates an actor without going through the authentication path
+/// (Argon2id, 10 recovery codes) — see the same rationale in
+/// `crates/actos-core/tests/interaction.rs`. `register` uses
+/// `core_auth::register` here rather than a raw `INSERT` like
+/// `crate::actor.rs` does, because a one-line helper is enough in this
+/// file, no need to write out the `actor_type` enum by hand.
 #[allow(clippy::expect_used)]
 async fn seed_actor(pool: &PgPool, username: &str) -> i64 {
     core_auth::register(pool, username, ActorType::Human, None)
@@ -53,11 +54,10 @@ async fn seed_actor(pool: &PgPool, username: &str) -> i64 {
         .id
 }
 
-/// `attachments` tablosuna, `content_id IS NULL` ve `created_at` `age_hours`
-/// saat geriye alınmış bir satır ekler — `cleanup_orphaned`'in yaş eşiğini
-/// gerçek zamanda beklemeden test edebilmek için (`trust_level.rs`'teki
-/// `hesabi_yaslandir` ile aynı "geçmişe UPDATE" deseni, burada doğrudan
-/// `INSERT ... created_at` ile).
+/// Inserts a row into the `attachments` table with `content_id IS NULL`
+/// and `created_at` set back by `age_hours` hours — to test
+/// `cleanup_orphaned`'s age threshold without waiting in real time (the
+/// "backdate it" pattern, via a direct `INSERT ... created_at`).
 #[allow(clippy::expect_used)]
 async fn seed_orphan_attachment(
     pool: &PgPool,

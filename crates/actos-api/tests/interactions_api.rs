@@ -50,7 +50,6 @@ fn test_config() -> Config {
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
             orphan_cleanup_interval: std::time::Duration::ZERO,
-            trust_level_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -178,25 +177,11 @@ fn auth_req(method: &str, uri: &str, token: &str) -> Request<Body> {
 
 /// `/auth/register`'ın hız sınırını görmeden doğrudan domain katmanından
 /// bir actor oluşturur, döner: `(actor_id, api_key)`.
-///
-/// **`trust_level` kayıttan hemen sonra `1`'e yükseltiliyor** (şema
-/// varsayılanı `0` değil) — Faz 18.B'nin oy ağırlığı (bkz.
-/// `crate::interaction::set_vote`) seviye 0'ı `0` ağırlıklandırıyor; bu
-/// dosyadaki testlerin çoğu (ör. "bir oy skoru 1 artırır") güven
-/// kademesini değil oy/sayaç HTTP davranışını sınıyor, seviye 0'da
-/// bırakılsaydı ilgisiz bir mekanizma yüzünden kırılırlardı.
 #[allow(clippy::expect_used)]
 async fn seed_actor(pool: &PgPool, username: &str) -> (i64, String) {
     let reg = core_auth::register(pool, username, ActorType::Human, None)
         .await
         .expect("fixture actor oluşturulabilmeli");
-    sqlx::query!(
-        r#"UPDATE actors SET trust_level = 1 WHERE id = $1"#,
-        reg.actor.id,
-    )
-    .execute(pool)
-    .await
-    .expect("fixture actor'ün trust_level'ı yükseltilebilmeli");
     (reg.actor.id, reg.api_key)
 }
 

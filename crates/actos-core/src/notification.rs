@@ -213,7 +213,6 @@ struct NotificationRow {
     actor_display_name: Option<String>,
     actor_bio: Option<String>,
     actor_created_at: Option<DateTime<Utc>>,
-    actor_trust_level: Option<i16>,
     target_type: String,
     target_id: i64,
     payload: serde_json::Value,
@@ -249,11 +248,6 @@ fn row_into_notification(row: NotificationRow) -> Result<Notification> {
             created_at: row.actor_created_at.ok_or_else(|| {
                 Error::Internal(format!(
                     "notifications: actor_id={id} is set but actor_created_at is NULL"
-                ))
-            })?,
-            trust_level: row.actor_trust_level.ok_or_else(|| {
-                Error::Internal(format!(
-                    "notifications: actor_id={id} is set but actor_trust_level is NULL"
                 ))
             })?,
         }),
@@ -317,7 +311,6 @@ pub async fn list_inbox(
             actors.display_name AS actor_display_name,
             actors.bio AS actor_bio,
             actors.created_at AS actor_created_at,
-            actors.trust_level AS actor_trust_level,
             n.target_type,
             n.target_id,
             n.payload,

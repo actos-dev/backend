@@ -36,11 +36,6 @@ pub struct ActorRecord {
     pub display_name: Option<String>,
     pub bio: Option<String>,
     pub created_at: DateTime<Utc>,
-    /// Güven kademesi (0-2) — bkz. `migrations/0020_trust_levels.up.sql`
-    /// ve `crate::actor::recompute_trust_levels`. Yeni satırlarda şema
-    /// varsayılanı `0`'dır; bu tip yalnızca okuma tarafında, hesaplama bu
-    /// modülde YAPILMAZ.
-    pub trust_level: i16,
 }
 
 /// `migrations/0002_actors.up.sql` → `actor_type` Postgres enum'ının Rust
@@ -157,7 +152,7 @@ pub async fn register(
         r#"
         INSERT INTO actors (username, actor_type, display_name)
         VALUES ($1, $2, $3)
-        RETURNING id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, trust_level
+        RETURNING id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at
         "#,
         username.as_str(),
         actor_type,
@@ -228,7 +223,6 @@ struct AuthRow {
     display_name: Option<String>,
     bio: Option<String>,
     created_at: DateTime<Utc>,
-    trust_level: i16,
     avatar_object_key: Option<String>,
     deleted_at: Option<DateTime<Utc>>,
     is_banned: bool,
@@ -272,7 +266,6 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
             actors.display_name,
             actors.bio,
             actors.created_at,
-            actors.trust_level,
             actors.avatar_object_key,
             actors.deleted_at,
             (
@@ -323,7 +316,6 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
             display_name: row.display_name,
             bio: row.bio,
             created_at: row.created_at,
-            trust_level: row.trust_level,
         },
         key_id: parsed.key_id,
         roles,

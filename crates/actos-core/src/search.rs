@@ -294,7 +294,6 @@ struct ContentSearchRow {
     author_display_name: Option<String>,
     author_bio: Option<String>,
     author_created_at: DateTime<Utc>,
-    author_trust_level: i16,
     author_deleted_at: Option<DateTime<Utc>>,
     tags: Vec<String>,
     /// Bkz. modül dokümantasyonu "Sıralama" bölümü — alaka + tazelik +
@@ -316,7 +315,6 @@ impl From<ContentSearchRow> for Content {
                 display_name: row.author_display_name,
                 bio: row.author_bio,
                 created_at: row.author_created_at,
-                trust_level: row.author_trust_level,
             },
             author_deleted: row.author_deleted_at.is_some(),
             title: row.title,
@@ -427,7 +425,6 @@ pub async fn search_content(
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
-            actors.trust_level AS author_trust_level,
             actors.deleted_at AS author_deleted_at,
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
@@ -471,7 +468,6 @@ struct ActorSearchRow {
     display_name: Option<String>,
     bio: Option<String>,
     created_at: DateTime<Utc>,
-    trust_level: i16,
     /// Bkz. modül dokümantasyonu "Actor araması" bölümü.
     rank: f64,
 }
@@ -485,7 +481,6 @@ impl From<ActorSearchRow> for ActorRecord {
             display_name: row.display_name,
             bio: row.bio,
             created_at: row.created_at,
-            trust_level: row.trust_level,
         }
     }
 }
@@ -540,7 +535,6 @@ pub async fn search_actors(
             actors.display_name,
             actors.bio,
             actors.created_at,
-            actors.trust_level,
             (
                 CASE WHEN actors.username::text LIKE $2 || '%' THEN 1000.0 ELSE 0.0 END
                 + ts_rank(actors.search_vector, websearch_to_tsquery('actos_simple', $1)) * 10.0

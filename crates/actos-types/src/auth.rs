@@ -34,10 +34,6 @@ pub struct ActorSummary {
     pub bio: Option<String>,
     /// RFC 3339.
     pub created_at: String,
-    /// Trust level (0-2), recomputed periodically by the server. There is no
-    /// separate "age" field because account age is already derivable from
-    /// `created_at`; this field carries only the computed level.
-    pub trust_level: i16,
     /// Public URL of the avatar — `None` when no avatar has been chosen.
     /// The bucket is public-read (see
     /// [`UploadResponse::url`](crate::upload::UploadResponse)), so no signing

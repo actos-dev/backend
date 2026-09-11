@@ -54,7 +54,6 @@ fn test_config() -> Config {
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
             orphan_cleanup_interval: std::time::Duration::ZERO,
-            trust_level_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),

@@ -117,7 +117,6 @@ fn test_config() -> Config {
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
             orphan_cleanup_interval: std::time::Duration::ZERO,
-            trust_level_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -296,27 +295,6 @@ async fn seed_actor_with_recovery(pool: &PgPool, username: &str) -> (i64, String
         .await
         .expect("fixture actor oluşturulabilmeli");
     (reg.actor.id, reg.api_key, reg.recovery_codes)
-}
-
-/// Bir actor'ün güven kademesini elle ayarlar (bkz. `migrations/
-/// 0020_trust_levels.up.sql`). Bu dosyada yalnızca rate-limit kapasitesini
-/// büyütmek için kullanılıyor: bazı test fonksiyonları aynı "sahip"
-/// actor'ün API key'iyle onlarca post/yorum oluşturuyor ve varsayılan
-/// kademe 0'ın (temel kapasitenin yarısı, bkz. `actos_core::config::
-/// TRUST_LEVEL_CAPACITY_MULTIPLIER`) `POST /posts` kotası (insan başına
-/// saatte 5) bunun altında kalıyor — testin sınadığı şey yetki, hız sınırı
-/// değil, dolayısıyla kademeyi yükseltmek (saatte 20) bu çakışmayı ortadan
-/// kaldırıyor.
-#[allow(clippy::expect_used)]
-async fn set_trust_level(pool: &PgPool, actor_id: i64, level: i16) {
-    sqlx::query!(
-        "UPDATE actors SET trust_level = $1 WHERE id = $2",
-        level,
-        actor_id,
-    )
-    .execute(pool)
-    .await
-    .expect("trust_level güncellenebilmeli");
 }
 
 #[allow(clippy::expect_used)]
@@ -1114,7 +1092,6 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
     let router = build_router(pool);
 
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_post_owner").await;
-    set_trust_level(&raw_pool, owner_id, 2).await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_post_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_post_mod").await;
     rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
@@ -1578,7 +1555,6 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
     let router = build_router(pool);
 
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_int_owner").await;
-    set_trust_level(&raw_pool, owner_id, 2).await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_int_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_int_mod").await;
     rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
@@ -2207,7 +2183,6 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
     let router = build_router(pool);
 
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_mod_owner").await;
-    set_trust_level(&raw_pool, owner_id, 2).await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_mod_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_mod_mod").await;
     rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;

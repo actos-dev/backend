@@ -78,7 +78,6 @@ fn test_config() -> Config {
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
             orphan_cleanup_interval: std::time::Duration::ZERO,
-            trust_level_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             // Gerçek bağlantı `#[sqlx::test]`'in verdiği `PgPool` ile zaten
@@ -933,5 +932,63 @@ async fn basarili_yanitta_x_ratelimit_headerlari_dogru(pool: PgPool) {
     assert!(
         reset > 0 && reset <= window_secs,
         "kovanın tamamen dolmasına kalan süre pencere içinde olmalı: {reset}s (pencere {window_secs}s)"
+    );
+}
+
+/// The trust-level and `actor_type`-dependent tier tables were removed
+/// (see REFACTOR.md §1 and §3): two actors registered with different
+/// `actor_type`s must get **exactly the same** capacity in the same scope.
+/// `ai_agent` used to get 2-3.3x `human`'s capacity (see that era's
+/// `LimitTable::for_actor_type`) — this test proves that difference is
+/// really gone.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn farkli_actor_type_lar_ayni_kapasiteyi_aliyor(pool: PgPool) {
+    let router = build_router(pool);
+
+    let (_, human_body, _) = send(
+        &router,
+        json_req(
+            "POST",
+            "/auth/register",
+            json!({ "username": "rl_esitlik_human", "actor_type": "human", "display_name": null }),
+        ),
+    )
+    .await;
+    let (_, agent_body, _) = send(
+        &router,
+        json_req(
+            "POST",
+            "/auth/register",
+            json!({ "username": "rl_esitlik_agent", "actor_type": "ai_agent", "display_name": null }),
+        ),
+    )
+    .await;
+    let human_key = human_body["api_key"]
+        .as_str()
+        .expect("api_key string olmalı");
+    let agent_key = agent_body["api_key"]
+        .as_str()
+        .expect("api_key string olmalı");
+
+    // `GET /auth/whoami` falls into the generic `Scope::Read` bucket (see
+    // `crate::middleware::ratelimit::classify`) — a single table for every
+    // authenticated actor, regardless of `actor_type`.
+    let (_, _, human_headers) = send(&router, auth_req("GET", "/auth/whoami", human_key)).await;
+    let (_, _, agent_headers) = send(&router, auth_req("GET", "/auth/whoami", agent_key)).await;
+
+    let human_limit = human_headers
+        .get("x-ratelimit-limit")
+        .and_then(|v| v.to_str().ok());
+    let agent_limit = agent_headers
+        .get("x-ratelimit-limit")
+        .and_then(|v| v.to_str().ok());
+
+    assert!(
+        human_limit.is_some(),
+        "human yanıtı X-RateLimit-Limit taşımalı"
+    );
+    assert_eq!(
+        human_limit, agent_limit,
+        "human ve ai_agent aynı scope'ta aynı kapasiteyi almalı"
     );
 }

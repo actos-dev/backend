@@ -126,15 +126,10 @@ async fn create_upload(
         .with_request_id(&headers));
     };
 
-    // Faz 18.A: aktör başına toplam depolama kotası, güven kademesine göre
-    // (bkz. NOTES.md §9.8, `actos_core::config::StorageQuotaConfig`).
-    // `current.actor.trust_level` middleware'in zaten okuduğu satırdan
-    // geliyor — ek bir sorgu yok (bkz. `crate::middleware::ratelimit`
-    // içindeki aynı desen).
-    let quota_bytes = state
-        .config()
-        .storage_quota
-        .for_trust_level(current.actor.trust_level);
+    // A single flat total storage quota per actor (see NOTES.md §9.8,
+    // `actos_core::config::StorageQuotaConfig`) — with trust level removed
+    // (REFACTOR.md §3), it no longer varies by tier.
+    let quota_bytes = state.config().storage_quota.bytes;
 
     let ek = core_attachment::create_attachment(
         state.db(),

@@ -94,11 +94,6 @@
           "id": {
             "type": "string"
           },
-          "trust_level": {
-            "description": "Trust level (0-2), recomputed periodically by the server. There is no\nseparate \"age\" field because account age is already derivable from\n`created_at`; this field carries only the computed level.",
-            "format": "int32",
-            "type": "integer"
-          },
           "username": {
             "type": "string"
           }
@@ -107,8 +102,7 @@
           "id",
           "username",
           "actor_type",
-          "created_at",
-          "trust_level"
+          "created_at"
         ],
         "type": "object"
       },

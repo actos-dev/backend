@@ -131,11 +131,10 @@ fn classify(method: &Method, path: &str) -> Option<Scope> {
         return Some(Scope::Inbox);
     }
 
-    // Faz 13 geldiğinde buraya eklenecek:
-    //   if *method == Method::POST && path == "/media" { return Some(Scope::Upload); }
-    // Bu satırların üstünde durmaları gerekiyor çünkü aşağıdaki genel
-    // GET/diğer ayrımı her şeyi yakalar. `GET /posts/{id}` özel bir eşleme
-    // gerektirmiyor: zaten aşağıdaki genel `Scope::Read` kovasına düşüyor.
+    // New scopes should be added here — they need to stay above these
+    // lines because the generic GET/other split below catches everything.
+    // `GET /posts/{id}` doesn't need a special mapping: it already falls
+    // into the generic `Scope::Read` bucket below.
     // `PATCH`/`DELETE /posts/{id}` de aynı şekilde genel `Scope::Write`'a
     // düşüyor — sahiplik/yetki kontrolü olmayan bir yazma isteğinin de
     // hızını sınırlamak istiyoruz, `Post`'a özgü (daha sıkı) bir kovaya
@@ -179,15 +178,16 @@ fn resolve_client_ip(req: &Request, trusted_proxy_hops: usize) -> IpAddr {
 /// `actors.rate_limit_config` jsonb'sinden bu `scope`'a özel bir override
 /// olup olmadığını okur.
 ///
-/// **Ek bir DB sorgusu — bilinçli bir taviz:** `actos_core::auth::
-/// AuthenticatedActor`/`ActorRecord` bu alanı taşımıyor; `authenticate()`
-/// sorgusu `actors` satırını zaten okuyor ama `rate_limit_config`'i SELECT
-/// etmiyor (bkz. `crates/actos-core/src/auth.rs`). Onu genişletmek
-/// `actos-core`'a dokunmak demek olurdu (bu görevde yasak). Ek sorgunun
-/// maliyetini sınırlamak için yalnızca `config_from_json`'ın gerçekten
-/// tanıdığı scope'larda (`Post`/`Comment`/`Vote`/`Read`/`Upload`/`Search`/
-/// `Inbox`) atılıyor — `Register`/`Recover`/`Write` için o fonksiyon zaten
-/// koşulsuz `None` döndüğünden sorgu bile gereksiz.
+/// **An extra DB query — a deliberate trade-off:** `actos_core::auth::
+/// AuthenticatedActor`/`ActorRecord` doesn't carry this field;
+/// `authenticate()`'s query already reads the `actors` row but doesn't
+/// SELECT `rate_limit_config` (see `crates/actos-core/src/auth.rs`).
+/// Extending it would mean touching `actos-core` (forbidden for this
+/// task). To limit the cost of the extra query, it's only fired for
+/// scopes that `config_from_json` actually recognizes (`Post`/`Comment`/
+/// `Vote`/`Read`/`Search`/`Inbox`) — for `Register`/`Recover`/`Write` that
+/// function already unconditionally returns `None`, so even the query is
+/// unnecessary.
 async fn actor_rate_limit_override(
     db: &PgPool,
     actor_id: i64,
@@ -195,13 +195,7 @@ async fn actor_rate_limit_override(
 ) -> Option<RateLimitConfig> {
     if !matches!(
         scope,
-        Scope::Post
-            | Scope::Comment
-            | Scope::Vote
-            | Scope::Read
-            | Scope::Upload
-            | Scope::Search
-            | Scope::Inbox
+        Scope::Post | Scope::Comment | Scope::Vote | Scope::Read | Scope::Search | Scope::Inbox
     ) {
         return None;
     }
@@ -268,17 +262,7 @@ pub async fn enforce(State(state): State<AppState>, req: Request, next: Next) ->
     let identity = req.extensions().get::<ResolvedIdentity>().cloned();
 
     let subject = match &identity {
-        Some(ResolvedIdentity::Authenticated(actor)) => Subject::Actor {
-            id: actor.actor.id,
-            actor_type: actor.actor.actor_type,
-            // Faz 18.A: `actos_core::config::LimitTable::resolve` bunu
-            // güven kademesi kapasite çarpanını (bkz. `TRUST_LEVEL_
-            // CAPACITY_MULTIPLIER`) seçmek için kullanıyor. `identity`
-            // middleware'i bu istekte `actors` satırını zaten okudu
-            // (`authenticate`), yani bu ek bir sorgu değil — alan zaten
-            // elimizdeki `ActorRecord`'da.
-            trust_level: actor.actor.trust_level,
-        },
+        Some(ResolvedIdentity::Authenticated(actor)) => Subject::Actor { id: actor.actor.id },
         // Anonim VE doğrulaması başarısız olmuş (401 dönecek) istekler
         // aynı şekilde IP başına sınırlanır — bir istemci geçersiz key'ler
         // deneyerek hız sınırını atlatamamalı.
@@ -295,11 +279,10 @@ pub async fn enforce(State(state): State<AppState>, req: Request, next: Next) ->
         _ => None,
     };
 
-    // Öncelik: `override_cfg` doluysa (kişiye özel `rate_limit_config`)
-    // `subject`'in taşıdığı `trust_level`'a göre otomatik seçilen/ölçeklenen
-    // kademe tamamen görmezden gelinir (bkz. `RateLimiter::check` üzerindeki
-    // "Öncelik sırası" gerekçesi) — operatörün elle koyduğu bir istisna,
-    // otomatik güven kademesi hesaplamasından her zaman üstün.
+    // If `override_cfg` is populated (a per-actor `rate_limit_config`), the
+    // default shared by all actors in the single table is completely
+    // ignored (see the rationale on `RateLimiter::check`) — an exception
+    // the operator set by hand always wins over the default.
     let decision = state
         .rate_limiter()
         .check(scope, &subject, override_cfg.as_ref())

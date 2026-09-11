@@ -8,26 +8,19 @@
 //! ayrı bir entegrasyon test binary'si olduğu için paylaşılan bir modül
 //! olmadan tekrar tanımlanıyor.
 //!
-//! **İki istisna, bilerek HTTP dışı:**
-//! 1. İlk admin'in rolü — `POST /admin/roles`'un kendisi zaten bir admin
-//!    gerektiriyor (tavuk-yumurta), bu yüzden ilk admin
-//!    `actos_core::auth::grant_role` ile doğrudan veritabanına yazılıyor
-//!    (bkz. `tests/admin_api.rs`'teki `rol_ver` ile aynı desen). Ondan
-//!    sonraki her rol/ban/silme işlemi gerçek HTTP isteği.
-//! 2. Oy veren iki actor'ün `trust_level`'ı — bu platformda güven kademesi
-//!    normalde periyodik bir işle (`actos_core::actor::
-//!    recompute_trust_levels`) hesaplanıyor, testte bunu beklemek yerine
-//!    doğrudan SQL ile ayarlanıyor (görevin kendi notu: "oy veren
-//!    actor'lerin trust_level'ını bilinçli ayarla").
+//! **One exception, deliberately outside HTTP:** the first admin's role —
+//! `POST /admin/roles` itself already requires an admin (chicken-and-egg),
+//! so the first admin is written directly to the database with
+//! `actos_core::auth::grant_role` (see the same pattern as `rol_ver` in
+//! `tests/admin_api.rs`). Every role/ban/delete operation after that is a
+//! real HTTP request.
 //!
 //! ## Doğrulanan sözleşme ayrıntıları
 //!
-//! - **Oy ağırlığı verildiği anda donuyor**
-//!   (`actos_core::interaction::set_vote`, `migrations/0022_vote_weight`):
-//!   güven kademesi 0 olan bir actor'ün oyu `score`'a **0** katkı yapar,
-//!   kademe ≥1 olan bir actor'ünki **1**. Bu yüzden aşağıda iki oy da
-//!   `value = 1` olsa da (`upvotes = 2`) nihai `score = 1` — yalnızca
-//!   yüksek kademeli oy sayılıyor.
+//! - **The score is now a flat sum of votes** (`actos_core::interaction::
+//!   set_vote`) — trust level and vote weight were removed (see
+//!   REFACTOR.md §3), every vote counts at full weight. Below, both actors
+//!   cast a `value = 1` vote, giving a final `score = 2`.
 //! - **Silinmiş post `410 Gone`, silinmiş yorum `200` + maskelenmiş gövde**
 //!   (`actos_core::content`/`actos_core::comment` modül dokümanları) —
 //!   iş parçacığı bütünlüğü için bilinçli bir asimetri: bir yorumun
@@ -89,7 +82,6 @@ fn test_config() -> Config {
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
             orphan_cleanup_interval: std::time::Duration::ZERO,
-            trust_level_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -233,20 +225,6 @@ async fn bootstrap_ilk_admin(pool: &PgPool, username: &str) {
         .expect("ilk admin rolü verilebilmeli");
 }
 
-/// Oy veren actor'lerin güven kademesini elle ayarlar — bkz. dosya
-/// başındaki modül dokümanının 2. maddesi.
-#[allow(clippy::expect_used)]
-async fn trust_level_ayarla(pool: &PgPool, username: &str, level: i16) {
-    sqlx::query!(
-        r#"UPDATE actors SET trust_level = $1 WHERE username = $2"#,
-        level,
-        username,
-    )
-    .execute(pool)
-    .await
-    .expect("trust_level güncellenebilmeli");
-}
-
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
 #[allow(clippy::too_many_lines)]
 async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
@@ -256,8 +234,8 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
     // === 1) Kayıt: birkaç actor ==========================================
     let (_, yazar_key) = register(&router, "e2e_yazar").await;
     let (_, yorumcu_key) = register(&router, "e2e_yorumcu").await;
-    let (_, oycu_dusuk_key) = register(&router, "e2e_oycu_dusuk").await;
-    let (_, oycu_yuksek_key) = register(&router, "e2e_oycu_yuksek").await;
+    let (_, oycu_bir_key) = register(&router, "e2e_oycu_bir").await;
+    let (_, oycu_iki_key) = register(&router, "e2e_oycu_iki").await;
     let (_, sikayetci_key) = register(&router, "e2e_sikayetci").await;
     let (_, moderator_key) = register(&router, "e2e_moderator").await;
     let (_, admin_key) = register(&router, "e2e_admin").await;
@@ -281,11 +259,6 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
         StatusCode::NO_CONTENT,
         "moderatör rolü verilemedi: {body}"
     );
-
-    // Oy ağırlığının donma anındaki kademeye bağlı olduğunu göstermek için
-    // iki farklı kademe: `e2e_oycu_dusuk` kayıt varsayılanında (0) kalıyor,
-    // `e2e_oycu_yuksek` 1'e yükseltiliyor.
-    trust_level_ayarla(&raw_pool, "e2e_oycu_yuksek", 1).await;
 
     // === 2) Post at =======================================================
     let (status, post_body, headers) = send(
@@ -347,59 +320,43 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
     assert_ne!(post_id, comment_id);
 
     // === 4) Oy ver ========================================================
-    // Düşük kademeli actor (trust_level = 0, varsayılan): ağırlık 0.
     let (status, oy_body, _) = send(
         &router,
         auth_json_req(
             "PUT",
             &format!("/contents/{post_id}/vote"),
-            &oycu_dusuk_key,
+            &oycu_bir_key,
             json!({ "value": 1 }),
         ),
     )
     .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "düşük kademeli oy başarısız: {oy_body}"
-    );
+    assert_eq!(status, StatusCode::OK, "ilk oy başarısız: {oy_body}");
 
-    // Yüksek kademeli actor (trust_level = 1): ağırlık 1.
     let (status, oy_body, _) = send(
         &router,
         auth_json_req(
             "PUT",
             &format!("/contents/{post_id}/vote"),
-            &oycu_yuksek_key,
+            &oycu_iki_key,
             json!({ "value": 1 }),
         ),
     )
     .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "yüksek kademeli oy başarısız: {oy_body}"
-    );
+    assert_eq!(status, StatusCode::OK, "ikinci oy başarısız: {oy_body}");
     // Bu tekil yanıt da içeriğin güncel sayaçlarını taşıyor — burada da
     // doğrulanabilir, ama asıl doğrulama aşağıda `GET /posts/{id}` ile.
     assert_eq!(oy_body["upvotes"], 2, "{oy_body}");
-    assert_eq!(
-        oy_body["score"], 1,
-        "iki oy da +1 ama biri ağırlık 0: {oy_body}"
-    );
+    assert_eq!(oy_body["score"], 2, "iki tam ağırlıklı +1 oy: {oy_body}");
 
     // === 5) Skoru doğrula =================================================
     let (status, post_after_vote, _) =
         send(&router, empty_req("GET", &format!("/posts/{post_id}"))).await;
     assert_eq!(status, StatusCode::OK, "{post_after_vote}");
-    assert_eq!(
-        post_after_vote["upvotes"], 2,
-        "ham oy sayısı ağırlıktan bağımsız olmalı: {post_after_vote}"
-    );
+    assert_eq!(post_after_vote["upvotes"], 2, "{post_after_vote}");
     assert_eq!(post_after_vote["downvotes"], 0, "{post_after_vote}");
     assert_eq!(
-        post_after_vote["score"], 1,
-        "trust_level=0'ın oyu 0 katkı yapmalı, yalnızca trust_level=1'inki sayılmalı: {post_after_vote}"
+        post_after_vote["score"], 2,
+        "skor artık düz oy toplamı, her iki oy da tam ağırlıklı sayılmalı: {post_after_vote}"
     );
 
     // === 6) Şikayet et ====================================================

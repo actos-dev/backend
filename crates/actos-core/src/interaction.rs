@@ -68,31 +68,22 @@ pub struct VoteOutcome {
 /// iş ([`crate::feed::recompute_hot_scores`]) yalnızca zaman ilerledikçe
 /// kayan değerleri tazeliyor; anlık güncelleme burada.
 ///
-/// ## Oy ağırlığı (Faz 18.B, `NOTES.md` §9.3, `migrations/0022_vote_weight.up.sql`)
+/// ## The score is now a flat sum (REFACTOR.md §3)
 ///
-/// `contents.score` artık ham oy toplamı değil, `sum(value * weight)`.
-/// `weight` oyu veren actor'ün **bu fonksiyon çağrıldığı andaki**
-/// `trust_level`'ından türetiliyor (seviye 0 → `0`, seviye 1/2 → `1`) ve
-/// `votes.weight`'e öyle yazılıyor — bkz. migration'daki `COMMENT ON
-/// COLUMN` için tam gerekçe. **Bu ağırlık sonradan yeniden hesaplanmıyor:**
-/// bir actor terfi ettiğinde geçmiş oylarını dolaşıp `contents.score`'u
-/// güncellemek, her terfide potansiyel olarak binlerce satırı taramak
-/// demek olurdu. Ağırlık oy anının fotoğrafı.
+/// `contents.score` was, for a while, `sum(value * weight)` — `weight` was
+/// a 0/1 multiplier derived from the voter's `trust_level` (a fresh
+/// account's vote was recorded but didn't contribute to the score). With
+/// trust level removed entirely (see REFACTOR.md §3), `votes.weight` is
+/// gone too: the score is now a flat `sum(value)`, every vote at full
+/// weight.
 ///
-/// **Kritik incelik — delta hangi ağırlıkla hesaplanır:** bir oy
-/// değiştirildiğinde ya da geri çekildiğinde, **eski** katkı (`onceki_value
-/// * onceki_weight`) satırda **önceden saklı duran** `weight` ile
-/// hesaplanır, oy verenin **bugünkü** kademesiyle DEĞİL. **Yeni** katkı
-/// (`value * yeni_weight`) ise bu çağrının anında okunan güncel kademeden
-/// türetilen `yeni_weight` ile. Bu ayrım şart: aksi hâlde seviye 0'ken oy
-/// verip sonra terfi eden biri oyunu geri çekince (`value = 0`, yeni katkı
-/// zaten `0`) eski katkı yanlışlıkla `1` sayılır ve `contents.score`
-/// gereksiz yere eksiye kayardı — oysa o oy hiçbir zaman skora katkı
-/// vermemişti. Test: `crates/actos-core/tests/interaction.rs`.
-///
-/// `upvotes`/`downvotes` bu değişiklikten **etkilenmiyor** — hâlâ ham oy
-/// SAYISI (kaç kişi upvote/downvote verdi), kullanıcı oyunun kaydedildiğini
-/// görebilsin diye. Değişen yalnızca oyun `score`'a katkısı.
+/// **When a vote is changed or withdrawn, the previous contribution is
+/// computed from `onceki_value`** — there's no longer a weight stored
+/// separately on the row, the delta is simply `value - onceki_value`. This
+/// preserves, with a simpler computation, the same invariant that had to
+/// hold even when there was a weight (withdrawing a vote must never shift
+/// the score by anything other than its own contribution) — test:
+/// `crates/actos-core/tests/interaction.rs`.
 ///
 /// # Errors
 /// `value` `-1`/`0`/`1` dışındaysa [`Error::Validation`]; içerik yoksa
@@ -135,38 +126,25 @@ pub async fn set_vote(
         return Err(Error::Forbidden);
     }
 
-    // Önceki oy VE o oyun satırda saklı ağırlığı — eski katkının delta'sı
-    // bununla hesaplanacak, oy verenin bugünkü kademesiyle değil (bkz.
-    // fonksiyon dokümantasyonu "Kritik incelik").
+    // Previous vote — the delta of the old contribution will be computed from this.
     let mevcut = sqlx::query!(
-        r#"SELECT value, weight FROM votes WHERE actor_id = $1 AND content_id = $2"#,
+        r#"SELECT value FROM votes WHERE actor_id = $1 AND content_id = $2"#,
         actor_id,
         content_id,
     )
     .fetch_optional(&mut *tx)
     .await?;
 
-    let (onceki_value, onceki_weight) = mevcut.map_or((0i16, 0i16), |r| (r.value, r.weight));
+    let onceki_value = mevcut.map_or(0i16, |r| r.value);
 
-    // Oy verenin GÜNCEL güven kademesi — bu YAZI anında okunuyor ve
-    // `votes.weight`'e öyle sabitleniyor (bkz. `migrations/
-    // 0022_vote_weight.up.sql` üzerindeki `COMMENT ON COLUMN`). Seviye 0 →
-    // ağırlık 0 (oy kaydedilir, sayaçlara işler, skora katkı vermez);
-    // seviye 1/2 → ağırlık 1 (tam).
-    let oylayan_trust_level: i16 =
-        sqlx::query_scalar!(r#"SELECT trust_level FROM actors WHERE id = $1"#, actor_id,)
-            .fetch_one(&mut *tx)
-            .await?;
-
-    let yeni_weight: i16 = i16::from(oylayan_trust_level >= 1);
-
-    // Sayaç farkları önceki ve yeni değerden türetiliyor; "kaç oy vardı"yı
-    // yeniden saymaya gerek yok. `upvotes`/`downvotes` ağırlıktan bağımsız
-    // — ham yön sayısı; yalnızca `score_delta` ağırlıklı.
+    // Counter differences are derived from the previous and new values;
+    // no need to recount "how many votes there were." `upvotes`/`downvotes`
+    // are still a raw direction count; `score_delta` is now a plain
+    // difference too (see the function documentation, "The score is now a
+    // flat sum").
     let upvote_delta = i32::from(value == 1) - i32::from(onceki_value == 1);
     let downvote_delta = i32::from(value == -1) - i32::from(onceki_value == -1);
-    let score_delta = i32::from(value) * i32::from(yeni_weight)
-        - i32::from(onceki_value) * i32::from(onceki_weight);
+    let score_delta = i32::from(value) - i32::from(onceki_value);
 
     if value == 0 {
         sqlx::query!(
@@ -179,14 +157,13 @@ pub async fn set_vote(
     } else {
         sqlx::query!(
             r#"
-            INSERT INTO votes (actor_id, content_id, value, weight)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (actor_id, content_id) DO UPDATE SET value = EXCLUDED.value, weight = EXCLUDED.weight
+            INSERT INTO votes (actor_id, content_id, value)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (actor_id, content_id) DO UPDATE SET value = EXCLUDED.value
             "#,
             actor_id,
             content_id,
             value,
-            yeni_weight,
         )
         .execute(&mut *tx)
         .await?;
@@ -476,7 +453,6 @@ pub async fn list_saves(
         author_display_name: Option<String>,
         author_bio: Option<String>,
         author_created_at: DateTime<Utc>,
-        author_trust_level: i16,
         author_deleted_at: Option<DateTime<Utc>>,
         tags: Vec<String>,
     }
@@ -506,7 +482,6 @@ pub async fn list_saves(
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
-            actors.trust_level AS author_trust_level,
             actors.deleted_at AS author_deleted_at,
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
@@ -552,7 +527,6 @@ pub async fn list_saves(
                 display_name: row.author_display_name,
                 bio: row.author_bio,
                 created_at: row.author_created_at,
-                trust_level: row.author_trust_level,
             },
             author_deleted: row.author_deleted_at.is_some(),
             title: row.title,

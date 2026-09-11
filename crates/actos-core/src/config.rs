@@ -6,10 +6,7 @@
 
 use std::{fmt, net::SocketAddr, str::FromStr, time::Duration};
 
-use crate::{
-    auth::ActorType,
-    ratelimit::{RateLimitConfig, Scope, Subject},
-};
+use crate::ratelimit::{RateLimitConfig, Scope, Subject};
 
 /// Yapılandırma okunurken oluşan hatalar.
 #[derive(Debug, thiserror::Error)]
@@ -30,15 +27,12 @@ pub struct Config {
     pub storage: StorageConfig,
     pub security: SecurityConfig,
     pub rate_limits: LimitTable,
-    /// Actor başına toplam depolama kotası, güven kademesine göre (Faz
-    /// 18.A, bkz. NOTES.md §9.8). `rate_limits`'ten **ayrı bir alan**:
-    /// ikisi de güven kademesine bağlı ama biri hızı (istek/saniye) biri
-    /// birikimi (toplam bayt) sınırlıyor — kavramsal olarak farklı
-    /// eksenler, tek bir yapıda birleştirmek ["kademe çarpanı" tek bir
-    /// katsayıya indirgenmiş `TRUST_LEVEL_CAPACITY_MULTIPLIER`'ın aksine]
-    /// kotanın kendi mutlak bayt değerlerini taşıması gerektiğinden
-    /// (`50 MB`/`500 MB`/`2 GB` çarpan değil, mutlak sayı) yapay bir
-    /// zorlama olurdu.
+    /// Total storage quota per actor (see NOTES.md §9.8). A **separate field**
+    /// from `rate_limits`: one limits rate (requests/second), the other limits
+    /// accumulation (total bytes) — conceptually different axes, and merging
+    /// them into a single structure would be an artificial forcing, since the
+    /// quota needs to carry its own absolute byte value (`500 MB` is not a
+    /// multiplier, it's an absolute number).
     pub storage_quota: StorageQuotaConfig,
 }
 
@@ -67,9 +61,6 @@ pub struct ServerConfig {
     /// Bağlanmamış yüklemeleri toplayan işin aralığı (bkz.
     /// `crate::attachment::cleanup_orphaned`). Sıfır = iş hiç başlatılmaz.
     pub orphan_cleanup_interval: Duration,
-    /// Güven kademesi (trust level) tazeleme işinin çalışma aralığı (bkz.
-    /// `crate::actor::recompute_trust_levels`). Sıfır = iş hiç başlatılmaz.
-    pub trust_level_interval: Duration,
     /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
     /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
     /// güvenilebileceğini belirler.
@@ -112,97 +103,51 @@ pub struct StorageConfig {
     pub public_base_url: String,
 }
 
-/// Actor başına toplam depolama kotası, güven kademesine göre (bayt) — Faz
-/// 18.A, NOTES.md §9.8: *"biri 1000 hesap açıp her biriyle 100 tane 8 MB'lık
-/// görsel yükleyip diski doldurabilir"* senaryosuna karşı savunma.
+/// Total storage quota per actor (bytes) — NOTES.md §9.8: defense against
+/// the scenario of *"opening 1000 accounts and, with each one, uploading
+/// 100 8 MB images to fill up the disk."*
 ///
-/// **Neden `MAX_UPLOAD_BYTES` yetmiyordu:** o, **tek dosya** başına bir üst
-/// sınır (bkz. `ServerConfig::max_upload_bytes`) — rate limit (`Scope::
-/// Upload`) yükleme **hızını** kısıyor ama sabırlı bir saldırgan zamanla
-/// aynı toplam boyuta ulaşır. Bu kota **birikimi** (toplam bayt) sınırlıyor,
-/// hıza bakmaksızın.
+/// **Why `MAX_UPLOAD_BYTES` wasn't enough:** it's an upper bound **per
+/// single file** (see `ServerConfig::max_upload_bytes`) — a patient
+/// attacker reaches the same total size over time. This quota limits
+/// **accumulation** (total bytes), regardless of rate.
 ///
-/// **Değerler `koda gömülü değil, env'den okunuyor`** (görev gereksinimi):
-/// rate limit çarpanlarının aksine (`TRUST_LEVEL_CAPACITY_MULTIPLIER`,
-/// birimsiz oran) bunlar mutlak bayt sayıları — operatörün depolama
-/// kapasitesine göre ayarlaması gereken, platforma özgü işletme kararları,
-/// kodda sabitlenmeye uygun değil (tıpkı `MAX_UPLOAD_BYTES` gibi).
+/// **The value is read from the environment, not hardcoded** (task
+/// requirement): it's an absolute byte count — a platform-specific
+/// operational decision that the operator needs to tune to their storage
+/// capacity, not something that belongs baked into the code (just like
+/// `MAX_UPLOAD_BYTES`).
+///
+/// Before trust levels were removed, this was split into three tiers
+/// (50 MB/500 MB/2 GB) (see REFACTOR.md §3); now it's a **single flat
+/// value** for everyone, 500 MB.
 #[derive(Clone, Copy, Debug)]
 pub struct StorageQuotaConfig {
-    /// Kademe 0 (taze/doğrulanmamış hesap) — en dar. Varsayılan 50 MB.
-    pub trust_level_0_bytes: i64,
-    /// Kademe 1 (asgari etkinlik göstermiş hesap). Varsayılan 500 MB.
-    pub trust_level_1_bytes: i64,
-    /// Kademe 2 (kurulmuş hesap) — en geniş. Varsayılan 2 GB.
-    pub trust_level_2_bytes: i64,
+    pub bytes: i64,
 }
 
 impl StorageQuotaConfig {
-    /// `trust_level` (0-2) için kota baytı.
-    ///
-    /// `crate::attachment::create_attachment`'a doğrudan `quota_bytes: i64`
-    /// olarak geçiliyor — `attachment.rs` bu struct'ı ya da `trust_level`
-    /// kavramını bilmiyor, yalnızca çağıranın (`actos-api::routes::uploads`)
-    /// hesapladığı nihai bayt sınırını uyguluyor. Bu, `RateLimitConfig`
-    /// (çözümlenmiş kapasite) ile `LimitTable` (kademe → kapasite kuralları)
-    /// arasındaki aynı sorumluluk ayrımı: kural burada, uygulama orada.
-    ///
-    /// Aralık dışı bir `trust_level` (savunmacı — şema `CHECK` ile `0..=2`
-    /// garanti ediyor ama bu fonksiyon şemaya güvenmeden de doğru
-    /// davranmalı) en yakın uca kenetlenir.
-    #[must_use]
-    pub const fn for_trust_level(&self, trust_level: i16) -> i64 {
-        match trust_level {
-            i16::MIN..=0 => self.trust_level_0_bytes,
-            1 => self.trust_level_1_bytes,
-            _ => self.trust_level_2_bytes,
-        }
-    }
-
     /// Ortamdan oku ve doğrula (bkz. [`Self::validate`]).
     ///
     /// # Errors
-    /// Bir değer çözümlenemiyorsa veya kademeler artan sırada değilse.
+    /// If the value can't be parsed, or is zero or negative.
     pub fn from_env() -> Result<Self, ConfigError> {
         let table = Self {
-            trust_level_0_bytes: optional("STORAGE_QUOTA_TRUST_0_BYTES")?
-                .unwrap_or(50 * 1024 * 1024),
-            trust_level_1_bytes: optional("STORAGE_QUOTA_TRUST_1_BYTES")?
-                .unwrap_or(500 * 1024 * 1024),
-            trust_level_2_bytes: optional("STORAGE_QUOTA_TRUST_2_BYTES")?
-                .unwrap_or(2 * 1024 * 1024 * 1024),
+            bytes: optional("STORAGE_QUOTA_BYTES")?.unwrap_or(500 * 1024 * 1024),
         };
         table.validate()?;
         Ok(table)
     }
 
-    /// Sıfır/negatif bir kota, `create_attachment`'ta *hiçbir* yükleme
-    /// başarılı olamayacağı ("mevcut kullanım (>= 0) + yeni dosya (> 0)
-    /// her zaman kotayı aşar") anlamsız bir yapılandırma — açılışta
-    /// yakalanmalı. Kademeler **kesin artan** olmalı: bu şart bir CHECK
-    /// kısıtı değil (migration eklenmedi, bkz. görev kısıtı) ama sessizce
-    /// tersine dönmüş bir sıralama ("kademe 2 kademe 0'dan dar") operatör
-    /// hatasının en olası biçimi, açılışta durdurmak ilk isteği beklemekten
-    /// daha iyi.
+    /// A zero or negative quota is a nonsensical configuration in which
+    /// *no* upload in `create_attachment` could ever succeed ("current
+    /// usage (>= 0) + new file (> 0) always exceeds the quota") — this
+    /// must be caught at startup.
     fn validate(&self) -> Result<(), ConfigError> {
-        for (name, value) in [
-            ("STORAGE_QUOTA_TRUST_0_BYTES", self.trust_level_0_bytes),
-            ("STORAGE_QUOTA_TRUST_1_BYTES", self.trust_level_1_bytes),
-            ("STORAGE_QUOTA_TRUST_2_BYTES", self.trust_level_2_bytes),
-        ] {
-            if value <= 0 {
-                return Err(ConfigError::Invalid {
-                    name,
-                    detail: "sıfır veya negatif olamaz".to_owned(),
-                });
-            }
-        }
-        if !(self.trust_level_0_bytes <= self.trust_level_1_bytes
-            && self.trust_level_1_bytes <= self.trust_level_2_bytes)
-        {
+        if self.bytes <= 0 {
             return Err(ConfigError::Invalid {
-                name: "STORAGE_QUOTA_TRUST_*_BYTES",
-                detail: "kademeler artan sırada olmalı (kademe 0 <= 1 <= 2)".to_owned(),
+                name: "STORAGE_QUOTA_BYTES",
+                detail: "sıfır veya negatif olamaz".to_owned(),
             });
         }
         Ok(())
@@ -280,15 +225,6 @@ impl Config {
                 // olduğunda siliniyor, yani daha sık koşmanın karşılığı yok.
                 orphan_cleanup_interval: Duration::from_secs(
                     optional("ORPHAN_CLEANUP_INTERVAL_SECS")?.unwrap_or(60 * 60),
-                ),
-                // Varsayılan 1 saat: terfi eşikleri saat/gün mertebesinde
-                // (24 saat, 7 gün), bu yüzden dakikalarca sık koşmanın
-                // karşılığı yok — ama bir raporun onaylanmasından sonraki
-                // düşürmenin makul bir sürede yansıması için `tag_cleanup`
-                // kadar seyrek de değil (bkz. `crate::actor::
-                // recompute_trust_levels`).
-                trust_level_interval: Duration::from_secs(
-                    optional("TRUST_LEVEL_INTERVAL_SECS")?.unwrap_or(60 * 60),
                 ),
             },
             database: DatabaseConfig {
@@ -375,32 +311,32 @@ where
 
 // --- Hız sınırlama (rate limiting) limit tablosu -----------------------
 //
-// PLAN.md "Faz 6"daki varsayılan tablo burada kodlanır ama **sabit değil**:
-// her hücre kendi `RATE_LIMIT_..._CAPACITY` / `..._WINDOW_SECS` çifti ile
-// ortamdan override edilebilir. `actos_core::ratelimit::RateLimiter::check`,
-// `Subject::Actor { actor_type, trust_level, .. }`'daki `actor_type`'a
-// bakarak doğru temel kademeyi (human/ai_agent) seçip `trust_level`'a göre
-// [`TRUST_LEVEL_CAPACITY_MULTIPLIER`] ile ölçeklemek (Faz 18.A) için bu
-// tabloyu kullanır — çağıran tarafın kademe seçmesi gerekmez. `override_cfg`
-// parametresi, seçilen bu kademenin **yerine tamamen geçen** (üstüne
-// binmeyen), `actors.rate_limit_config` jsonb'sinden gelen **kişiye özel**
-// bir override'dır (bkz. [`crate::ratelimit::config_from_json`]) — öncelik
-// sırası kişiye özel override > güven kademesi çarpanı > actor_type temel
-// kademesi (bkz. `RateLimiter::check` üzerindeki gerekçe).
+// The default table is hardcoded here but it is **not fixed**: every cell
+// can be overridden from the environment via its own `RATE_LIMIT_..._CAPACITY`
+// / `..._WINDOW_SECS` pair. All authenticated (per-actor) requests **share a
+// single table** — there is no longer a separate `human`/`ai_agent` pair
+// that varies by `actor_type`, nor a trust-level multiplier (see
+// REFACTOR.md §1 and §3: both were removed as part of the same effort).
+// `actos_core::ratelimit::RateLimiter::check` uses this table directly,
+// regardless of `Subject::Actor`'s identity. The `override_cfg` parameter
+// is a **per-actor** override, coming from the `actors.rate_limit_config`
+// jsonb column, that **completely replaces** this table (rather than
+// layering on top of it) (see [`crate::ratelimit::config_from_json`]) — the
+// priority order is per-actor override > the single table's default (see
+// the rationale on `RateLimiter::check`).
 //
 // `Config`'in bir alanı: `Config::from_env()` başarısız olursa (ör. bir
 // `RATE_LIMIT_..._CAPACITY` sıfırsa) süreç, tıpkı diğer yapılandırma
 // hataları gibi, ilk isteği beklemeden açılışta durur.
 
-/// Kimlikli (actor başına) istekler için, `actor_type`'a göre değişen
-/// scope başına limitler.
+/// Per-scope limits for authenticated (per-actor) requests — a single
+/// table shared by all actors (see the rationale at the top of the module).
 #[derive(Clone, Copy, Debug)]
 pub struct ScopeLimits {
     pub post: RateLimitConfig,
     pub comment: RateLimitConfig,
     pub vote: RateLimitConfig,
     pub read: RateLimitConfig,
-    pub upload: RateLimitConfig,
     /// `GET /search` için ayrı kova (bkz. `crate::ratelimit::Scope::Search`
     /// üzerindeki gerekçe — arama genel okumadan belirgin ölçüde daha
     /// pahalı).
@@ -428,158 +364,64 @@ pub struct AnonymousLimits {
     /// `crate::ratelimit` modül dokümantasyonu) bir karar üretebilmesi
     /// için bu kademenin var olması gerekiyor — bkz. [`ScopeLimits::inbox`].
     pub inbox: RateLimitConfig,
-    /// Ayrıca tablolanmamış diğer tüm yazma uçları (ör. follow, delete) için
-    /// tek, muhafazakâr bir kova. [`Scope::Write`] ve kimliksiz isteklerde
-    /// [`Scope::Post`]/[`Scope::Comment`]/[`Scope::Vote`]/[`Scope::Upload`]
-    /// gibi normalde kimlikli olması beklenen ama bir şekilde kimliksiz
-    /// çağrılan scope'lar bu kovaya düşer.
+    /// A single, conservative bucket for all other write endpoints that
+    /// aren't otherwise tabulated (e.g. follow, delete). [`Scope::Write`],
+    /// and — for unauthenticated requests — scopes like [`Scope::Post`]/
+    /// [`Scope::Comment`]/[`Scope::Vote`] that would normally be expected to
+    /// be authenticated but somehow got called without authentication, fall
+    /// into this bucket. The same bucket is also used for an authenticated
+    /// actor's `Register`/`Recover`/`Write` scopes (see [`LimitTable::
+    /// resolve`]) — these three scopes never had a separate actor table,
+    /// since they were only ever defined per IP anyway.
     pub write: RateLimitConfig,
 }
 
-/// Güven kademesi (`actors.trust_level`, 0-2) başına rate limit **kapasite
-/// çarpanı** — Faz 18.A, bkz. NOTES.md §9.3 ve §9.8. **Tek yerde tanımlı**:
-/// büyütülecek/küçültülecek her ayar burada, başka hiçbir yerde bu üç sayı
-/// tekrar yazılmamalı (bkz. [`LimitTable::scale_for_trust_level`]).
-///
-/// İndeks = `trust_level` (0, 1, 2).
-///
-/// **Neden `human`/`ai_agent` tablolarına ayrı bir üçüncü boyut (3 kademe ×
-/// mevcut 7 scope alanı) eklenmedi de bir çarpan tercih edildi:** mevcut
-/// tablolar zaten `actor_type` başına 7 alan taşıyor, hepsi ayrı ayrı env
-/// değişkeniyle override edilebilir (`RATE_LIMIT_*_CAPACITY`/`_WINDOW_SECS`).
-/// Kademe başına ayrı bir tablo bunu 3 katına çıkarırdı (42 alan + 84 env
-/// değişkeni), `.env.example`'ı ve `LimitTable::validate`'i şişirir, ve en
-/// önemlisi **hiçbir yeni bilgi taşımaz** — kademe zaten var olan temel
-/// kapasiteyi ölçekliyor, yeni bir eksen açmıyor. Çarpan aynı ilkeyi
-/// (kademe arttıkça kapasite artar) sıfır yeni env değişkeniyle sağlıyor.
-///
-/// **Neden `trust_level = 1` temel (1.0×) alındı, `0` değil:** `human`/
-/// `ai_agent` tabloları zaten Faz 6'da "kurulmuş, normal davranan hesap"
-/// için kalibre edilmişti — bu değerleri değiştirmeden kademe 1'in
-/// karşılığı yapmak mevcut hiçbir üretim ayarını (env override'ları dahil)
-/// bozmuyor. Kademe 0 (taze hesap, §9.3'ün asıl hedefi — bir gecede açılan
-/// 100 hesabın manipülasyon/spam hızını kısmak) bunun **yarısı**; kademe 2
-/// (yaşını kanıtlamış hesap) **iki katı**. 2×'in ötesine geçilmedi: amaç
-/// kıdemli bir hesabı ödüllendirmek, `human`/`ai_agent` arasındaki temel
-/// farkı (bazı scope'larda zaten 3-10×) gölgede bırakacak kadar büyütmek
-/// değil.
-const TRUST_LEVEL_CAPACITY_MULTIPLIER: [f64; 3] = [0.5, 1.0, 2.0];
-
-/// Rate limiting için tüm varsayılan limitler: `human`/`ai_agent`
-/// (kimlikli) ve `anonymous` (IP başına).
+/// All default rate-limiting limits: `actor` (authenticated, shared by all
+/// actors) and `anonymous` (per IP).
 #[derive(Clone, Copy, Debug)]
 pub struct LimitTable {
-    pub human: ScopeLimits,
-    pub ai_agent: ScopeLimits,
+    pub actor: ScopeLimits,
     pub anonymous: AnonymousLimits,
 }
 
 impl LimitTable {
-    /// Bir `Scope` + `Subject` çifti için **varsayılan** (kişiye özel
-    /// override'sız) limiti döner: `Subject::Actor { actor_type, trust_level,
-    /// .. }` için `actor_type`'ın temel kademesi (bkz.
-    /// [`Self::for_actor_type`]) `trust_level`'a göre ölçeklenir (bkz.
-    /// [`Self::scale_for_trust_level`] ve [`TRUST_LEVEL_CAPACITY_MULTIPLIER`]);
-    /// `Subject::Ip` için IP başına (anonim, güven kademesiz) tablo.
+    /// Returns the **default** (without a per-actor override) limit for a
+    /// `Scope` + `Subject` pair: for `Subject::Actor`, the [`Self::actor`]
+    /// table — everyone gets the same capacity regardless of identity
+    /// (actor_type) (see the rationale at the top of the module); for
+    /// `Subject::Ip`, the per-IP (anonymous) table.
     ///
-    /// [`crate::ratelimit::RateLimiter::check`] bunu **her zaman** çağırır —
-    /// `override_cfg: None` verildiğinde döndürdüğü değer doğrudan kullanılır,
-    /// `Some(cfg)` verildiğinde ise `cfg` bunun *yerine* geçer (kademe zaten
-    /// doğru seçilmiş olur; `override_cfg`'nin işi kademe seçmek değil,
-    /// `actors.rate_limit_config`'ten gelen kişiye özel bir sınırı
-    /// uygulamaktır).
+    /// [`crate::ratelimit::RateLimiter::check`] **always** calls this — when
+    /// `override_cfg: None` is given, the returned value is used directly;
+    /// when `Some(cfg)` is given, `cfg` takes its place *instead*
+    /// (`override_cfg`'s job isn't to choose this default, it's to apply a
+    /// per-actor limit coming from `actors.rate_limit_config`).
     #[must_use]
     pub fn resolve(&self, scope: Scope, subject: &Subject) -> RateLimitConfig {
         match subject {
-            Subject::Actor {
-                actor_type,
-                trust_level,
-                ..
-            } => {
-                let temel = self.for_actor_type(scope, *actor_type);
-                Self::scale_for_trust_level(temel, *trust_level)
-            }
+            Subject::Actor { .. } => match scope {
+                Scope::Post => self.actor.post,
+                Scope::Comment => self.actor.comment,
+                Scope::Vote => self.actor.vote,
+                Scope::Read => self.actor.read,
+                Scope::Search => self.actor.search,
+                Scope::Inbox => self.actor.inbox,
+                // Register/Recover/Write were never tabulated for
+                // authenticated actors (only defined per IP) — if an
+                // authenticated caller ends up hitting these scopes
+                // (defensive: in practice `classify` only maps these scopes
+                // to anonymous routes), it falls into the anonymous "other
+                // writes" bucket.
+                Scope::Register | Scope::Recover | Scope::Write => self.anonymous.write,
+            },
             Subject::Ip(_) => match scope {
                 Scope::Register => self.anonymous.register,
                 Scope::Recover => self.anonymous.recover,
                 Scope::Read => self.anonymous.read,
                 Scope::Search => self.anonymous.search,
                 Scope::Inbox => self.anonymous.inbox,
-                Scope::Post | Scope::Comment | Scope::Vote | Scope::Upload | Scope::Write => {
-                    self.anonymous.write
-                }
+                Scope::Post | Scope::Comment | Scope::Vote | Scope::Write => self.anonymous.write,
             },
-        }
-    }
-
-    /// Belirli bir `actor_type` için scope başına **temel** (henüz güven
-    /// kademesi çarpanı uygulanmamış — `trust_level = 1`'in karşılığı, bkz.
-    /// [`TRUST_LEVEL_CAPACITY_MULTIPLIER`] üzerindeki gerekçe) limiti döner.
-    ///
-    /// [`Self::resolve`] tarafından `Subject::Actor`'ın kendi `actor_type`'ı
-    /// ile çağrılır, dönen değer ardından [`Self::scale_for_trust_level`]'a
-    /// verilir — `RateLimiter::check` bunu otomatik yaptığı için normal
-    /// akışta **doğrudan çağrılması gerekmez**. Public kalmasının nedeni
-    /// test edilebilirlik ve HTTP katmanının (ör. bir yönetim panelinde
-    /// "bu actor_type için mevcut limit ne?" göstermek gibi) ihtiyaç
-    /// duyabileceği kenar durumlar.
-    #[must_use]
-    pub fn for_actor_type(&self, scope: Scope, actor_type: ActorType) -> RateLimitConfig {
-        let tier = match actor_type {
-            ActorType::AiAgent => &self.ai_agent,
-            // İnsan, sistem botu ve organizasyon güvenli tarafta kalır
-            // (human tier). Bu tipler için daha gevşek bir limit gerekiyorsa
-            // actor'e özel `rate_limit_config` jsonb override'ı kullanılmalı.
-            ActorType::Human | ActorType::SystemBot | ActorType::Organization => &self.human,
-        };
-        match scope {
-            Scope::Post => tier.post,
-            Scope::Comment => tier.comment,
-            Scope::Vote => tier.vote,
-            Scope::Read => tier.read,
-            Scope::Upload => tier.upload,
-            Scope::Search => tier.search,
-            Scope::Inbox => tier.inbox,
-            // Register/Recover/Write kimlikli actor'ler için tablolanmadı
-            // (PLAN.md'de yalnızca IP başına tanımlı) — savunmacı varsayılan
-            // olarak anonim "diğer yazmalar" kovasına düşer.
-            Scope::Register | Scope::Recover | Scope::Write => self.anonymous.write,
-        }
-    }
-
-    /// [`Self::for_actor_type`]'ın döndürdüğü **temel** (henüz güven
-    /// kademesi uygulanmamış) kapasiteyi [`TRUST_LEVEL_CAPACITY_MULTIPLIER`]
-    /// ile kademeye göre ölçekler — Faz 18.A "kademeye bağlı rate limit"
-    /// (bkz. NOTES.md §9.3: "yüksek kademe daha geniş rate limit demek").
-    ///
-    /// Yalnızca **kapasite** ölçekleniyor, `window` aynı kalıyor: token
-    /// bucket'ın dolum formülü (`elapsed_ms * capacity / window_ms`, bkz.
-    /// `crate::ratelimit::BUCKET_SCRIPT_SRC`) kapasiteyle orantılı olduğu
-    /// için pencereyi de değiştirmeye gerek yok — kapasiteyi ölçeklemek tek
-    /// başına dolum hızını da doğru oranda ölçekler.
-    ///
-    /// `trust_level` şema düzeyinde `0..=2` ile sınırlı (bkz.
-    /// `migrations/0020_trust_levels.up.sql` `ck_actors_trust_level_range`)
-    /// ama bu fonksiyon savunmacı: aralık dışı bir değer çökmek yerine en
-    /// yakın uca kenetlenir (`clamp`).
-    ///
-    /// Yuvarlama `round()` ile, sonuç en az `1`: kapasite sıfır olursa Lua
-    /// script'i sıfıra böler (bkz. [`Self::validate`]'in aynı gerekçesi).
-    #[must_use]
-    fn scale_for_trust_level(cfg: RateLimitConfig, trust_level: i16) -> RateLimitConfig {
-        let index = trust_level.clamp(0, (TRUST_LEVEL_CAPACITY_MULTIPLIER.len() - 1) as i16);
-        #[allow(clippy::indexing_slicing)] // `clamp` üstteki satırda aralığı garanti ediyor.
-        let multiplier = TRUST_LEVEL_CAPACITY_MULTIPLIER[index as usize];
-
-        let scaled = (f64::from(cfg.capacity) * multiplier).round();
-        // `scaled` negatif olamaz (capacity `u32`, multiplier > 0), yani tek
-        // risk üstten taşma değil `1`'in altına düşmek — `max` bunu kapatıyor.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let capacity = (scaled as u32).max(1);
-
-        RateLimitConfig {
-            capacity,
-            window: cfg.window,
         }
     }
 
@@ -602,105 +444,51 @@ impl LimitTable {
         }
 
         let table = Self {
-            human: ScopeLimits {
+            // Values were taken from the old `ai_agent` table (see the
+            // REFACTOR.md §1 decision table): when merging into a single
+            // table, the wider side was chosen so that no one ends up with
+            // a narrower capacity than what they have today.
+            actor: ScopeLimits {
                 post: rl!(
-                    "RATE_LIMIT_POST_HUMAN_CAPACITY",
-                    "RATE_LIMIT_POST_HUMAN_WINDOW_SECS",
-                    10,
-                    3600
-                ),
-                comment: rl!(
-                    "RATE_LIMIT_COMMENT_HUMAN_CAPACITY",
-                    "RATE_LIMIT_COMMENT_HUMAN_WINDOW_SECS",
-                    60,
-                    3600
-                ),
-                vote: rl!(
-                    "RATE_LIMIT_VOTE_HUMAN_CAPACITY",
-                    "RATE_LIMIT_VOTE_HUMAN_WINDOW_SECS",
-                    300,
-                    3600
-                ),
-                read: rl!(
-                    "RATE_LIMIT_READ_HUMAN_CAPACITY",
-                    "RATE_LIMIT_READ_HUMAN_WINDOW_SECS",
-                    600,
-                    60
-                ),
-                upload: rl!(
-                    "RATE_LIMIT_UPLOAD_HUMAN_CAPACITY",
-                    "RATE_LIMIT_UPLOAD_HUMAN_WINDOW_SECS",
-                    20,
-                    3600
-                ),
-                // `read`'in (600/dk) yirmide biri: arama GIN taraması +
-                // `ts_rank` hesaplaması taşıyor, sıradan bir
-                // `GET /posts/{id}`'den belirgin ölçüde daha pahalı (bkz.
-                // `Scope::Search` üzerindeki gerekçe). Oran kademeye göre
-                // değişiyor: ajan 100/1200 (~1/12), anonim 20/120 (~1/6) —
-                // ajanların arama yükünü daha çok taşıması bilinçli, bu
-                // platformda keşif birinci sınıf bir kullanım.
-                search: rl!(
-                    "RATE_LIMIT_SEARCH_HUMAN_CAPACITY",
-                    "RATE_LIMIT_SEARCH_HUMAN_WINDOW_SECS",
-                    30,
-                    60
-                ),
-                // İnsan bir istemcinin (ör. web arayüzü) inbox'ı birkaç
-                // saniyede bir yoklaması makul; 120/dk buna bolca pay
-                // bırakıyor (`read`in 600/dk'sının beşte biri — inbox tek
-                // satır/sayfa okuduğu için `search` kadar pahalı değil, ama
-                // yine de kendi kovasında, bkz. `Scope::Inbox` gerekçesi).
-                inbox: rl!(
-                    "RATE_LIMIT_INBOX_HUMAN_CAPACITY",
-                    "RATE_LIMIT_INBOX_HUMAN_WINDOW_SECS",
-                    120,
-                    60
-                ),
-            },
-            ai_agent: ScopeLimits {
-                post: rl!(
-                    "RATE_LIMIT_POST_AI_AGENT_CAPACITY",
-                    "RATE_LIMIT_POST_AI_AGENT_WINDOW_SECS",
+                    "RATE_LIMIT_POST_CAPACITY",
+                    "RATE_LIMIT_POST_WINDOW_SECS",
                     30,
                     3600
                 ),
                 comment: rl!(
-                    "RATE_LIMIT_COMMENT_AI_AGENT_CAPACITY",
-                    "RATE_LIMIT_COMMENT_AI_AGENT_WINDOW_SECS",
+                    "RATE_LIMIT_COMMENT_CAPACITY",
+                    "RATE_LIMIT_COMMENT_WINDOW_SECS",
                     200,
                     3600
                 ),
                 vote: rl!(
-                    "RATE_LIMIT_VOTE_AI_AGENT_CAPACITY",
-                    "RATE_LIMIT_VOTE_AI_AGENT_WINDOW_SECS",
+                    "RATE_LIMIT_VOTE_CAPACITY",
+                    "RATE_LIMIT_VOTE_WINDOW_SECS",
                     1000,
                     3600
                 ),
                 read: rl!(
-                    "RATE_LIMIT_READ_AI_AGENT_CAPACITY",
-                    "RATE_LIMIT_READ_AI_AGENT_WINDOW_SECS",
+                    "RATE_LIMIT_READ_CAPACITY",
+                    "RATE_LIMIT_READ_WINDOW_SECS",
                     1200,
                     60
                 ),
-                upload: rl!(
-                    "RATE_LIMIT_UPLOAD_AI_AGENT_CAPACITY",
-                    "RATE_LIMIT_UPLOAD_AI_AGENT_WINDOW_SECS",
-                    20,
-                    3600
-                ),
+                // One twentieth of `read`: search carries a GIN scan plus
+                // `ts_rank` computation, making it noticeably more expensive
+                // than a plain `GET /posts/{id}` (see the rationale on
+                // `Scope::Search`).
                 search: rl!(
-                    "RATE_LIMIT_SEARCH_AI_AGENT_CAPACITY",
-                    "RATE_LIMIT_SEARCH_AI_AGENT_WINDOW_SECS",
+                    "RATE_LIMIT_SEARCH_CAPACITY",
+                    "RATE_LIMIT_SEARCH_WINDOW_SECS",
                     100,
                     60
                 ),
-                // Bir ajanın `actos watch`-benzeri bir döngüyle (bkz.
-                // NOTES.md §1 "Bağlı iş") daha sık yoklaması bekleniyor;
-                // human'ın 2.5 katı.
+                // A client is expected to poll frequently with an `actos
+                // watch`-like loop (see NOTES.md §1 "Connected work");
+                // one quarter of `read`.
                 inbox: rl!(
-                    "RATE_LIMIT_INBOX_AI_AGENT_CAPACITY",
-                    "RATE_LIMIT_INBOX_AI_AGENT_WINDOW_SECS",
+                    "RATE_LIMIT_INBOX_CAPACITY",
+                    "RATE_LIMIT_INBOX_WINDOW_SECS",
                     300,
                     60
                 ),
@@ -758,23 +546,12 @@ impl LimitTable {
     /// döndürmesini beklememeli.
     fn validate(&self) -> Result<(), ConfigError> {
         let all = [
-            ("RATE_LIMIT_POST_HUMAN_CAPACITY", self.human.post),
-            ("RATE_LIMIT_COMMENT_HUMAN_CAPACITY", self.human.comment),
-            ("RATE_LIMIT_VOTE_HUMAN_CAPACITY", self.human.vote),
-            ("RATE_LIMIT_READ_HUMAN_CAPACITY", self.human.read),
-            ("RATE_LIMIT_UPLOAD_HUMAN_CAPACITY", self.human.upload),
-            ("RATE_LIMIT_SEARCH_HUMAN_CAPACITY", self.human.search),
-            ("RATE_LIMIT_INBOX_HUMAN_CAPACITY", self.human.inbox),
-            ("RATE_LIMIT_POST_AI_AGENT_CAPACITY", self.ai_agent.post),
-            (
-                "RATE_LIMIT_COMMENT_AI_AGENT_CAPACITY",
-                self.ai_agent.comment,
-            ),
-            ("RATE_LIMIT_VOTE_AI_AGENT_CAPACITY", self.ai_agent.vote),
-            ("RATE_LIMIT_READ_AI_AGENT_CAPACITY", self.ai_agent.read),
-            ("RATE_LIMIT_UPLOAD_AI_AGENT_CAPACITY", self.ai_agent.upload),
-            ("RATE_LIMIT_SEARCH_AI_AGENT_CAPACITY", self.ai_agent.search),
-            ("RATE_LIMIT_INBOX_AI_AGENT_CAPACITY", self.ai_agent.inbox),
+            ("RATE_LIMIT_POST_CAPACITY", self.actor.post),
+            ("RATE_LIMIT_COMMENT_CAPACITY", self.actor.comment),
+            ("RATE_LIMIT_VOTE_CAPACITY", self.actor.vote),
+            ("RATE_LIMIT_READ_CAPACITY", self.actor.read),
+            ("RATE_LIMIT_SEARCH_CAPACITY", self.actor.search),
+            ("RATE_LIMIT_INBOX_CAPACITY", self.actor.inbox),
             ("RATE_LIMIT_REGISTER_IP_CAPACITY", self.anonymous.register),
             ("RATE_LIMIT_RECOVER_IP_CAPACITY", self.anonymous.recover),
             ("RATE_LIMIT_READ_IP_CAPACITY", self.anonymous.read),

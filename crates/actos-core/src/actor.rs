@@ -38,192 +38,6 @@ pub const DEFAULT_PAGE_SIZE: i64 = 25;
 /// istemek DB'yi ve yanıtı gereksiz şişirir; burada sert bir tavan var.
 pub const MAX_PAGE_SIZE: i64 = 100;
 
-// --- Güven kademesi (trust level) ---------------------------------------
-
-/// [`recompute_trust_levels`]'ın PostgreSQL advisory lock anahtarı.
-///
-/// `crate::tag::CLEANUP_ADVISORY_LOCK_KEY` ve
-/// `crate::feed::RECOMPUTE_ADVISORY_LOCK_KEY` ile aynı desen — birden
-/// fazla API instance'ı çalışırken aynı anda yalnızca birinde iş yapılsın
-/// diye. **Değeri diğer ikisinden farklı olmak zorunda**, aynı anahtar iki
-/// farklı işi birbirini beklettirirdi.
-const TRUST_LEVEL_ADVISORY_LOCK_KEY: i64 = 0x0AC7_0520;
-
-/// Seviye 2 için gereken asgari hesap yaşı.
-const TRUST_LEVEL_2_MIN_AGE_DAYS: i64 = 7;
-
-/// Seviye 1 için gereken asgari hesap yaşı.
-const TRUST_LEVEL_1_MIN_AGE_HOURS: i64 = 24;
-
-/// Seviye 2 için gereken, kendi içeriği dışından (yani başka actor'lerden)
-/// alınmış asgari net oy.
-const TRUST_LEVEL_2_MIN_NET_VOTES: i32 = 25;
-
-/// Bir kademe düşüşü tetikleyen onaylanmış (resolved) raporun ne kadar
-/// geriye kadar sayıldığı — [`crate::moderation::update_report`] ile
-/// `status = 'resolved'` yapılmış bir rapor bu pencerenin dışına
-/// çıktığında etkisini kaybeder (bkz. [`recompute_trust_levels`]
-/// dokümantasyonu, "Düşürme" bölümü).
-const TRUST_LEVEL_REPORT_WINDOW_DAYS: i64 = 30;
-
-/// Tüm actor'lerin `actors.trust_level`'ını yeniden hesaplar; kaç satırın
-/// değiştiğini (`rows_affected`) döner.
-///
-/// **Kademe kuralları** (bkz. `migrations/0020_trust_levels.up.sql`
-/// üzerindeki `COMMENT ON COLUMN` ve NOTES.md §9.3):
-///
-/// - **Seviye 1:** hesap yaşı ≥ [`TRUST_LEVEL_1_MIN_AGE_HOURS`] saat **VE**
-///   en az bir silinmemiş içeriği (post ya da yorum) var.
-/// - **Seviye 2:** yaş ≥ [`TRUST_LEVEL_2_MIN_AGE_DAYS`] gün **VE** kendi
-///   içeriği dışından (yani başka actor'lerden — kendine oy vermek zaten
-///   [`crate::interaction::set_vote`] katmanında engelli, bkz. o
-///   fonksiyonun dokümantasyonu; burada `contents.score`'un ta kendisi
-///   kullanılıyor, ayrıca `votes` tablosuna inip actor_id karşılaştırmaya
-///   gerek yok) ≥ [`TRUST_LEVEL_2_MIN_NET_VOTES`] net oy aldı.
-///
-/// **⚠️ Seviye 1 BİLEREK karma (oy) şartı TAŞIMIYOR — soğuk başlangıç
-/// (cold start) tuzağı:** yeni açılan bir platformda kimsenin kimseye oy
-/// verebileceği bir topluluk henüz yok; ilk kullanıcılar birbirlerine oy
-/// veremeden önce birbirlerini bulmuş olmalı. Seviye 1'e "en az N oy al"
-/// gibi bir şart eklenseydi, platformdaki İLK kullanıcılar sonsuza dek
-/// seviye 0'da kilitli kalırdı — kimse onlara oy veremeyeceği için asla
-/// seviye 1'in oy şartını karşılayamazlardı, dolayısıyla seviye 2'ye de asla
-/// ulaşamazlardı. Seviye 1 bu yüzden yalnızca "yaş + en az bir katkı"
-/// istiyor; oy tabanlı güven yalnızca seviye 2'de, platformda zaten yeterli
-/// aktivite (dolayısıyla oy verecek başka actor) oluştuktan sonra devreye
-/// giriyor. **Bunu "tutarlılık" gerekçesiyle seviye 1'e de karma şartı
-/// ekleyerek "düzeltmeyin"** — bu tuzağın ta kendisi olur.
-///
-/// **Düşürme:** son [`TRUST_LEVEL_REPORT_WINDOW_DAYS`] gün içinde
-/// onaylanmış (`reports.status = 'resolved'`) — kendi içeriklerinden
-/// birini hedef alan — bir rapor varsa, yukarıda hesaplanan kademe bir
-/// azaltılır (`GREATEST(0, ...)` ile 0'ın altına inmez). Bu, seviye 2'nin
-/// "son 30 günde onaylanmış rapor yok" şartıyla **aynı mekanizma** —
-/// oradaki ifade bu genel kuralın seviye 2 özelinde okunuşu, ayrı bir
-/// kural değil. Rapor 30 günden eskiyse bir sonraki recompute turunda
-/// etkisini kaybeder — kalıcı bir "kara liste" değil, davranışsal bir
-/// sinyal.
-///
-/// **Neden pür fonksiyon (önceki `trust_level` değerine bakmıyor):** bu iş
-/// periyodik olarak yeniden çalışıyor; idempotent olması (aynı veriyle
-/// art arda iki kez çalıştırıldığında aynı sonucu üretmesi) gerekiyor.
-/// Kademe, her turda yalnızca hesap yaşı/içerik/oy/rapor gibi **gözlemlenebilir
-/// güncel durumdan** yeniden türetiliyor; önceki değere göre kademeli
-/// artış/azalış (ör. "her turda +1") idempotent olmazdı ve iki instance'ın
-/// çakışan turlarında tutarsız sonuç üretirdi.
-///
-/// **Advisory lock ile korunuyor** — `crate::tag::cleanup_unused` ve
-/// `crate::feed::recompute_hot_scores` ile birebir aynı desen:
-/// `pg_try_advisory_lock` beklemez, kilit başkasında ise bu tur `Ok(0)`
-/// ile atlanır.
-///
-/// **İndex:** `contents.actor_id` üzerindeki
-/// `idx_contents_actor_live (actor_id, created_at DESC) WHERE deleted_at
-/// IS NULL` (bkz. `migrations/0006_contents_indexes.up.sql`) içerik
-/// sayısı/net oy toplamı sorgusunu zaten karşılıyor; rapor tarafı için
-/// `idx_reports_resolved_recent (resolved_at, target_id) WHERE status =
-/// 'resolved'` bu migration'da ekleniyor (bkz. `migrations/
-/// 0020_trust_levels.up.sql` üzerindeki gerekçe).
-///
-/// # Errors
-/// Veritabanı hatası [`Error::Database`].
-pub async fn recompute_trust_levels(pool: &PgPool) -> Result<u64> {
-    let mut conn = pool.acquire().await?;
-
-    let locked = sqlx::query_scalar!(
-        r#"SELECT pg_try_advisory_lock($1) AS "locked!""#,
-        TRUST_LEVEL_ADVISORY_LOCK_KEY,
-    )
-    .fetch_one(&mut *conn)
-    .await?;
-
-    if !locked {
-        tracing::debug!(
-            "güven kademesi tazelemesi başka bir instance'da çalışıyor, bu tur atlandı"
-        );
-        return Ok(0);
-    }
-
-    let result = sqlx::query!(
-        r#"
-        WITH content_stats AS (
-            -- Her actor için: canlı içerik sayısı (seviye 1) + o içeriklerin
-            -- topladığı net oy (seviye 2). `contents.score` zaten
-            -- upvotes-downvotes'un uygulama katmanınca tutulan sayacı (bkz.
-            -- `crate::interaction::set_vote`), `votes` tablosuna ayrıca
-            -- inmeye gerek yok.
-            SELECT
-                actors.id AS actor_id,
-                COUNT(contents.id) FILTER (
-                    WHERE contents.deleted_at IS NULL
-                ) AS live_content_count,
-                COALESCE(
-                    SUM(contents.score) FILTER (WHERE contents.deleted_at IS NULL),
-                    0
-                ) AS net_votes
-            FROM actors
-            LEFT JOIN contents ON contents.actor_id = actors.id
-            GROUP BY actors.id
-        ),
-        recently_reported AS (
-            -- Son TRUST_LEVEL_REPORT_WINDOW_DAYS gün içinde onaylanmış bir
-            -- rapora hedef olmuş içeriğin actor_id'leri (bkz.
-            -- idx_reports_resolved_recent).
-            SELECT DISTINCT contents.actor_id
-            FROM reports
-            JOIN contents ON contents.id = reports.target_id
-            WHERE reports.status = 'resolved'
-              AND reports.resolved_at >= now() - make_interval(days => $1::int)
-        )
-        UPDATE actors
-        SET trust_level = GREATEST(
-            0,
-            (
-                CASE
-                    WHEN actors.created_at <= now() - make_interval(days => $2::int)
-                         AND content_stats.net_votes >= $3::int
-                    THEN 2
-                    WHEN actors.created_at <= now() - make_interval(hours => $4::int)
-                         AND content_stats.live_content_count >= 1
-                    THEN 1
-                    ELSE 0
-                END
-            ) - CASE WHEN recently_reported.actor_id IS NOT NULL THEN 1 ELSE 0 END
-        )
-        FROM content_stats
-        LEFT JOIN recently_reported ON recently_reported.actor_id = content_stats.actor_id
-        WHERE actors.id = content_stats.actor_id
-          AND actors.deleted_at IS NULL
-        "#,
-        TRUST_LEVEL_REPORT_WINDOW_DAYS as i32,
-        TRUST_LEVEL_2_MIN_AGE_DAYS as i32,
-        TRUST_LEVEL_2_MIN_NET_VOTES,
-        TRUST_LEVEL_1_MIN_AGE_HOURS as i32,
-    )
-    .execute(&mut *conn)
-    .await;
-
-    // Kilit her durumda bırakılmalı — `UPDATE` hata verse bile (bkz.
-    // `crate::tag::cleanup_unused`'daki aynı gerekçe).
-    if let Err(err) = sqlx::query_scalar!(
-        r#"SELECT pg_advisory_unlock($1) AS "unlocked!""#,
-        TRUST_LEVEL_ADVISORY_LOCK_KEY,
-    )
-    .fetch_one(&mut *conn)
-    .await
-    {
-        tracing::warn!(error = %err, "güven kademesi tazelemesi advisory lock'ı bırakılamadı");
-    }
-
-    let guncellenen = result?.rows_affected();
-
-    if guncellenen > 0 {
-        tracing::info!(guncellenen, "güven kademeleri yeniden hesaplandı");
-    }
-
-    Ok(guncellenen)
-}
-
 /// Ham `limit` query parametresini `[1, MAX_PAGE_SIZE]` aralığına
 /// sıkıştırır; hiç verilmemişse [`DEFAULT_PAGE_SIZE`] kullanılır.
 ///
@@ -256,7 +70,6 @@ struct ProfileRow {
     display_name: Option<String>,
     bio: Option<String>,
     created_at: DateTime<Utc>,
-    trust_level: i16,
     avatar_object_key: Option<String>,
     deleted_at: Option<DateTime<Utc>>,
     post_count: i64,
@@ -297,7 +110,6 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
             actors.display_name,
             actors.bio,
             actors.created_at,
-            actors.trust_level,
             actors.avatar_object_key,
             actors.deleted_at,
             COUNT(contents.id) FILTER (
@@ -334,7 +146,6 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
             display_name: row.display_name,
             bio: row.bio,
             created_at: row.created_at,
-            trust_level: row.trust_level,
         },
         avatar_object_key: row.avatar_object_key,
         post_count: row.post_count,
@@ -430,7 +241,7 @@ pub async fn update_profile(
             bio = CASE WHEN $4 THEN $5 ELSE bio END,
             avatar_object_key = CASE WHEN $6 THEN $7 ELSE avatar_object_key END
         WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, trust_level, avatar_object_key
+        RETURNING id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, avatar_object_key
         "#,
         actor_id,
         touch_display_name,
@@ -459,7 +270,6 @@ pub async fn update_profile(
             display_name: row.display_name,
             bio: row.bio,
             created_at: row.created_at,
-            trust_level: row.trust_level,
         },
         row.avatar_object_key,
     ))
@@ -472,7 +282,6 @@ struct UpdateProfileRow {
     display_name: Option<String>,
     bio: Option<String>,
     created_at: DateTime<Utc>,
-    trust_level: i16,
     avatar_object_key: Option<String>,
 }
 
@@ -681,7 +490,6 @@ struct FollowRow {
     display_name: Option<String>,
     bio: Option<String>,
     created_at: DateTime<Utc>,
-    trust_level: i16,
     avatar_object_key: Option<String>,
     followed_at: DateTime<Utc>,
 }
@@ -696,7 +504,6 @@ impl FollowRow {
                 display_name: self.display_name,
                 bio: self.bio,
                 created_at: self.created_at,
-                trust_level: self.trust_level,
             },
             avatar_object_key: self.avatar_object_key,
             followed_at: self.followed_at,
@@ -733,7 +540,6 @@ pub async fn list_followers(
             actors.display_name,
             actors.bio,
             actors.created_at,
-            actors.trust_level,
             actors.avatar_object_key,
             follows.created_at AS followed_at
         FROM follows
@@ -790,7 +596,6 @@ pub async fn list_following(
             actors.display_name,
             actors.bio,
             actors.created_at,
-            actors.trust_level,
             actors.avatar_object_key,
             follows.created_at AS followed_at
         FROM follows
@@ -843,7 +648,6 @@ struct DirectoryRow {
     display_name: Option<String>,
     bio: Option<String>,
     created_at: DateTime<Utc>,
-    trust_level: i16,
     avatar_object_key: Option<String>,
 }
 
@@ -872,7 +676,7 @@ pub async fn list_directory(
     let rows = sqlx::query_as!(
         DirectoryRow,
         r#"
-        SELECT id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, trust_level, avatar_object_key
+        SELECT id, username, actor_type AS "actor_type: ActorType", display_name, bio, created_at, avatar_object_key
         FROM actors
         WHERE deleted_at IS NULL
           AND ($1::actor_type IS NULL OR actor_type = $1)
@@ -906,7 +710,6 @@ pub async fn list_directory(
                 display_name: row.display_name,
                 bio: row.bio,
                 created_at: row.created_at,
-                trust_level: row.trust_level,
             },
             avatar_object_key: row.avatar_object_key,
         },
