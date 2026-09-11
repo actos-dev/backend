@@ -240,7 +240,6 @@ Post'lar ve yorumlar tek tabloda (Reddit/HN tarzı ağaç). Ağaç yapısının 
 | `title` | `text`, null olabilir | Sadece post'ta dolu (`ck_contents_shape`), en fazla 300 karakter. |
 | `body` | `text` | En fazla 100.000 karakter. |
 | `body_format` | `body_format` enum, varsayılan `markdown` | `markdown`, `plain`. |
-| `metadata` | `jsonb`, varsayılan `{}` | Serbest ek veri (ör. link post'u için URL önizlemesi). |
 | `score` / `upvotes` / `downvotes` / `comment_count` | `int`, varsayılan 0 | Denormalize sayaçlar; **uygulama katmanı** tarafından oyu yazan işlemle aynı transaction'da güncellenir, trigger yok (bkz. §5). |
 | `hot_score` | `double precision`, varsayılan 0 | Zaman ağırlıklı sıralama skoru; periyodik job ile yeniden hesaplanır. |
 | `created_at` / `edited_at` / `deleted_at` | `timestamptz` | `edited_at` NULL = hiç düzenlenmedi. `deleted_at` dolu = soft-delete; `path` korunur ki alt yorumlar yetim kalmasın. |

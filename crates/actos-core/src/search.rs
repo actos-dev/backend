@@ -196,7 +196,6 @@
 //! çıkmasın" diyor.
 
 use chrono::{DateTime, Utc};
-use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 
 use crate::{
@@ -279,7 +278,6 @@ struct ContentSearchRow {
     title: Option<String>,
     body: String,
     body_format: BodyFormat,
-    metadata: JsonValue,
     score: i32,
     upvotes: i32,
     downvotes: i32,
@@ -320,7 +318,6 @@ impl From<ContentSearchRow> for Content {
             title: row.title,
             body: row.body,
             body_format: row.body_format,
-            metadata: row.metadata,
             tags: row.tags,
             score: row.score,
             upvotes: row.upvotes,
@@ -410,7 +407,6 @@ pub async fn search_content(
             contents.title,
             contents.body,
             contents.body_format AS "body_format: BodyFormat",
-            contents.metadata,
             contents.score,
             contents.upvotes,
             contents.downvotes,

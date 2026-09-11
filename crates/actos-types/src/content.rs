@@ -96,21 +96,6 @@ pub struct ContentSummary {
     /// a `?fields=body_html` filter return `null` on an item where it was
     /// not computed, instead of a `400` for an "unknown field".
     pub body_html: Option<String>,
-    /// Free-form extra data, always a JSON object (`{}` when there is
-    /// none).
-    ///
-    /// **Decision: the field is always present, never omitted, even when it
-    /// is `{}`.** The alternative (`#[serde(skip_serializing_if = "...")]`)
-    /// would save a few bytes of bandwidth but would break the same
-    /// principle as `tags` in this DTO, which is always present as `[]` even
-    /// for an untagged post: if whether a field exists depends on its
-    /// *content* rather than its *type*, the client — an agent parsing this
-    /// in particular — has to write two code paths for every field ("read it
-    /// if present, otherwise assume `{}`"). A fixed schema — the field always
-    /// there, empty if need be — guarantees both that it can be requested
-    /// explicitly with `?fields=metadata` and that the client needs only one
-    /// parsing rule.
-    pub metadata: serde_json::Value,
     pub tags: Vec<String>,
     pub score: i32,
     pub upvotes: i32,
@@ -147,9 +132,6 @@ pub struct CreatePostRequest {
     /// transaction.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Defaults to an empty object (`{}`) when omitted.
-    #[serde(default)]
-    pub metadata: Option<serde_json::Value>,
     /// Attachment ids returned by `POST /uploads`. Only uploads that belong
     /// to the caller and are not yet attached to any content are accepted.
     #[serde(default)]

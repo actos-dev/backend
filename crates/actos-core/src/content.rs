@@ -34,7 +34,6 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
-use serde_json::Value as JsonValue;
 use sqlx::{PgConnection, PgPool};
 
 use crate::{
@@ -90,13 +89,6 @@ pub struct Content {
     pub title: Option<String>,
     pub body: String,
     pub body_format: BodyFormat,
-    /// Serbest biçimli ek veri (bkz. `migrations/0005_contents.up.sql` →
-    /// `contents.metadata` COMMENT'i). `create_post` bunu her zaman
-    /// [`normalize_metadata`]'dan geçmiş, geçerli bir JSON *nesnesi* olarak
-    /// yazar (`ck_contents_metadata_object` de bunu şema seviyesinde
-    /// zorluyor) — bu yüzden burada da her zaman `JsonValue::Object`,
-    /// hiçbir zaman başka bir JSON türü değil.
-    pub metadata: JsonValue,
     pub tags: Vec<String>,
     pub score: i32,
     pub upvotes: i32,
@@ -124,7 +116,6 @@ struct ContentRow {
     title: Option<String>,
     body: String,
     body_format: BodyFormat,
-    metadata: JsonValue,
     score: i32,
     upvotes: i32,
     downvotes: i32,
@@ -160,7 +151,6 @@ impl From<ContentRow> for Content {
             title: row.title,
             body: row.body,
             body_format: row.body_format,
-            metadata: row.metadata,
             tags: row.tags,
             score: row.score,
             upvotes: row.upvotes,
@@ -201,23 +191,6 @@ fn normalize_tags(raw: &[String]) -> Result<Vec<String>> {
     }
 
     Ok(normalized.into_iter().collect())
-}
-
-/// `metadata` alanını doğrular: `ck_contents_metadata_object` (bkz.
-/// `migrations/0005_contents.up.sql`) yalnızca JSON *nesnesine* izin
-/// veriyor — burada aynı kuralı, veritabanına gitmeden, doğrulama
-/// hatasıyla erken karşılıyoruz. Verilmemişse boş nesne varsayılan.
-///
-/// # Errors
-/// Değer verilmiş ama bir JSON nesnesi değilse [`Error::Validation`].
-fn normalize_metadata(raw: Option<JsonValue>) -> Result<JsonValue> {
-    match raw {
-        None => Ok(JsonValue::Object(serde_json::Map::new())),
-        Some(JsonValue::Object(map)) => Ok(JsonValue::Object(map)),
-        Some(_) => Err(Error::Validation(
-            "metadata must be a JSON object".to_owned(),
-        )),
-    }
 }
 
 // --- Etiket ilişkilendirme -------------------------------------------------
@@ -294,15 +267,14 @@ async fn attach_tags(conn: &mut PgConnection, content_id: i64, tags: &[String]) 
 /// yalnızca çağıranın kendi, henüz bağlanmamış yüklemeleri kabul edilir.
 ///
 /// # Errors
-/// `title`/`body`/`tags`/`metadata` doğrulamadan geçmezse
-/// [`Error::Validation`]; veritabanı hatası [`Error::Database`].
+/// `title`/`body`/`tags` doğrulamadan geçmezse [`Error::Validation`];
+/// veritabanı hatası [`Error::Database`].
 pub async fn create_post(
     pool: &PgPool,
     author: &ActorRecord,
     title: &str,
     body: &str,
     tags: &[String],
-    metadata: Option<JsonValue>,
     attachment_ids: &[i64],
 ) -> Result<Content> {
     let title = text::validate_title(title).map_err(|e| Error::Validation(e.to_string()))?;
@@ -311,24 +283,18 @@ pub async fn create_post(
     }
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     let tags = normalize_tags(tags)?;
-    let metadata = normalize_metadata(metadata)?;
 
     let mut tx = pool.begin().await?;
 
     let row = sqlx::query!(
         r#"
-        INSERT INTO contents (actor_id, content_type, title, body, body_format, metadata)
-        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4)
+        INSERT INTO contents (actor_id, content_type, title, body, body_format)
+        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format)
         RETURNING id, created_at, score, upvotes, downvotes, comment_count, hot_score
         "#,
         author.id,
         title,
         body,
-        // Klonlanıyor: aşağıdaki `Ok(Content { metadata, .. })` orijinal
-        // değeri (DB'ye ekstra bir `SELECT` atmadan) geri döndürmek için
-        // hâlâ ihtiyaç duyuyor — `query!` bağladığı argümanın sahipliğini
-        // alıyor.
-        metadata.clone(),
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -350,7 +316,6 @@ pub async fn create_post(
         title: Some(title),
         body,
         body_format: BodyFormat::Markdown,
-        metadata,
         tags,
         score: row.score,
         upvotes: row.upvotes,
@@ -398,7 +363,6 @@ pub async fn get_post(pool: &PgPool, id: i64) -> Result<Content> {
             contents.title,
             contents.body,
             contents.body_format AS "body_format: BodyFormat",
-            contents.metadata,
             contents.score,
             contents.upvotes,
             contents.downvotes,
@@ -670,7 +634,6 @@ pub async fn list_posts_by_actor(
             contents.title,
             contents.body,
             contents.body_format AS "body_format: BodyFormat",
-            contents.metadata,
             contents.score,
             contents.upvotes,
             contents.downvotes,
@@ -891,7 +854,6 @@ pub async fn list_posts_by_tag(
                     contents.title,
                     contents.body,
                     contents.body_format AS "body_format: BodyFormat",
-                    contents.metadata,
                     contents.score,
                     contents.upvotes,
                     contents.downvotes,
@@ -951,7 +913,6 @@ pub async fn list_posts_by_tag(
                     contents.title,
                     contents.body,
                     contents.body_format AS "body_format: BodyFormat",
-                    contents.metadata,
                     contents.score,
                     contents.upvotes,
                     contents.downvotes,
@@ -1011,7 +972,6 @@ pub async fn list_posts_by_tag(
                     contents.title,
                     contents.body,
                     contents.body_format AS "body_format: BodyFormat",
-                    contents.metadata,
                     contents.score,
                     contents.upvotes,
                     contents.downvotes,

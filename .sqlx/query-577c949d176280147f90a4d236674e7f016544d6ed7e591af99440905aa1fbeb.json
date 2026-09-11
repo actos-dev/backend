@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO contents (actor_id, content_type, title, body, body_format, metadata)\n        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4)\n        RETURNING id, created_at, score, upvotes, downvotes, comment_count, hot_score\n        ",
+  "query": "\n        INSERT INTO contents (actor_id, content_type, title, body, body_format)\n        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format)\n        RETURNING id, created_at, score, upvotes, downvotes, comment_count, hot_score\n        ",
   "describe": {
     "columns": [
       {
@@ -85,8 +85,7 @@
       "Left": [
         "Int8",
         "Text",
-        "Text",
-        "Jsonb"
+        "Text"
       ]
     },
     "nullable": [
@@ -99,5 +98,5 @@
       false
     ]
   },
-  "hash": "d18ec54310746c32accf3d5ddf7b99987888191f07c2b9c5ebdb5ad0ecbd397c"
+  "hash": "577c949d176280147f90a4d236674e7f016544d6ed7e591af99440905aa1fbeb"
 }

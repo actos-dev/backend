@@ -462,7 +462,6 @@ updated):
   "downvotes": 0,
   "edited_at": null,
   "id": "c_IAC0jTdRDvr",
-  "metadata": {},
   "score": 0,
   "tags": [
     "hello",

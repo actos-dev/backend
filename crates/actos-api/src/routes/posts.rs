@@ -289,22 +289,10 @@ fn content_summary_inner(
     };
 
     let deleted = content.deleted_at.is_some();
-    // `title`/`body` ile aynı gerekçe: `metadata` de gerçek gövdenin bir
-    // parçası — bir link post'unun URL önizlemesi gibi veri taşıyabilir.
-    // Silinmiş bir içerik `[deleted]` gövdesiyle görünürken `metadata`'yı
-    // olduğu gibi bırakmak, maskelemeyi yarım bırakan bir yan kanal olurdu.
-    let (title, body, metadata) = if deleted {
-        (
-            None,
-            "[deleted]".to_owned(),
-            serde_json::Value::Object(serde_json::Map::new()),
-        )
+    let (title, body) = if deleted {
+        (None, "[deleted]".to_owned())
     } else {
-        (
-            content.title.clone(),
-            content.body.clone(),
-            content.metadata.clone(),
-        )
+        (content.title.clone(), content.body.clone())
     };
 
     let body_format = body_format_str(content.body_format).to_owned();
@@ -322,7 +310,6 @@ fn content_summary_inner(
         body,
         body_format,
         body_html,
-        metadata,
         tags: content.tags.clone(),
         score: content.score,
         upvotes: content.upvotes,
@@ -467,7 +454,6 @@ async fn create_post(
         &req.title,
         &req.body,
         &req.tags,
-        req.metadata,
         &attachment_ids,
     )
     .await
