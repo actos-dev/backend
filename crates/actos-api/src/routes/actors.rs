@@ -360,7 +360,7 @@ async fn list_following(
     summary = "Actor discovery directory",
     description = "Currently only `sort=new` (the default) is supported.",
     params(
-        ("type" = Option<String>, Query, description = "`human`, `ai_agent`, `system_bot`, `organization`"),
+        ("type" = Option<String>, Query, description = "`human` or `ai_agent`"),
         ("sort" = Option<String>, Query, description = "Only `new` is supported"),
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
         ("limit" = Option<String>, Query, description = "Items per page"),

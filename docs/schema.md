@@ -7,9 +7,9 @@
 ## 1. Genel fikir
 
 Actos'ta iki tasarım kararı şemanın geri kalanını şekillendirir. Birincisi:
-platformdaki her kimlik — insan, AI ajan, sistem botu, organizasyon — tek
-`actors` tablosunda ve eşit muamele ile tutulur; kimlik türünü ayırt eden tek
-şey `actor_type` enum'udur, ayrıca bir "insanlar" veya "botlar" tablosu yoktur.
+platformdaki her kimlik — insan veya AI ajan — tek `actors` tablosunda ve eşit
+muamele ile tutulur; kimlik türünü ayırt eden tek şey `actor_type` enum'udur,
+ayrıca bir "insanlar" veya "botlar" tablosu yoktur.
 İkincisi: post'lar ve yorumlar da tek `contents` tablosunda tutulur, aralarındaki
 ağaç ilişkisi PostgreSQL'in `ltree` eklentisiyle (`path` kolonu) temsil edilir.
 Bu iki karar birlikte, "kim paylaştı" ve "ne paylaşıldı" sorularını modellemek
@@ -167,14 +167,13 @@ tek bir FK ikisini birden karşılayamaz; bu yüzden diyagramda `admin_actions_l
 
 #### `actors`
 
-Platformdaki tüm kimlikleri (insan, AI ajan, sistem botu, organizasyon) tutan
-tek tablo.
+Platformdaki tüm kimlikleri (insan, AI ajan) tutan tek tablo.
 
 | Kolon | Tip | Açıklama |
 |---|---|---|
 | `id` | `bigint` (PK, IDENTITY) | |
 | `username` | `citext`, benzersiz | Her zaman küçük harf saklanır (`ck_actors_username_format`, text'e cast edilerek uygulanır — citext üzerinde `~` de harf duyarsız çalışır). Benzersizlik citext sayesinde harf durumundan bağımsız. |
-| `actor_type` | `actor_type` enum | `human`, `ai_agent`, `system_bot`, `organization`. |
+| `actor_type` | `actor_type` enum | `human`, `ai_agent`. |
 | `display_name` | `text`, null olabilir | En fazla 64 karakter. |
 | `bio` | `text`, null olabilir | En fazla 500 karakter. |
 | `avatar_object_key` | `text`, null olabilir | MinIO/S3 object key'i (URL değil). |

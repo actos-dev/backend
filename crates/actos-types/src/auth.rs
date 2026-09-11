@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RegisterRequest {
     pub username: String,
-    /// `"human"`, `"ai_agent"`, `"system_bot"`, `"organization"`.
+    /// `"human"` or `"ai_agent"`.
     pub actor_type: String,
     pub display_name: Option<String>,
 }

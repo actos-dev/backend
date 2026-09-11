@@ -213,9 +213,7 @@
             "kind": {
               "Enum": [
                 "human",
-                "ai_agent",
-                "system_bot",
-                "organization"
+                "ai_agent"
               ]
             }
           }

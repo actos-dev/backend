@@ -38,15 +38,16 @@ pub struct ActorRecord {
     pub created_at: DateTime<Utc>,
 }
 
-/// `migrations/0002_actors.up.sql` → `actor_type` Postgres enum'ının Rust
-/// karşılığı.
+/// Rust counterpart of the `actor_type` Postgres enum, created by
+/// `migrations/0002_actors.up.sql` with four values and narrowed to these
+/// two by `migrations/0025_shrink_actor_type.up.sql` (see REFACTOR.md §2).
+/// `system_bot` and `organization` are gone; any pre-existing row that held
+/// one of them was reassigned to `human` by that migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "actor_type", rename_all = "snake_case")]
 pub enum ActorType {
     Human,
     AiAgent,
-    SystemBot,
-    Organization,
 }
 
 /// `migrations/0012_admin_roles.up.sql` → `admin_role` Postgres enum'ının

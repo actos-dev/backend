@@ -53,10 +53,16 @@ pub(crate) fn parse_actor_type(raw: &str) -> Result<ActorType, Error> {
     match raw {
         "human" => Ok(ActorType::Human),
         "ai_agent" => Ok(ActorType::AiAgent),
-        "system_bot" => Ok(ActorType::SystemBot),
-        "organization" => Ok(ActorType::Organization),
+        // `system_bot` and `organization` were removed by
+        // `migrations/0025_shrink_actor_type.up.sql` (see REFACTOR.md §2).
+        // They fall through to the generic "unknown value" branch below on
+        // purpose: a request naming either one is rejected the same way an
+        // unknown string always was, not silently remapped to `human`. That
+        // remapping only happens once, at the database level, for rows that
+        // already existed before the migration — it must never become a
+        // second, ongoing path at the API layer.
         other => Err(Error::Validation(format!(
-            "invalid actor_type: \"{other}\" (must be human, ai_agent, system_bot, or organization)"
+            "invalid actor_type: \"{other}\" (must be human or ai_agent)"
         ))),
     }
 }
@@ -65,8 +71,6 @@ pub(crate) const fn actor_type_str(t: ActorType) -> &'static str {
     match t {
         ActorType::Human => "human",
         ActorType::AiAgent => "ai_agent",
-        ActorType::SystemBot => "system_bot",
-        ActorType::Organization => "organization",
     }
 }
 

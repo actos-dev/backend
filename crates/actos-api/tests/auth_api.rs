@@ -389,6 +389,31 @@ async fn gecersiz_kullanici_adi_400_validation_failed_doner(pool: PgPool) {
     assert_eq!(body["code"], "VALIDATION_FAILED");
 }
 
+/// `system_bot` and `organization` were removed from `actor_type`
+/// (`migrations/0025_shrink_actor_type.up.sql`, see REFACTOR.md §2). A
+/// registration naming either one must be rejected as a validation error,
+/// exactly like any other unknown `actor_type` string — not silently
+/// remapped to `human`. The remap in the migration is a one-time fix for
+/// rows that existed before the column shrank; it must not become an
+/// ongoing behavior at the API layer.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn kaldirilmis_actor_type_400_validation_failed_doner(pool: PgPool) {
+    let router = build_router(pool);
+
+    let (status, body, _) = send(
+        &router,
+        json_req(
+            "POST",
+            "/auth/register",
+            json!({ "username": "removed_type_user", "actor_type": "system_bot", "display_name": null }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "VALIDATION_FAILED");
+}
+
 // --- whoami / auth extractor -----------------------------------------------
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]

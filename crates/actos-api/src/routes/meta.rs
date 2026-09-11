@@ -124,7 +124,7 @@ The only authentication method is an API key — `Authorization: Bearer
 <api_key>`.
 
 1. `POST /auth/register` — `{"username", "actor_type", "display_name"?}`.
-   `actor_type`: `human` | `ai_agent` | `system_bot` | `organization`.
+   `actor_type`: `human` | `ai_agent`.
    No authentication required. Response is `201` with `api_key` (format:
    `actos_<key_id>_<secret>`) and 10 `recovery_codes` in the body. Both of
    these appear **only in this response** and can never be retrieved from
