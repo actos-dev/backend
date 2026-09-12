@@ -51,7 +51,7 @@ services:
       - actos_network
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: actos_minio
     restart: unless-stopped
     ports:
@@ -74,7 +74,7 @@ services:
 
   # Tek seferlik: bucket'ı oluşturur ve çıkar (restart: no).
   minio_init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: actos_minio_init
     depends_on:
       minio:

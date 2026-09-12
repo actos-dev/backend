@@ -53,7 +53,7 @@ services:
     networks: [actos_network]
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: actos_minio
     restart: unless-stopped
     ports:
@@ -78,7 +78,7 @@ services:
     networks: [actos_network]
 
   minio_init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: actos_minio_init
     restart: "no"
     depends_on:
