@@ -78,9 +78,31 @@ jobs:
           export ACTOS_IMAGE="$IMAGE"
 
           docker compose -f docker-compose.prod.yml --env-file .env.prod pull api migrate
-          # `up -d` migration job'ını da çalıştırır ve API onu
-          # `service_completed_successfully` ile bekler (bkz. compose dosyası).
-          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait
+
+          # `--wait` tek seferlik konteynerlere verilemez: `minio_init` ve
+          # `migrate` işini bitirip çıkıyor (`restart: "no"`), ve compose
+          # çıkmış bir konteyneri sıfır koduyla çıksa bile `--wait`
+          # başarısızlığı sayıyor. Çıplak `up -d --wait` bu yüzden dağıtım
+          # gerçekte başarılıyken bile kırmızı bitiyordu. CI'da aynı sorun
+          # servisleri tek tek vererek çözülmüştü (bkz. ci.yml, test işi);
+          # burada da aynı ayrım yapılıyor.
+          #
+          # Bucket'ı kuran job önce ve ayrı çalıştırılıp çıkış kodu AÇIKÇA
+          # doğrulanıyor: sessizce başarısız olursa API anlaşılmaz bir S3
+          # hatasıyla düşerdi.
+          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d minio_init
+          kod=$(docker wait actos_minio_init)
+          if [ "$kod" != "0" ]; then
+            echo "minio_init $kod ile çıktı — bucket kurulamadı:"
+            docker logs actos_minio_init
+            exit 1
+          fi
+
+          # `api` tek başına verilse de bağımlılıkları onunla birlikte
+          # kalkıyor, ve `migrate`'i `service_completed_successfully` ile
+          # beklediği için şema hazır olmadan trafik almıyor (bkz. compose
+          # dosyası). `--wait` yalnızca uzun ömürlü `api`'ye uygulanıyor.
+          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait api
 
           docker logout ghcr.io
           # Eski imajları temizle — 30 GB'lık diskte birkaç dağıtımda birikir.
