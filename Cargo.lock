@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "actos-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "actos-core",
  "actos-types",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "actos-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "actos-types",
  "ammonia",
@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "actos-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
