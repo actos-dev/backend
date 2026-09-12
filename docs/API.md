@@ -378,8 +378,12 @@ subjecting them to that quota would be circular.
 
 ### 3.8. Other notes
 
-- EXIF data is **not** stripped separately from uploaded images
-  (`POST /uploads`); the server-side re-encode already drops it.
+- There is no standalone upload endpoint. An image travels with the post or
+  comment that carries it: `POST /posts`/`POST /posts/{id}/comments` accept
+  `multipart/form-data` with a `payload` part (the same JSON body the
+  `application/json` case takes) plus up to 4 `files` parts. EXIF data is
+  **not** stripped separately from those images; the server-side re-encode
+  already drops it.
 - `ContentSummary.attachments`: `null` means this view did not populate
   attachments (list endpoints, for instance), `[]` means the content has
   none. For definitive attachment information use a single-item endpoint

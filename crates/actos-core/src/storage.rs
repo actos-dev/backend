@@ -120,7 +120,7 @@ impl Storage {
     ///
     /// S3 semantiği gereği **var olmayan bir anahtarı silmek de başarılı
     /// sayılır**; bu idempotency çağıranın işine geliyor (bkz.
-    /// `crate::attachment::delete_attachment` — veritabanı satırı ile
+    /// `crate::avatar::set_avatar`/`clear_avatar` — veritabanı satırı ile
     /// nesnenin ayrı düşmesi hâlinde tekrar denenebilsin).
     ///
     /// # Errors

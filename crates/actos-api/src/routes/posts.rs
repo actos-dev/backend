@@ -24,7 +24,7 @@ use actos_types::{
 };
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, FromRequest, Multipart, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -47,9 +47,134 @@ use crate::{
 /// tutmak yalnızca yazım hatasını tek bir yere hapsetmek için.
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 
+/// `DefaultBodyLimit` override for `POST /posts`/`POST /posts/{id}/comments`
+/// (see [`crate::routes::comments`], which reuses this same constant).
+///
+/// Follows the pattern `crate::routes::actors::router` established for the
+/// avatar upload route (see `crate::app::build`'s doc for why a route-level
+/// `DefaultBodyLimit` layer is needed at all — the app-wide layer only sets
+/// a default, it does not cap what an inner layer can raise it to). Unlike
+/// the avatar route this is a fixed constant, not threaded from
+/// `max_upload_bytes`: it has to cover UP TO
+/// [`actos_core::attachment::MAX_ATTACHMENTS_PER_CONTENT`] files at once,
+/// each up to `max_upload_bytes`, plus the JSON `payload` part and
+/// multipart boundary/header overhead. 4 × 8 MiB (the default
+/// `max_upload_bytes`) is already 32 MiB, so 34 MiB leaves 2 MiB of
+/// headroom for everything else in the body.
+pub(crate) const CREATE_CONTENT_BODY_LIMIT: usize = 34 * 1024 * 1024;
+
+/// The multipart field carrying the same JSON body the `application/json`
+/// case would carry.
+const PAYLOAD_FIELD: &str = "payload";
+
+/// The multipart field carrying an image file — repeated for each file, up
+/// to [`actos_core::attachment::MAX_ATTACHMENTS_PER_CONTENT`].
+const FILES_FIELD: &str = "files";
+
+/// Reads either an `application/json` body or a `multipart/form-data` body
+/// (a `payload` JSON part plus zero or more `files` parts) into `(T, files)`
+/// — the shared implementation behind `POST /posts` and
+/// `POST /posts/{id}/comments`'s dual content-type acceptance (REFACTOR.md
+/// §4: "images travel with the post or comment that carries them, or they
+/// are not sent at all" — there is no third, upload-then-attach path).
+///
+/// **Why this dispatches by hand instead of two separate extractors:** axum
+/// picks an extractor at compile time from the handler's signature: it
+/// can't itself branch on `Content-Type` between `Json<T>` and `Multipart`.
+/// Taking the raw [`Request`] as the last argument and manually running
+/// `Json::from_request`/`Multipart::from_request` on it (both still go
+/// through axum's own extractor code, including its `DefaultBodyLimit`
+/// enforcement) is the standard way to do content-type-conditional
+/// extraction in axum.
+///
+/// A missing/unrecognized `Content-Type` is treated as the JSON case —
+/// matching a plain `Json<T>` extractor's own behavior today, so a client
+/// that never sends images sees no change at all.
+pub(crate) async fn extract_content_payload<T>(
+    request: Request,
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(T, Vec<Vec<u8>>), ApiError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let is_multipart = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("multipart/form-data"));
+
+    if !is_multipart {
+        let Json(payload) = Json::<T>::from_request(request, state).await.map_err(|e| {
+            ApiError::new(Error::Validation(format!("invalid JSON body: {e}")))
+                .with_request_id(headers)
+        })?;
+        return Ok((payload, Vec::new()));
+    }
+
+    let mut multipart = Multipart::from_request(request, state).await.map_err(|e| {
+        ApiError::new(Error::Validation(format!(
+            "could not read multipart body: {e}"
+        )))
+        .with_request_id(headers)
+    })?;
+
+    let mut payload: Option<T> = None;
+    let mut files = Vec::new();
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        ApiError::new(Error::Validation(format!("could not read multipart: {e}")))
+            .with_request_id(headers)
+    })? {
+        // Unknown field names are ignored, not rejected — the same policy
+        // the old `POST /uploads` handler used (client libraries routinely
+        // send extra fields).
+        match field.name() {
+            Some(PAYLOAD_FIELD) => {
+                let bytes = field.bytes().await.map_err(|e| {
+                    ApiError::new(Error::Validation(format!(
+                        "could not read \"{PAYLOAD_FIELD}\" field: {e}"
+                    )))
+                    .with_request_id(headers)
+                })?;
+                let parsed = serde_json::from_slice(&bytes).map_err(|e| {
+                    ApiError::new(Error::Validation(format!(
+                        "invalid JSON in \"{PAYLOAD_FIELD}\" field: {e}"
+                    )))
+                    .with_request_id(headers)
+                })?;
+                payload = Some(parsed);
+            }
+            Some(FILES_FIELD) => {
+                let bytes = field.bytes().await.map_err(|e| {
+                    ApiError::new(Error::Validation(format!(
+                        "could not read \"{FILES_FIELD}\" field: {e}"
+                    )))
+                    .with_request_id(headers)
+                })?;
+                files.push(bytes.to_vec());
+            }
+            _ => {}
+        }
+    }
+
+    let payload = payload.ok_or_else(|| {
+        ApiError::new(Error::Validation(format!(
+            "multipart body is missing the \"{PAYLOAD_FIELD}\" field"
+        )))
+        .with_request_id(headers)
+    })?;
+
+    Ok((payload, files))
+}
+
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new()
+    let create = OpenApiRouter::new()
         .routes(routes!(create_post))
+        .layer(DefaultBodyLimit::max(CREATE_CONTENT_BODY_LIMIT));
+
+    OpenApiRouter::new()
+        .merge(create)
         .routes(routes!(get_post, update_post, delete_post))
         // Faz 7'den devir (bkz. PLAN.md Faz 8): `actos_core::content`'in
         // fonksiyonunu çağırdığı ve `content_summary`/`fields` gibi bu
@@ -215,11 +340,36 @@ fn content_summary_full(
         Some((liste, storage)) => Some(
             liste
                 .iter()
-                .map(|ek| crate::routes::uploads::upload_response(ek, id_codec, storage))
+                .map(|ek| attachment_response(ek, id_codec, storage))
                 .collect::<Result<Vec<_>, Error>>()?,
         ),
     };
     content_summary_inner(content, id_codec, attachments, include_body_html)
+}
+
+/// Bir [`actos_core::attachment::Attachment`]'i yanıt DTO'suna çevirir.
+///
+/// This used to live in the now-deleted `crate::routes::uploads` (the
+/// standalone `POST /uploads` handler built the exact same DTO for its own
+/// `201` response) — that route is gone (REFACTOR.md §4), so the only
+/// remaining caller is [`content_summary_full`], which shows an
+/// attachment's shape nested inside `ContentSummary.attachments`.
+fn attachment_response(
+    ek: &actos_core::attachment::Attachment,
+    id_codec: &IdCodec,
+    storage: &actos_core::Storage,
+) -> Result<actos_types::upload::UploadResponse, Error> {
+    Ok(actos_types::upload::UploadResponse {
+        id: id_codec.encode::<actos_core::id::Attachment>(ek.id)?,
+        url: storage.public_url(&ek.object_key),
+        thumbnail_url: storage.public_url(&ek.thumbnail_key()),
+        mime_type: ek.mime_type.clone(),
+        byte_size: ek.byte_size,
+        width: ek.width,
+        height: ek.height,
+        checksum_sha256: ek.checksum_sha256.clone(),
+        created_at: ek.created_at.to_rfc3339(),
+    })
 }
 
 /// `body` + `body_format`'tan sanitize edilmiş HTML üretir (bkz.
@@ -322,30 +472,6 @@ fn content_summary_inner(
     })
 }
 
-/// Ek dış id'lerini iç `bigint`'lere çözer.
-///
-/// Bozuk bir id burada **hata üretiyor**, sessizce atlanmıyor
-/// (`GET /me/votes`'un toplu aramasının aksine): istemci bir ek göndermek
-/// istediğini açıkça söylüyor, onu sessizce düşürmek gönderdiğinden farklı
-/// bir post yaratmak olurdu.
-///
-/// `pub(crate)`: `crate::routes::comments` de aynı çözümü kullanıyor.
-pub(crate) fn decode_attachment_ids(
-    raw: Option<&[String]>,
-    id_codec: &IdCodec,
-) -> Result<Vec<i64>, Error> {
-    let Some(raw) = raw else {
-        return Ok(Vec::new());
-    };
-    raw.iter()
-        .map(|s| {
-            id_codec
-                .decode::<actos_core::id::Attachment>(s)
-                .map_err(|_| Error::NotFound("attachment"))
-        })
-        .collect()
-}
-
 /// Ham `{id}` path segmentini iç `bigint`'e çözer.
 ///
 /// Ayrıştırılamıyorsa (yanlış prefix, bozuk base62, ...) [`Error::NotFound`]
@@ -363,6 +489,24 @@ pub(crate) fn decode_content_id(
 }
 
 // --- Handler'lar -----------------------------------------------------------
+
+/// A documentation-only schema for the `multipart/form-data` alternative to
+/// [`CreatePostRequest`] — never instantiated; the real parsing is
+/// [`extract_content_payload`]. Exists only so the OpenAPI spec can
+/// describe the multipart shape (same documentation-only role as
+/// `crate::routes::actors::AvatarRequestBody`).
+#[derive(utoipa::ToSchema)]
+#[allow(dead_code)]
+struct CreatePostMultipartBody {
+    /// The same JSON body the `application/json` case would carry, as a
+    /// single multipart part.
+    payload: CreatePostRequest,
+    /// Up to `MAX_ATTACHMENTS_PER_CONTENT` (4) image files. Accepted
+    /// formats: jpeg, png, gif, webp (detected by magic bytes; the
+    /// extension and `Content-Type` are not trusted).
+    #[schema(content_media_type = "application/octet-stream")]
+    files: Vec<Vec<u8>>,
+}
 
 /// Bir [`StoredResponse`]'u (daha önce tamamlanmış bir idempotent isteğin
 /// saklanan sonucu) aynı HTTP yanıtına çevirir — istemci bunu ilk isteğin
@@ -395,13 +539,20 @@ fn stored_response_to_http(stored: StoredResponse) -> Response {
     tag = "posts",
     summary = "Create a new post",
     description = "If the `Idempotency-Key` header is given and a request with the same actor + \
-        same key has already completed, the **same** response is returned as-is without creating a new post.",
+        same key has already completed, the **same** response is returned as-is without creating a new post. \
+        Accepts EITHER `application/json` (no images) OR `multipart/form-data` (the same JSON as a `payload` \
+        part, plus up to 4 `files` parts).",
     security(("api_key" = [])),
     params(
         ("idempotency-key" = Option<String>, Header,
             description = "If given, repeated requests produce the same response (see the description above)"),
     ),
-    request_body = CreatePostRequest,
+    request_body(
+        content(
+            (CreatePostRequest = "application/json"),
+            (inline(CreatePostMultipartBody) = "multipart/form-data"),
+        )
+    ),
     responses(
         (status = 201, description = "Post created", body = ContentSummary,
             headers(("location" = String, description = "Path of the new post: /posts/{id}"))),
@@ -416,10 +567,10 @@ async fn create_post(
     current: CurrentActor,
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<CreatePostRequest>,
+    request: Request,
 ) -> Result<Response, ApiError> {
-    let attachment_ids = decode_attachment_ids(req.attachment_ids.as_deref(), state.id_codec())
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    let (req, files): (CreatePostRequest, Vec<Vec<u8>>) =
+        extract_content_payload(request, &state, &headers).await?;
 
     let idempotency_key = headers
         .get(IDEMPOTENCY_KEY_HEADER)
@@ -450,11 +601,15 @@ async fn create_post(
 
     let content = core_content::create_post(
         state.db(),
+        state.storage(),
+        state.id_codec(),
         &current.actor,
         &req.title,
         &req.body,
         &req.tags,
-        &attachment_ids,
+        &files,
+        state.config().server.max_upload_bytes,
+        state.config().storage_quota.bytes,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;

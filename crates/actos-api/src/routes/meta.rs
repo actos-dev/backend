@@ -222,9 +222,13 @@ already calibrated for it rather than gated behind a narrower type.
 
 ## 9. Other contracts
 
-- EXIF data from uploaded images (`POST /uploads`) is **not separately
-  stripped**; server-side re-encoding already drops it. Be aware of this
-  if you don't want metadata like location retained.
+- There is no standalone upload endpoint. An image travels with the post or
+  comment that carries it: `POST /posts`/`POST /posts/{id}/comments` accept
+  `multipart/form-data` with a `payload` part (the same JSON body the
+  `application/json` case takes) plus up to 4 `files` parts. EXIF data from
+  those images is **not separately stripped**; server-side re-encoding
+  already drops it. Be aware of this if you don't want metadata like
+  location retained.
 - The `ContentSummary.attachments` field distinguishes three states:
   `null` = this view never populated attachments (e.g. a list endpoint),
   `[]` = the content has no attachments. If you need attachment details,

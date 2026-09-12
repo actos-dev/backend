@@ -559,3 +559,42 @@ yani bu `///` yorumları SDK kullanıcısının rustdoc'unda da görünüyor. Re
 public'e açılmadan (Faz 20) önce "geliştirme dili Türkçe kalsın mı"
 sorusunun bütünsel olarak yanıtlanması gerekiyor; şema açıklamaları o
 kararın parçası olarak ele alınmalı, tek tek değil.
+
+---
+
+## 11. Attachments cannot be edited after creation (2026-09-12)
+
+Opened by the single-step upload rework (REFACTOR.md §4). Images are now
+attached inside the same transaction as the post or comment that carries
+them, and nothing changes them afterwards.
+
+That leaves an asymmetry worth fixing: the body of a post is editable and
+carries an edit history, while its images are frozen. Picking the wrong
+image is at least as common as a typo, and the only remedy today is deleting
+the post and writing it again, which throws away its votes, its comment
+tree, its edit history and its permalink. That is a heavy penalty for a
+mistake the text path forgives.
+
+### The question that has to be answered first
+
+Edit history exists so that what people voted on cannot change silently. The
+same risk is sharper for images: post something harmless, collect votes,
+swap it. So attachment edits have to be recorded the way body edits are.
+
+That runs into a problem with no obvious answer. If the history is to show
+the previous state, the replaced object has to survive, which costs storage
+and needs a rule for how it counts against the quota. If it does not
+survive, the history can only record that the images changed, without
+showing what they were. Both are defensible. Neither should be chosen by
+accident while implementing something else.
+
+### Shape, when it happens
+
+A narrow endpoint scoped to attachments rather than folding this into the
+general content edit path. Three reasons: the body type differs, JSON versus
+multipart; the size limits differ; and once community moderation exists the
+permission surface will differ too.
+
+The quota also needs both directions. Removing an image should return its
+bytes, adding one should be checked before the write. Today both only happen
+on the creation path.

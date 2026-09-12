@@ -5,14 +5,14 @@
 //! entegrasyon test binary'si olduğu için (Rust her `tests/*.rs` dosyasını
 //! bağımsız derler) paylaşılan bir modül olmadan tekrar tanımlanıyor.
 //!
-//! **Neden 42 yolu burada elle listeliyoruz:** `crate::routes::mod`
+//! **Neden 40 yolu burada elle listeliyoruz:** `crate::routes::mod`
 //! dokümantasyonundaki garanti ("bir uç axum'da yaşıyorsa spec'te de yaşar")
 //! yalnızca *kayıtlı* uçlar için geçerli — yeni bir uç eklenip
 //! `OpenApiRouter::routes(routes!(...))`'a hiç eklenmemesi (ya da
 //! `#[utoipa::path]` anotasyonu unutulması) derleme zamanında yakalanmaz,
 //! çünkü axum bunu normal bir `Router::route` çağrısıyla da kabul eder. Bu
 //! test o boşluğu kapatıyor: PLAN.md'nin "spec kodla senkron kalsın" sözü
-//! olarak, listedeki 42 yoldan biri kaybolursa (ya da beklenmedik bir tane
+//! olarak, listedeki 40 yoldan biri kaybolursa (ya da beklenmedik bir tane
 //! eklenip test edilmemişse) burada kırılır. (`/openapi.json` ve `/docs`'un
 //! kendisi bu listede **yok** — ikisi spec'in sunum biçimleri, spec'in bir
 //! "yolu" değil; bkz. `crate::routes` modül dokümanındaki `/docs/agent`
@@ -53,7 +53,6 @@ fn test_config() -> Config {
             trusted_proxy_hops: 0,
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
-            orphan_cleanup_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -138,7 +137,7 @@ fn empty_req(method: &str, uri: &str) -> Request<Body> {
 ///
 /// Sıra, `crates/actos-api/src/routes/mod.rs`'teki `merge` sırasıyla aynı:
 /// health/meta, auth, actors, posts, comments, tags, search, interactions,
-/// feed, uploads, admin.
+/// feed, admin.
 const EXPECTED_PATHS: &[&str] = &[
     // health / meta
     "/health",
@@ -186,9 +185,6 @@ const EXPECTED_PATHS: &[&str] = &[
     // feed
     "/feed",
     "/feed/following",
-    // uploads
-    "/uploads",
-    "/uploads/{id}",
     // admin (+ herkese açık /reports)
     "/reports",
     "/admin/reports",

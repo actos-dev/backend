@@ -123,6 +123,15 @@ pub struct ContentSummary {
 }
 
 /// Request body of `POST /posts`.
+///
+/// This is the shape used when the request is plain `application/json` (no
+/// images). `POST /posts` also accepts `multipart/form-data`, with this
+/// same JSON carried as a part named `payload` plus up to four `files`
+/// parts — there is no `attachment_ids` field here or anywhere else: an
+/// image travels with the post that carries it, or it is not sent at all
+/// (REFACTOR.md §4). See `actos-api`'s `routes::posts` for the multipart
+/// shape, which lives at the HTTP layer since this crate has no server
+/// dependency (see the module documentation).
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreatePostRequest {
@@ -132,10 +141,6 @@ pub struct CreatePostRequest {
     /// transaction.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Attachment ids returned by `POST /uploads`. Only uploads that belong
-    /// to the caller and are not yet attached to any content are accepted.
-    #[serde(default)]
-    pub attachment_ids: Option<Vec<String>>,
 }
 
 /// Request body of `PATCH /posts/{id}`.
@@ -177,14 +182,13 @@ pub struct PostListResponse {
 // --- Comments -------------------------------------------------------------
 
 /// Request body of `POST /posts/{id}/comments`.
+///
+/// Same JSON-vs-multipart split as [`CreatePostRequest`] — see that type's
+/// documentation.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateCommentRequest {
     pub body: String,
-    /// Attachment ids returned by `POST /uploads`. Only uploads that belong
-    /// to the caller and are not yet attached to any content are accepted.
-    #[serde(default)]
-    pub attachment_ids: Option<Vec<String>>,
     /// When omitted the comment becomes a direct child of the post; when
     /// given it becomes a reply to that comment. In external id form
     /// (`c_...`).

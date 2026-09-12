@@ -282,22 +282,25 @@ ifadesi `text`'e cast edilerek indexlenir).
 
 #### `attachments`
 
-Yüklenen dosyalar. Yükleme ile bir içeriğe bağlanma iki ayrı adımdır: dosya
-önce object storage'a yüklenir (`content_id` NULL), sonra post/yorum
-kaydedilirken `content_id` set edilir.
+Images that travel with a post or comment. There is no standalone upload
+step: a row is created inside the same transaction as the content it
+belongs to (`crate::attachment::create_for_content`), with `content_id`
+already set at INSERT time — `content_id` is `NOT NULL`
+(`migrations/0027_attachments_content_id_not_null.up.sql`). Editing a post
+or comment never adds or removes attachments; they are fixed at creation
+and change only when that content is deleted.
 
 **Avatars do not use this table.** `POST`/`DELETE /actors/me/avatar` write
 `actors.avatar_object_key` directly and never create a row here — see
 `crates/actos-core/src/avatar.rs`. Before this endpoint existed, an avatar
 WAS a row in this table with `content_id` permanently `NULL`, which is why
 `migrations/0026_drop_avatar_attachments.up.sql` had to sweep up the
-already-existing ones: `idx_attachments_orphaned` below no longer excludes
-them.
+already-existing ones.
 
 | Kolon | Tip | Açıklama |
 |---|---|---|
 | `id` | `bigint` (PK, IDENTITY) | |
-| `content_id` | `bigint` FK → `contents`, `ON DELETE CASCADE`, null olabilir | NULL = henüz bağlanmamış. |
+| `content_id` | `bigint` FK → `contents`, `ON DELETE CASCADE`, NOT NULL | Set at INSERT time, never changes. |
 | `actor_id` | `bigint` FK → `actors`, `ON DELETE RESTRICT` | Yükleyen. |
 | `object_key` | `text`, benzersiz | MinIO/S3 object key'i. |
 | `byte_size` | `bigint` | > 0. |
@@ -307,8 +310,10 @@ them.
 | `created_at` | `timestamptz` | |
 
 `idx_attachments_content (content_id)` — bir içeriğin eklerini çekmek için.
-`idx_attachments_orphaned (created_at) WHERE content_id IS NULL` — bağlanmamış
-yüklemeleri temizleyen job için.
+There is no orphan-scanning index or cleanup job any more — a row can no
+longer exist without a content to belong to, so there is nothing to sweep
+(the `idx_attachments_orphaned` index and `attachment::cleanup_orphaned` job
+were dropped in migration 0027 alongside the `NOT NULL` change).
 
 Not: `attachments.content_id`, `contents` üzerindeki tek `ON DELETE CASCADE`
 FK'dir (diğer actor-bağlı tablolar `RESTRICT` kullanır) — ama bu içeriğe değil

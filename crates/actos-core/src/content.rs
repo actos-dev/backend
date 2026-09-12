@@ -41,6 +41,8 @@ use crate::{
     auth::{ActorRecord, ActorType, AdminRole},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
+    id::IdCodec,
+    storage::Storage,
     text,
 };
 
@@ -262,20 +264,33 @@ async fn attach_tags(conn: &mut PgConnection, content_id: i64, tags: &[String]) 
 /// dokümantasyonu) — `INSERT`, `trg_contents_set_path` trigger'ının
 /// bunları hesaplamasına bırakılıyor.
 ///
-/// `attachment_ids` verilirse o yüklemeler **aynı transaction'da** bu
-/// post'a bağlanıyor (bkz. [`crate::attachment::attach_to_content`]);
-/// yalnızca çağıranın kendi, henüz bağlanmamış yüklemeleri kabul edilir.
+/// `files` (raw, not-yet-validated bytes — zero to
+/// [`crate::attachment::MAX_ATTACHMENTS_PER_CONTENT`] of them) are validated,
+/// normalized, quota-checked, and inserted as `attachments` rows **in the
+/// same transaction** as the post itself (see
+/// [`crate::attachment::create_for_content`]) — there is no separate
+/// upload-then-attach step any more (REFACTOR.md §4). An empty `files` is
+/// the common case (a plain text post) and costs nothing beyond the empty
+/// check itself.
 ///
 /// # Errors
-/// `title`/`body`/`tags` doğrulamadan geçmezse [`Error::Validation`];
-/// veritabanı hatası [`Error::Database`].
+/// `title`/`body`/`tags` doğrulamadan geçmezse [`Error::Validation`]; a file
+/// fails validation, exceeds the per-file limit, or the batch would exceed
+/// the storage quota: [`Error::Validation`] / [`Error::UnsupportedMedia`]
+/// (see [`crate::attachment::create_for_content`]); veritabanı hatası
+/// [`Error::Database`].
+#[allow(clippy::too_many_arguments)]
 pub async fn create_post(
     pool: &PgPool,
+    storage: &Storage,
+    id_codec: &IdCodec,
     author: &ActorRecord,
     title: &str,
     body: &str,
     tags: &[String],
-    attachment_ids: &[i64],
+    files: &[Vec<u8>],
+    max_file_bytes: usize,
+    quota_bytes: i64,
 ) -> Result<Content> {
     let title = text::validate_title(title).map_err(|e| Error::Validation(e.to_string()))?;
     if title.is_empty() {
@@ -301,10 +316,21 @@ pub async fn create_post(
 
     attach_tags(&mut tx, row.id, &tags).await?;
 
-    // Ekler **aynı transaction'da** bağlanıyor: ek bağlama başarısız
-    // olursa (ör. başkasının yüklemesi istendi) post da oluşmamalı, yoksa
-    // istemcinin gönderdiğinden farklı bir post yaratmış olurduk.
-    crate::attachment::attach_to_content(&mut tx, row.id, author.id, attachment_ids).await?;
+    // Attachments are created **in the same transaction**: if any file
+    // fails validation or the batch would exceed the quota, the post must
+    // not exist either — otherwise the client would end up with a
+    // different post than the one it asked for (text without its images).
+    crate::attachment::create_for_content(
+        &mut tx,
+        storage,
+        id_codec,
+        author.id,
+        row.id,
+        files,
+        max_file_bytes,
+        quota_bytes,
+    )
+    .await?;
 
     tx.commit().await?;
 

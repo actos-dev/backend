@@ -24,7 +24,7 @@ use actos_types::content::{
 };
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -39,15 +39,19 @@ use crate::{
     openapi::{Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor, decode_cursor_with, parse_limit},
     routes::posts::{
-        content_summary, content_summary_with_body_html, content_summary_with_optional_body_html,
-        decode_content_id,
+        CREATE_CONTENT_BODY_LIMIT, content_summary, content_summary_with_body_html,
+        content_summary_with_optional_body_html, decode_content_id, extract_content_payload,
     },
     state::AppState,
 };
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new()
+    let create = OpenApiRouter::new()
         .routes(routes!(create_comment, list_comments))
+        .layer(DefaultBodyLimit::max(CREATE_CONTENT_BODY_LIMIT));
+
+    OpenApiRouter::new()
+        .merge(create)
         .routes(routes!(get_comment, update_comment, delete_comment))
         // Faz 7'den devir (bkz. PLAN.md Faz 9).
         .routes(routes!(list_actor_comments))
@@ -152,6 +156,23 @@ fn comment_node(
 
 // --- Handler'lar -----------------------------------------------------------
 
+/// A documentation-only schema for the `multipart/form-data` alternative to
+/// [`CreateCommentRequest`] — see `crate::routes::posts::
+/// CreatePostMultipartBody`'s doc for why this struct exists and is never
+/// instantiated.
+#[derive(utoipa::ToSchema)]
+#[allow(dead_code)]
+struct CreateCommentMultipartBody {
+    /// The same JSON body the `application/json` case would carry, as a
+    /// single multipart part.
+    payload: CreateCommentRequest,
+    /// Up to `MAX_ATTACHMENTS_PER_CONTENT` (4) image files. Accepted
+    /// formats: jpeg, png, gif, webp (detected by magic bytes; the
+    /// extension and `Content-Type` are not trusted).
+    #[schema(content_media_type = "application/octet-stream")]
+    files: Vec<Vec<u8>>,
+}
+
 /// `POST /posts/{id}/comments` → `201` + `Location: /comments/{id}`.
 ///
 /// `Idempotency-Key` **desteklenmiyor** (post oluşturmanın aksine): plan
@@ -164,12 +185,19 @@ fn comment_node(
     path = "/posts/{id}/comments",
     tag = "comments",
     summary = "Add a comment to a post (or to another comment)",
-    description = "If `parent_id` is omitted, the comment becomes a direct child of the post; if given, it replies to that comment.",
+    description = "If `parent_id` is omitted, the comment becomes a direct child of the post; if given, it replies to that comment. \
+        Accepts EITHER `application/json` (no images) OR `multipart/form-data` (the same JSON as a `payload` \
+        part, plus up to 4 `files` parts).",
     security(("api_key" = [])),
     params(
         ("id" = String, Path, description = "The post's external id (`c_...`)"),
     ),
-    request_body = CreateCommentRequest,
+    request_body(
+        content(
+            (CreateCommentRequest = "application/json"),
+            (inline(CreateCommentMultipartBody) = "multipart/form-data"),
+        )
+    ),
     responses(
         (status = 201, description = "Comment created", body = ContentSummary,
             headers(("location" = String, description = "Path of the new comment: /comments/{id}"))),
@@ -186,10 +214,13 @@ async fn create_comment(
     State(state): State<AppState>,
     Path(post_id): Path<String>,
     headers: HeaderMap,
-    Json(req): Json<CreateCommentRequest>,
+    request: Request,
 ) -> Result<Response, ApiError> {
     let post_id = decode_content_id(&post_id, state.id_codec(), "post")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let (req, files): (CreateCommentRequest, Vec<Vec<u8>>) =
+        extract_content_payload(request, &state, &headers).await?;
 
     let parent_id = req
         .parent_id
@@ -198,19 +229,17 @@ async fn create_comment(
         .transpose()
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let attachment_ids = crate::routes::posts::decode_attachment_ids(
-        req.attachment_ids.as_deref(),
-        state.id_codec(),
-    )
-    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
-
     let content = core_comment::create_comment(
         state.db(),
+        state.storage(),
+        state.id_codec(),
         &current.actor,
         post_id,
         parent_id,
         &req.body,
-        &attachment_ids,
+        &files,
+        state.config().server.max_upload_bytes,
+        state.config().storage_quota.bytes,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;

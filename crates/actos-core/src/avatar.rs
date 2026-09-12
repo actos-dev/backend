@@ -12,7 +12,7 @@
 //! and this module is the only code that writes that column.
 //!
 //! **No storage quota accounting here, on purpose.** `crate::attachment::
-//! create_attachment`'s quota (`crate::config::StorageQuotaConfig`) defends
+//! create_for_content`'s quota (`crate::config::StorageQuotaConfig`) defends
 //! against an actor accumulating an unbounded number of uploads over time.
 //! An avatar can't accumulate: there is exactly one object key live per
 //! actor at any moment (this module always deletes the previous one when
@@ -47,11 +47,12 @@ use crate::{
 /// key it pointed at before, if any. Returns the new object key.
 ///
 /// **Ordering, and why:** the new object is uploaded to storage BEFORE any
-/// database write, for the same reason as `attachment::create_attachment` —
+/// database write, for the same reason as `attachment::create_for_content` —
 /// if the database update then failed, the worst case is one unreferenced
-/// object in storage (invisible, harmless, cleaned up by nothing today
-/// since avatars aren't tracked by `attachment::cleanup_orphaned`, but also
-/// never linked to from anywhere a client could reach). The reverse order
+/// object in storage (invisible, harmless, cleaned up by nothing — there is
+/// no orphan-sweeping job in this codebase any more, for attachments or
+/// avatars alike, but also never linked to from anywhere a client could
+/// reach). The reverse order
 /// (write the database row, then upload) would risk the opposite: a live
 /// `avatar_object_key` pointing at an object that was never actually
 /// written, which every reader of the profile would see as a broken image.
@@ -61,8 +62,9 @@ use crate::{
 /// swallowed rather than propagated — deleting it before commit would risk
 /// losing the old avatar if the commit then failed for an unrelated reason
 /// (e.g. the actor was deleted concurrently), and a failed deletion after a
-/// successful commit just leaves one harmless orphaned object behind, the
-/// same trade-off `attachment::delete_attachment` already makes.
+/// successful commit just leaves one harmless orphaned object behind — the
+/// same trade-off this codebase already accepts for a partial multi-file
+/// attachment batch (see `attachment::create_for_content`'s doc).
 ///
 /// **`SELECT ... FOR UPDATE` before the `UPDATE`:** the transaction needs
 /// the row's CURRENT `avatar_object_key` (to know what to delete

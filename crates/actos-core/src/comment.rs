@@ -46,7 +46,9 @@ use crate::{
     content::{BodyFormat, Content, ContentType},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
+    id::IdCodec,
     notification::{self, NotificationKind},
+    storage::Storage,
     text,
 };
 
@@ -261,18 +263,32 @@ struct ParentInfo {
 /// farklı sıralarda kilitlemesi kilitlenmeye (deadlock) yol açabilirdi;
 /// sabit bir sıra bunu imkânsız kılıyor.
 ///
+/// `files` (raw, not-yet-validated bytes — zero to
+/// [`crate::attachment::MAX_ATTACHMENTS_PER_CONTENT`] of them) are created
+/// in the same transaction as the comment itself, exactly like
+/// `crate::content::create_post` — see that function's doc and
+/// [`crate::attachment::create_for_content`] for the all-or-nothing
+/// behaviour and the quota check.
+///
 /// # Errors
 /// Post yoksa/ebeveyn yorum yoksa [`Error::NotFound`]; post ya da ebeveyn
 /// silinmişse [`Error::Gone`]; gövde doğrulamadan geçmezse ya da derinlik
-/// sınırı aşılacaksa [`Error::Validation`]; veritabanı hatası
-/// [`Error::Database`].
+/// sınırı aşılacaksa [`Error::Validation`]; a file fails validation,
+/// exceeds the per-file limit, or the batch would exceed the storage
+/// quota: [`Error::Validation`] / [`Error::UnsupportedMedia`]; veritabanı
+/// hatası [`Error::Database`].
+#[allow(clippy::too_many_arguments)]
 pub async fn create_comment(
     pool: &PgPool,
+    storage: &Storage,
+    id_codec: &IdCodec,
     author: &ActorRecord,
     post_id: i64,
     parent_id: Option<i64>,
     body: &str,
-    attachment_ids: &[i64],
+    files: &[Vec<u8>],
+    max_file_bytes: usize,
+    quota_bytes: i64,
 ) -> Result<Content> {
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     if body.is_empty() {
@@ -304,8 +320,19 @@ pub async fn create_comment(
 
     increment_ancestor_counts(&mut tx, inserted.id).await?;
 
-    // Ekler aynı transaction'da (bkz. `crate::content::create_post`).
-    crate::attachment::attach_to_content(&mut tx, inserted.id, author.id, attachment_ids).await?;
+    // Attachments are created in the same transaction (see
+    // `crate::content::create_post`'s identical call and rationale).
+    crate::attachment::create_for_content(
+        &mut tx,
+        storage,
+        id_codec,
+        author.id,
+        inserted.id,
+        files,
+        max_file_bytes,
+        quota_bytes,
+    )
+    .await?;
 
     // --- Bildirim fan-out'u: kök yazarı + doğrudan ebeveyn, BAŞKASI DEĞİL
     // (bkz. `crate::notification` modül dokümantasyonu "Fan-out sınırı"

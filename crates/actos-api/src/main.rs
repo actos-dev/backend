@@ -53,7 +53,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let addr = config.server.addr;
     let tag_cleanup_interval = config.server.tag_cleanup_interval;
     let hot_score_interval = config.server.hot_score_interval;
-    let orphan_cleanup_interval = config.server.orphan_cleanup_interval;
     let state = state::AppState::new(
         config,
         db,
@@ -80,18 +79,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         state.db().clone(),
         hot_score_interval,
         |pool| async move { actos_core::feed::recompute_hot_scores(&pool).await },
-    );
-    // Bu iş depolamaya da dokunuyor; `Storage` klonlanıp kapanışa
-    // taşınıyor (içi `Arc` tabanlı bir S3 istemcisi, klon ucuz).
-    let cleanup_storage = state.storage().clone();
-    jobs::spawn_periodic(
-        "yetim yükleme temizliği",
-        state.db().clone(),
-        orphan_cleanup_interval,
-        move |pool| {
-            let storage = cleanup_storage.clone();
-            async move { actos_core::attachment::cleanup_orphaned(&pool, &storage).await }
-        },
     );
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın

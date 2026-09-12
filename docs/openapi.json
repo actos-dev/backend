@@ -521,18 +521,8 @@
         "type": "object"
       },
       "CreateCommentRequest": {
-        "description": "Request body of `POST /posts/{id}/comments`.",
+        "description": "Request body of `POST /posts/{id}/comments`.\n\nSame JSON-vs-multipart split as [`CreatePostRequest`] — see that type's\ndocumentation.",
         "properties": {
-          "attachment_ids": {
-            "description": "Attachment ids returned by `POST /uploads`. Only uploads that belong\nto the caller and are not yet attached to any content are accepted.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "body": {
             "type": "string"
           },
@@ -579,18 +569,8 @@
         "type": "object"
       },
       "CreatePostRequest": {
-        "description": "Request body of `POST /posts`.",
+        "description": "Request body of `POST /posts`.\n\nThis is the shape used when the request is plain `application/json` (no\nimages). `POST /posts` also accepts `multipart/form-data`, with this\nsame JSON carried as a part named `payload` plus up to four `files`\nparts — there is no `attachment_ids` field here or anywhere else: an\nimage travels with the post that carries it, or it is not sent at all\n(REFACTOR.md §4). See `actos-api`'s `routes::posts` for the multipart\nshape, which lives at the HTTP layer since this crate has no server\ndependency (see the module documentation).",
         "properties": {
-          "attachment_ids": {
-            "description": "Attachment ids returned by `POST /uploads`. Only uploads that belong\nto the caller and are not yet attached to any content are accepted.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "body": {
             "type": "string"
           },
@@ -1243,7 +1223,7 @@
         "type": "object"
       },
       "UploadResponse": {
-        "description": "Response of `POST /uploads`, and how a content's attachments are shown.\n\n`url` and `thumbnail_url` are **directly usable**: the bucket is\npublic-read, so neither signing nor a second call is needed (see PLAN.md\nphase 13 — a move to private + presigned URLs is possible later, and it\nwould change only the lifetime of these fields, not their meaning).",
+        "description": "One attachment, as shown in `ContentSummary.attachments`.\n\n`url` and `thumbnail_url` are **directly usable**: the bucket is\npublic-read, so neither signing nor a second call is needed (see PLAN.md\nphase 13 — a move to private + presigned URLs is possible later, and it\nwould change only the lifetime of these fields, not their meaning).",
         "properties": {
           "byte_size": {
             "format": "int64",
@@ -1800,7 +1780,7 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "description": "A documentation-only schema for the `POST /actors/me/avatar` request\nbody — same pattern as `crate::routes::uploads::UploadRequestBody`, see\nits doc for why this struct is never instantiated.",
+                "description": "A documentation-only schema for the `POST /actors/me/avatar` request\nbody — same pattern as `crate::routes::posts::CreatePostMultipartBody`,\nsee its doc for why this struct is never instantiated.",
                 "properties": {
                   "file": {
                     "contentMediaType": "application/octet-stream",
@@ -5586,7 +5566,7 @@
     },
     "/posts": {
       "post": {
-        "description": "If the `Idempotency-Key` header is given and a request with the same actor + same key has already completed, the **same** response is returned as-is without creating a new post.",
+        "description": "If the `Idempotency-Key` header is given and a request with the same actor + same key has already completed, the **same** response is returned as-is without creating a new post. Accepts EITHER `application/json` (no images) OR `multipart/form-data` (the same JSON as a `payload` part, plus up to 4 `files` parts).",
         "operationId": "create_post",
         "parameters": [
           {
@@ -5607,6 +5587,35 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CreatePostRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "description": "A documentation-only schema for the `multipart/form-data` alternative to\n[`CreatePostRequest`] — never instantiated; the real parsing is\n[`extract_content_payload`]. Exists only so the OpenAPI spec can\ndescribe the multipart shape (same documentation-only role as\n`crate::routes::actors::AvatarRequestBody`).",
+                "properties": {
+                  "files": {
+                    "contentMediaType": "application/octet-stream",
+                    "description": "Up to `MAX_ATTACHMENTS_PER_CONTENT` (4) image files. Accepted\nformats: jpeg, png, gif, webp (detected by magic bytes; the\nextension and `Content-Type` are not trusted).",
+                    "items": {
+                      "items": {
+                        "format": "int32",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "type": "array"
+                  },
+                  "payload": {
+                    "$ref": "#/components/schemas/CreatePostRequest",
+                    "description": "The same JSON body the `application/json` case would carry, as a\nsingle multipart part."
+                  }
+                },
+                "required": [
+                  "payload",
+                  "files"
+                ],
+                "type": "object"
               }
             }
           },
@@ -6215,7 +6224,7 @@
         ]
       },
       "post": {
-        "description": "If `parent_id` is omitted, the comment becomes a direct child of the post; if given, it replies to that comment.",
+        "description": "If `parent_id` is omitted, the comment becomes a direct child of the post; if given, it replies to that comment. Accepts EITHER `application/json` (no images) OR `multipart/form-data` (the same JSON as a `payload` part, plus up to 4 `files` parts).",
         "operationId": "create_comment",
         "parameters": [
           {
@@ -6233,6 +6242,35 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CreateCommentRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "description": "A documentation-only schema for the `multipart/form-data` alternative to\n[`CreateCommentRequest`] — see `crate::routes::posts::\nCreatePostMultipartBody`'s doc for why this struct exists and is never\ninstantiated.",
+                "properties": {
+                  "files": {
+                    "contentMediaType": "application/octet-stream",
+                    "description": "Up to `MAX_ATTACHMENTS_PER_CONTENT` (4) image files. Accepted\nformats: jpeg, png, gif, webp (detected by magic bytes; the\nextension and `Content-Type` are not trusted).",
+                    "items": {
+                      "items": {
+                        "format": "int32",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "type": "array"
+                  },
+                  "payload": {
+                    "$ref": "#/components/schemas/CreateCommentRequest",
+                    "description": "The same JSON body the `application/json` case would carry, as a\nsingle multipart part."
+                  }
+                },
+                "required": [
+                  "payload",
+                  "files"
+                ],
+                "type": "object"
               }
             }
           },
@@ -6899,229 +6937,6 @@
         ]
       }
     },
-    "/uploads": {
-      "post": {
-        "description": "Expects a `file` field in the multipart body. The response's `id` is passed to `POST /posts`/`POST /posts/{id}/comments`'s `attachment_ids` field.",
-        "operationId": "create_upload",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "description": "A documentation-only schema for the `POST /uploads` request body.\n\nThe real parsing is done by hand with `axum::extract::Multipart` (see\n`create_upload`) — this struct is never instantiated; it exists only so\nthe OpenAPI spec can describe the `multipart/form-data` body.",
-                "properties": {
-                  "file": {
-                    "contentMediaType": "application/octet-stream",
-                    "description": "The image file to upload. Accepted formats: jpeg, png, gif, webp\n(detected by magic bytes; the extension and `Content-Type` are not\ntrusted).",
-                    "items": {
-                      "format": "int32",
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "file"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UploadResponse"
-                }
-              }
-            },
-            "description": "Upload accepted, with its public URL"
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Request failed validation"
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "No credentials were presented, or the API key is invalid"
-          },
-          "415": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Uploaded file was rejected (type, size, or content validation)"
-          },
-          "429": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Rate limit exceeded",
-            "headers": {
-              "retry-after": {
-                "description": "Seconds to wait before retrying",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-limit": {
-                "description": "Requests allowed per window for this scope",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-remaining": {
-                "description": "Requests remaining in the current window",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-reset": {
-                "description": "Seconds until the window resets",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ],
-        "summary": "Upload a file",
-        "tags": [
-          "uploads"
-        ]
-      }
-    },
-    "/uploads/{id}": {
-      "delete": {
-        "operationId": "delete_upload",
-        "parameters": [
-          {
-            "description": "The upload's external id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Deleted"
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "No credentials were presented, or the API key is invalid"
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Authenticated, but not authorized for this action"
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Resource not found"
-          },
-          "429": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Rate limit exceeded",
-            "headers": {
-              "retry-after": {
-                "description": "Seconds to wait before retrying",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-limit": {
-                "description": "Requests allowed per window for this scope",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-remaining": {
-                "description": "Requests remaining in the current window",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-reset": {
-                "description": "Seconds until the window resets",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ],
-        "summary": "Delete an upload",
-        "tags": [
-          "uploads"
-        ]
-      }
-    },
     "/version": {
       "get": {
         "operationId": "version",
@@ -7184,10 +6999,6 @@
     {
       "description": "Inbox (`GET /me/inbox`) and read-state marking",
       "name": "notifications"
-    },
-    {
-      "description": "File upload and deletion",
-      "name": "uploads"
     },
     {
       "description": "Report creation (public)",

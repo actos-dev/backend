@@ -5,12 +5,40 @@
 //! yazma yollarındaki fan-out dahil).
 
 use actos_core::{
+    Storage,
     auth::{ActorRecord, ActorType},
-    comment, content,
+    comment,
+    config::StorageConfig,
+    content,
     cursor::{Cursor, SortKey},
+    id::IdCodec,
     interaction, moderation, notification,
 };
 use sqlx::PgPool;
+
+/// A `Storage`/`IdCodec` pair for tests that never carry attachments (every
+/// `seed_post`/`seed_comment` call in this file passes an empty file list) —
+/// `create_post`/`create_comment` need them structurally, but
+/// `attachment::create_for_content` returns before either is touched when
+/// there is nothing to upload, so pointing `Storage` at an unreachable
+/// address costs nothing (same pattern as `crates/actos-core/tests/
+/// attachment.rs`'s `test_storage`).
+#[allow(clippy::expect_used)]
+fn test_storage() -> Storage {
+    Storage::new(&StorageConfig {
+        endpoint: "http://127.0.0.1:1".to_owned(),
+        region: "us-east-1".to_owned(),
+        bucket: "test-bucket".to_owned(),
+        access_key: "test".to_owned(),
+        secret_key: "test".to_owned(),
+        public_base_url: "http://127.0.0.1:1/test-bucket".to_owned(),
+    })
+}
+
+#[allow(clippy::expect_used)]
+fn test_id_codec() -> IdCodec {
+    IdCodec::new("test-id-obfuscation-key-en-az-otuz-iki-karakter").expect("geçerli anahtar")
+}
 
 /// Kimlik doğrulama yolundan geçmeden bir actor satırı oluşturur (bkz.
 /// `crates/actos-core/tests/interaction.rs`'teki aynı isimli yardımcı
@@ -41,10 +69,50 @@ async fn seed_actor(pool: &PgPool, username: &str) -> ActorRecord {
 
 #[allow(clippy::expect_used)]
 async fn seed_post(pool: &PgPool, author: &ActorRecord) -> i64 {
-    content::create_post(pool, author, "başlık", "gövde", &[], &[])
-        .await
-        .expect("post oluşturulabilmeli")
-        .id
+    content::create_post(
+        pool,
+        &test_storage(),
+        &test_id_codec(),
+        author,
+        "başlık",
+        "gövde",
+        &[],
+        &[],
+        8 * 1024 * 1024,
+        i64::MAX,
+    )
+    .await
+    .expect("post oluşturulabilmeli")
+    .id
+}
+
+/// `comment::create_comment` çağrısını sarmalar — bu dosyadaki her yorum
+/// hiçbir dosya taşımıyor (bkz. [`test_storage`] üzerindeki gerekçe).
+/// Döndürdüğü iç `bigint` id, `Some(...)` içinde `parent_id` olarak
+/// yeniden kullanılabiliyor.
+#[allow(clippy::expect_used)]
+async fn seed_comment(
+    pool: &PgPool,
+    author: &ActorRecord,
+    post_id: i64,
+    parent_id: Option<i64>,
+    body: &str,
+) -> i64 {
+    comment::create_comment(
+        pool,
+        &test_storage(),
+        &test_id_codec(),
+        author,
+        post_id,
+        parent_id,
+        body,
+        &[],
+        8 * 1024 * 1024,
+        i64::MAX,
+    )
+    .await
+    .expect("yorum oluşturulabilmeli")
+    .id
 }
 
 /// Bir actor'ün gelen kutusundaki bildirim (kind, tetikleyen actor_id)
@@ -72,9 +140,7 @@ async fn posta_dogrudan_yorum_yalniz_kok_yazarina_bildirim_uretir(pool: PgPool) 
     let yorumcu = seed_actor(&pool, "fanout_yorumcu").await;
     let post = seed_post(&pool, &post_yazari).await;
 
-    comment::create_comment(&pool, &yorumcu, post, None, "ilk yorum", &[])
-        .await
-        .expect("yorum oluşturulabilmeli");
+    seed_comment(&pool, &yorumcu, post, None, "ilk yorum").await;
 
     let post_yazari_kutu = inbox_kinds(&pool, post_yazari.id).await;
     assert_eq!(
@@ -101,19 +167,13 @@ async fn derin_zincirde_yalniz_kok_ve_dogrudan_ebeveyn_bildirim_alir(pool: PgPoo
     let post = seed_post(&pool, &post_yazari).await;
 
     // A, post'a doğrudan yorum yapar.
-    let yorum_a = comment::create_comment(&pool, &a, post, None, "a yorumu", &[])
-        .await
-        .expect("a yorumu oluşturulabilmeli");
+    let yorum_a = seed_comment(&pool, &a, post, None, "a yorumu").await;
 
     // B, A'nın yorumuna yanıt verir.
-    let yorum_b = comment::create_comment(&pool, &b, post, Some(yorum_a.id), "b yaniti", &[])
-        .await
-        .expect("b yanıtı oluşturulabilmeli");
+    let yorum_b = seed_comment(&pool, &b, post, Some(yorum_a), "b yaniti").await;
 
     // C, B'nin yorumuna yanıt verir — bu, testin asıl odağı.
-    comment::create_comment(&pool, &c, post, Some(yorum_b.id), "c yaniti", &[])
-        .await
-        .expect("c yanıtı oluşturulabilmeli");
+    seed_comment(&pool, &c, post, Some(yorum_b), "c yaniti").await;
 
     // Post yazarı: HER üç yorumdan da comment_on_post bildirimi almalı
     // (kök yazarı her zaman bilgilendirilir).
@@ -155,25 +215,13 @@ async fn kok_ve_ebeveyn_ayni_actor_ise_tek_bildirim_gider(pool: PgPool) {
     let post = seed_post(&pool, &post_yazari).await;
 
     // Post yazarının KENDİSİ post'a bir yorum açıyor.
-    let kendi_yorumu =
-        comment::create_comment(&pool, &post_yazari, post, None, "kendi yorumum", &[])
-            .await
-            .expect("kendi yorumu oluşturulabilmeli");
+    let kendi_yorumu = seed_comment(&pool, &post_yazari, post, None, "kendi yorumum").await;
 
     // Kendi yorumuna karşı kendine bildirim gitmemeli (aşağıdaki testte
     // ayrıca doğrulanıyor), burada önemli olan bir sonraki adım.
     // Başka bir actor o yoruma yanıt veriyor: kök yazarı == ebeveyn yazarı
     // (ikisi de post_yazari).
-    comment::create_comment(
-        &pool,
-        &yanitlayan,
-        post,
-        Some(kendi_yorumu.id),
-        "yanit",
-        &[],
-    )
-    .await
-    .expect("yanıt oluşturulabilmeli");
+    seed_comment(&pool, &yanitlayan, post, Some(kendi_yorumu), "yanit").await;
 
     let kutu = inbox_kinds(&pool, post_yazari.id).await;
     assert_eq!(
@@ -190,9 +238,7 @@ async fn kendi_postuna_kendi_yorumun_bildirim_uretmez(pool: PgPool) {
     let actor = seed_actor(&pool, "kendine_yorum").await;
     let post = seed_post(&pool, &actor).await;
 
-    comment::create_comment(&pool, &actor, post, None, "kendi yorumum", &[])
-        .await
-        .expect("yorum oluşturulabilmeli");
+    seed_comment(&pool, &actor, post, None, "kendi yorumum").await;
 
     assert!(
         inbox_kinds(&pool, actor.id).await.is_empty(),
@@ -356,15 +402,9 @@ async fn toplu_okundu_isaretleme_cursor_ve_idempotentlik(pool: PgPool) {
     let post = seed_post(&pool, &alici).await;
 
     // Üç ayrı comment_on_post bildirimi üret (en yeniden eskiye: c, b, a).
-    comment::create_comment(&pool, &a, post, None, "a", &[])
-        .await
-        .expect("a yorumu");
-    comment::create_comment(&pool, &b, post, None, "b", &[])
-        .await
-        .expect("b yorumu");
-    comment::create_comment(&pool, &c, post, None, "c", &[])
-        .await
-        .expect("c yorumu");
+    seed_comment(&pool, &a, post, None, "a").await;
+    seed_comment(&pool, &b, post, None, "b").await;
+    seed_comment(&pool, &c, post, None, "c").await;
 
     assert_eq!(
         notification::count_unread(&pool, alici.id).await.unwrap(),
@@ -421,12 +461,8 @@ async fn unread_filtresi_ve_sayaci_dogru(pool: PgPool) {
     let b = seed_actor(&pool, "unread_b").await;
     let post = seed_post(&pool, &alici).await;
 
-    comment::create_comment(&pool, &a, post, None, "a", &[])
-        .await
-        .expect("a yorumu");
-    comment::create_comment(&pool, &b, post, None, "b", &[])
-        .await
-        .expect("b yorumu");
+    seed_comment(&pool, &a, post, None, "a").await;
+    seed_comment(&pool, &b, post, None, "b").await;
 
     assert_eq!(
         notification::count_unread(&pool, alici.id).await.unwrap(),

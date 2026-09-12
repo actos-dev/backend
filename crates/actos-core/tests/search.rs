@@ -6,13 +6,36 @@
 //! tags_api.rs` ile aynı iş bölümü).
 
 use actos_core::{
+    Storage,
     auth::{self, ActorType},
     comment,
+    config::StorageConfig,
     content::{self, ContentType},
     cursor::Cursor,
+    id::IdCodec,
     search,
 };
 use sqlx::PgPool;
+
+/// See the identical helper (and its rationale) in `crates/actos-core/tests/
+/// notification.rs` — neither `seed_post` nor `seed_comment` here ever
+/// carries a file.
+#[allow(clippy::expect_used)]
+fn test_storage() -> Storage {
+    Storage::new(&StorageConfig {
+        endpoint: "http://127.0.0.1:1".to_owned(),
+        region: "us-east-1".to_owned(),
+        bucket: "test-bucket".to_owned(),
+        access_key: "test".to_owned(),
+        secret_key: "test".to_owned(),
+        public_base_url: "http://127.0.0.1:1/test-bucket".to_owned(),
+    })
+}
+
+#[allow(clippy::expect_used)]
+fn test_id_codec() -> IdCodec {
+    IdCodec::new("test-id-obfuscation-key-en-az-otuz-iki-karakter").expect("geçerli anahtar")
+}
 
 /// Bir actor oluşturur, döner: `ActorRecord`.
 #[allow(clippy::expect_used)]
@@ -26,19 +49,41 @@ async fn seed_actor(pool: &PgPool, username: &str) -> auth::ActorRecord {
 /// Bir post oluşturur, döner: iç `bigint` id.
 #[allow(clippy::expect_used)]
 async fn seed_post(pool: &PgPool, author: &auth::ActorRecord, title: &str, body: &str) -> i64 {
-    content::create_post(pool, author, title, body, &[], &[])
-        .await
-        .expect("post oluşturulabilmeli")
-        .id
+    content::create_post(
+        pool,
+        &test_storage(),
+        &test_id_codec(),
+        author,
+        title,
+        body,
+        &[],
+        &[],
+        8 * 1024 * 1024,
+        i64::MAX,
+    )
+    .await
+    .expect("post oluşturulabilmeli")
+    .id
 }
 
 /// Bir yorum oluşturur (verilen post'un doğrudan çocuğu), döner: iç id.
 #[allow(clippy::expect_used)]
 async fn seed_comment(pool: &PgPool, author: &auth::ActorRecord, post_id: i64, body: &str) -> i64 {
-    comment::create_comment(pool, author, post_id, None, body, &[])
-        .await
-        .expect("yorum oluşturulabilmeli")
-        .id
+    comment::create_comment(
+        pool,
+        &test_storage(),
+        &test_id_codec(),
+        author,
+        post_id,
+        None,
+        body,
+        &[],
+        8 * 1024 * 1024,
+        i64::MAX,
+    )
+    .await
+    .expect("yorum oluşturulabilmeli")
+    .id
 }
 
 // --- Türkçe aksan-duyarsızlığı -------------------------------------------

@@ -72,13 +72,11 @@ REDIS_URL=redis://127.0.0.1:3102
 # gibi (dev secret'ları, üretimde kullanılmaz).
 TAG_CLEANUP_INTERVAL_SECS=0
 HOT_SCORE_INTERVAL_SECS=0
-ORPHAN_CLEANUP_INTERVAL_SECS=0
 ```
 
-Arka plan işleri (`tag_cleanup`, `hot_score` yenileme, `orphan_cleanup`)
-kapatıldı — 30 saniyelik bir yük testi sırasında araya girip gürültü
-katmalarının bir faydası yok, `hot_score` zaten veri yüklenirken
-hesaplanmıştı.
+Arka plan işleri (`tag_cleanup`, `hot_score` yenileme) kapatıldı — 30
+saniyelik bir yük testi sırasında araya girip gürültü katmalarının bir
+faydası yok, `hot_score` zaten veri yüklenirken hesaplanmıştı.
 
 ### Hız sınırlama — neden yükseltildi, nasıl
 
@@ -392,7 +390,7 @@ cargo build --release -p actos-api --bin actos-api
 export DATABASE_URL=postgres://actos:actos_dev_password@127.0.0.1:3101/actos_explain
 export REDIS_URL=redis://127.0.0.1:3102
 # ... S3/MinIO ve secret'lar .env.example'daki gibi ...
-export TAG_CLEANUP_INTERVAL_SECS=0 HOT_SCORE_INTERVAL_SECS=0 ORPHAN_CLEANUP_INTERVAL_SECS=0
+export TAG_CLEANUP_INTERVAL_SECS=0 HOT_SCORE_INTERVAL_SECS=0
 
 # 3. Yalnızca bu shell için hız sınırlarını yükselt (kalıcı DEĞİL —
 #    deny.toml/config.rs varsayılanları değişmiyor):

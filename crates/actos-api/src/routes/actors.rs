@@ -270,8 +270,9 @@ async fn upload_avatar(
         ApiError::new(Error::Validation(format!("could not read multipart: {e}")))
             .with_request_id(&headers)
     })? {
-        // Aynı desen: `crate::routes::uploads::create_upload` — yalnızca
-        // beklenen alan okunuyor, diğerleri sessizce atlanıyor.
+        // Yalnızca beklenen alan okunuyor, diğerleri sessizce atlanıyor
+        // (istemci kütüphaneleri sık sık fazladan alan gönderiyor) — aynı
+        // politika `crate::routes::posts::extract_content_payload`'da da.
         if alan.name() != Some(AVATAR_FILE_FIELD) {
             continue;
         }
@@ -320,8 +321,8 @@ async fn upload_avatar(
 const AVATAR_FILE_FIELD: &str = "file";
 
 /// A documentation-only schema for the `POST /actors/me/avatar` request
-/// body — same pattern as `crate::routes::uploads::UploadRequestBody`, see
-/// its doc for why this struct is never instantiated.
+/// body — same pattern as `crate::routes::posts::CreatePostMultipartBody`,
+/// see its doc for why this struct is never instantiated.
 #[derive(utoipa::ToSchema)]
 #[allow(dead_code)]
 struct AvatarRequestBody {

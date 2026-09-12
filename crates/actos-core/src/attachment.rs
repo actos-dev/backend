@@ -1,22 +1,24 @@
-//! Yüklenen dosyalar: depolamaya yazma (aktör başına toplam depolama
-//! kotasına tabi — Faz 18.A, bkz. NOTES.md §9.8 ve [`create_attachment`]),
-//! içeriğe bağlama, silme ve bağlanmamış yüklemeleri toplayan periyodik iş.
+//! Attachments: images that travel with a post or comment, created in the
+//! same transaction as the content they belong to.
 //!
-//! Görselin doğrulanması ve normalize edilmesi burada değil,
-//! [`crate::media`]'da; bu modül onun çıktısını alıp depolama ile
-//! veritabanını birlikte yönetiyor.
+//! **There is no standalone upload any more** (see REFACTOR.md §4: "this is
+//! not an image host"). Before this unit, `POST /uploads` created a row with
+//! `content_id IS NULL` and a later `POST /posts`/`POST /posts/{id}/comments`
+//! call attached it via a separate `attach_to_content` step — which meant an
+//! attachment could sit unattached forever, hence the orphan concept
+//! (`cleanup_orphaned`, its advisory lock, its age threshold) that used to
+//! live here. Both are gone: [`create_for_content`] is the only way an
+//! attachment row is ever created, it always receives the `content_id` of
+//! the content it belongs to at INSERT time, and it is always called from
+//! inside the same database transaction as that content's own INSERT (see
+//! `crate::content::create_post` / `crate::comment::create_comment`). A row
+//! in this table with a NULL `content_id` is no longer a representable
+//! state — `migrations/0027_attachments_content_id_not_null.up.sql` makes
+//! the schema say so.
 //!
-//! ## Yükleme ile bağlama neden iki ayrı adım
-//!
-//! `migrations/0008_attachments.up.sql`'in kararı: `content_id` `NULL`
-//! olabiliyor. İstemci önce dosyayı yükleyip bir id alıyor, sonra post'u
-//! o id'lerle oluşturuyor. Alternatif (post ile dosyayı tek multipart
-//! istekte göndermek) bir ajanı, gövdesini kurmadan önce dosyayı hazır
-//! etmeye zorlardı ve yeniden denemeyi pahalılaştırırdı: post oluşturma
-//! başarısız olursa dosya da baştan yüklenmek zorunda kalırdı.
-//!
-//! Bedeli, hiçbir içeriğe bağlanmayan yüklemeler — onları
-//! [`cleanup_orphaned`] topluyor.
+//! Validating and normalizing the uploaded bytes is not this module's job —
+//! that's [`crate::media`]; this module takes its output and drives storage
+//! plus the database row together.
 //!
 //! ## `object_key` neden kullanıcı girdisi içermiyor
 //!
@@ -29,7 +31,6 @@
 //! public-read bir bucket üzerinden URL olarak görünüyor, iç id'yi oraya
 //! yazmak `crate::id`'nin bütün amacını boşa çıkarırdı.
 
-use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
@@ -47,40 +48,33 @@ use crate::{
 /// uygulayarak URL'yi kendisi üretebilir.
 const THUMBNAIL_SUFFIX: &str = ".thumb.webp";
 
-/// [`cleanup_orphaned`]'in varsayılan yaş eşiği: bu kadar süredir hiçbir
-/// içeriğe bağlanmamış yüklemeler siliniyor.
+/// Maximum number of image files a single post or comment may carry (see
+/// REFACTOR.md §4, "Remaining caps to set").
 ///
-/// 24 saat (PLAN.md Faz 13): bir istemcinin dosyayı yükleyip post'u
-/// oluşturması arasında geçmesi makul olan sürenin çok üstünde, yani
-/// gerçekten kullanılacak bir dosyayı yanlışlıkla silme riski yok.
-pub const ORPHAN_MAX_AGE_HOURS: i64 = 24;
-
-/// [`cleanup_orphaned`]'in PostgreSQL advisory lock anahtarı.
-///
-/// `crate::tag` ve `crate::feed`'inkilerden farklı — üç iş birbirini
-/// bekletmemeli.
-const CLEANUP_ADVISORY_LOCK_KEY: i64 = 0x0AC7_0513;
-
-/// Tek turda silinecek azami yetim yükleme sayısı.
-///
-/// Her satır için depolamaya iki ağ çağrısı gidiyor (asıl dosya +
-/// önizleme); sınırsız bir tur, uzun süre kapalı kalmış bir dağıtımda
-/// dakikalarca sürebilirdi. Kalanlar bir sonraki turda toplanıyor.
-const CLEANUP_BATCH: i64 = 500;
+/// Chosen together with the 34 MiB `DefaultBodyLimit` override on
+/// `POST /posts`/`POST /posts/{id}/comments` (`crate::routes::posts`/
+/// `crate::routes::comments` in `actos-api`): 4 files at the default 8 MiB
+/// `max_upload_bytes` each is already 32 MiB, and the remaining headroom is
+/// there for the JSON `payload` part plus multipart boundary/header
+/// overhead — not for a fifth file.
+pub const MAX_ATTACHMENTS_PER_CONTENT: usize = 4;
 
 /// Bir yükleme kaydı.
 #[derive(Debug, Clone)]
 pub struct Attachment {
     pub id: i64,
     pub actor_id: i64,
-    pub content_id: Option<i64>,
+    /// The content this attachment belongs to. **Never `NULL`** — see the
+    /// module documentation; every row is born already pointing at its
+    /// content.
+    pub content_id: i64,
     pub object_key: String,
     pub byte_size: i64,
     pub mime_type: String,
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub checksum_sha256: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Attachment {
@@ -91,174 +85,185 @@ impl Attachment {
     }
 }
 
-/// `POST /uploads`: ham baytları doğrula, normalize et, **depolama kotasını
-/// kontrol et**, depolamaya yaz, kaydı oluştur.
+/// Creates every attachment of a freshly-created post or comment, **inside
+/// the caller's transaction** — called from `crate::content::create_post`
+/// and `crate::comment::create_comment`, never on its own.
 ///
-/// **Sıra bilinçli:** önce depolamaya yazılıyor, sonra veritabanı satırı
-/// ekleniyor. Ters sırada, veritabanı satırı yazılıp depolama yüklemesi
-/// başarısız olursa hiçbir nesnesi olmayan bir kayıt kalırdı ve o kayda
-/// bağlanan bir post kırık bir görsel gösterirdi. Bu sırada ise en kötü
-/// ihtimalle sahipsiz bir nesne kalıyor — görünmez, zararsız ve
-/// [`cleanup_orphaned`]'in tarayabileceği bir çöp.
+/// **All-or-nothing.** Every file is validated and normalized (format,
+/// dimensions, decompression-bomb ceiling — see [`media::process_image`])
+/// and the whole batch is quota-checked *before any of them touches
+/// storage*. So if file 3 of 4 fails validation, files 1 and 2 were never
+/// uploaded — there is nothing to clean up, and returning the error here
+/// lets the caller's transaction roll back the content row too, so nothing
+/// is written at all. The one thing this can't fully protect against is a
+/// `storage.put_object` failure partway through the upload loop itself
+/// (network hiccup, bucket unreachable): by then one or more EARLIER files
+/// in the batch have already reached S3, and since the caller's transaction
+/// still rolls back (the database side is fully undone), those objects are
+/// left behind as invisible garbage. That is not a new risk this function
+/// introduces — it is the exact same "upload before insert, worst case an
+/// unreferenced object" trade-off the old single-file `create_attachment`
+/// already made, just now reachable from a multi-file batch instead of one
+/// call at a time.
 ///
-/// ## Storage quota (see NOTES.md §9.8)
+/// **Storage quota** (flat per-account cap, [`crate::config::
+/// StorageQuotaConfig`]) is checked ONCE for the whole batch: `current
+/// usage (a live `SUM`, see `total_storage_bytes`) + the combined size of
+/// every file in this request`, against `quota_bytes`. Checking per file
+/// would mean partially accepting a multi-image post — this request is one
+/// unit, so the check is too. This is still the same live-`SUM`-before-write
+/// race this module has always accepted (two concurrent requests can both
+/// pass the check and jointly overshoot the quota) — unchanged by this
+/// move, only relocated from a dedicated `POST /uploads` handler into the
+/// content-creation path.
 ///
-/// `quota_bytes` is the flat **total** byte limit applied by the caller
-/// (`actos-api::routes::uploads`) (see `crate::config::StorageQuotaConfig`).
-/// This module has no idea how the quota is determined — it just enforces
-/// the final number, exactly like `max_bytes` (the single-file limit)
-/// already does. The check is done via [`total_storage_bytes`], which
-/// reads `SUM(attachments.byte_size)` and adds the bytes this upload would
-/// contribute; **it wasn't turned into a counter column** — at this scale
-/// (hundreds/thousands of rows per actor, already bounded by the quota
-/// itself) a `SUM` query on every upload isn't a measurable cost, whereas
-/// a separate counter column would require manually guaranteeing its
-/// consistency (correct increment/decrement on every path, including
-/// delete/undo) with no payoff at this scale. If scale grows (at a
-/// threshold similar to `docs/query-plans.md`), this decision should be
-/// revisited.
+/// `files.len() > `[`MAX_ATTACHMENTS_PER_CONTENT`]` is rejected outright,
+/// before any file is even opened.
 ///
-/// Kontrol **normalize edilmiş** (WebP) boyut üzerinden, `media::
-/// process_image`'ın çıktısı hazır olduktan ama depolamaya hiç yazılmadan
-/// önce yapılıyor: (1) `attachments.byte_size`'ın kendisi bu değeri
-/// tutuyor, yani kota tam bu sütunun toplamıyla tutarlı olmalı — ham
-/// yükleme boyutuyla kontrol etseydik WebP sıkıştırması sonrası gerçek
-/// kullanım kotayla uyuşmayabilirdi; (2) normalize etme yerel/CPU-bağımlı
-/// (ağ çağrısı yok), reddedilecek bir yükleme için bu adımı çalıştırmanın
-/// maliyeti `storage.put_object`'in ağ üzerinden S3'e yazmasından çok daha
-/// ucuz — asıl pahalı adımdan (depolamaya yazma) önce durmak, sonrasında
-/// durup nesneyi geri silmekten (ki bu ek bir başarısızlık noktası daha
-/// açardı) daha basit ve daha az riskli.
+/// An empty `files` is the common case (a plain text post/comment) and is
+/// not an error — it returns `Ok(vec![])` immediately, without touching the
+/// quota or storage at all.
 ///
 /// # Errors
-/// Dosya doğrulamadan geçmezse [`Error::Validation`] /
-/// [`Error::UnsupportedMedia`] (bkz. [`crate::media::process_image`]);
-/// **kota aşılırsa [`Error::Validation`]** (bkz. aşağıdaki gerekçe — neden
-/// `Forbidden` değil); depolama erişilemezse [`Error::Internal`]; veritabanı
-/// hatası [`Error::Database`].
-///
-/// **Neden `Validation`, `Forbidden` değil:** bu kod tabanında `Forbidden`
-/// bir *yetki/sahiplik* ihlalini işaret ediyor (bkz. [`delete_attachment`] —
-/// "bu senin değil"), kotanın anlamı bu değil; actor'ün yükleme *yetkisi*
-/// hâlâ var, yalnızca şu anki *isteği* (bu boyutta, bu anda) mevcut
-/// durumuyla (kullanımı) çakışıyor. Bu tam olarak [`Error::Validation`]'ın
-/// `max_bytes`/görsel format kontrolleri için zaten kullandığı aile: girdi
-/// biçimsel olarak geçerli ama bağlamıyla (kota) birlikte kabul edilemez.
-/// `Conflict` (409) de düşünülebilirdi ama o bu kod tabanında "kaynağın şu
-/// anki durumu" (ör. zaten alınmış bir kullanıcı adı, bkz.
-/// `crate::auth::register`) için ayrılmış; burada çakışan kaynağın kendisi
-/// değil, isteğin hacmi — `400 Validation` daha doğru. Mesaj kullanıcının **ne kadar
-/// kullandığını ve sınırın ne olduğunu** taşıyor (bkz. aşağıdaki
-/// `format!`) — yalnızca "kota doldu" demek, istemcinin (özellikle bir
-/// ajanın, bu platformda birinci sınıf vatandaş) bir sonraki adımı
-/// planlamasına (silmeli mi, ne kadar yer açmalı) yetmezdi.
-pub async fn create_attachment(
-    pool: &PgPool,
+/// More than [`MAX_ATTACHMENTS_PER_CONTENT`] files, a file that fails
+/// validation, or a batch that would exceed the quota:
+/// [`Error::Validation`] / [`Error::UnsupportedMedia`] (see
+/// [`media::process_image`]); storage unreachable: [`Error::Internal`];
+/// database error: [`Error::Database`].
+#[allow(clippy::too_many_arguments)]
+pub async fn create_for_content(
+    tx: &mut PgConnection,
     storage: &Storage,
     id_codec: &IdCodec,
     actor_id: i64,
-    bytes: &[u8],
-    max_bytes: usize,
+    content_id: i64,
+    files: &[Vec<u8>],
+    max_file_bytes: usize,
     quota_bytes: i64,
-) -> Result<Attachment> {
-    let islenmis: ProcessedImage = media::process_image(bytes, max_bytes)?;
+) -> Result<Vec<Attachment>> {
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let object_key = object_key_uret(id_codec, actor_id)?;
-    let thumbnail_key = format!("{object_key}{THUMBNAIL_SUFFIX}");
-
-    // Checksum **normalize edilmiş** çıktının, yüklenen ham dosyanın değil:
-    // saklanan şey bu, bütünlük doğrulaması da bunun üzerinden anlamlı.
-    let checksum = sha256_hex(&islenmis.data);
-    let byte_size = i64::try_from(islenmis.data.len())
-        .map_err(|_| Error::Internal("file size does not fit in i64".to_owned()))?;
-
-    let mevcut_kullanim = total_storage_bytes(pool, actor_id).await?;
-    // Taşma savunması: `mevcut_kullanim` ve `byte_size` ayrı ayrı makul
-    // (SUM zaten var olan satırlardan, `byte_size` tek bir görselden) ama
-    // toplamları `i64::checked_add` olmadan teorik olarak taşabilir —
-    // `saturating_add` en kötü ihtimalle kotayı "kesin aşılmış" sayar,
-    // asla sessizce izin vermez.
-    if mevcut_kullanim.saturating_add(byte_size) > quota_bytes {
+    if files.len() > MAX_ATTACHMENTS_PER_CONTENT {
         return Err(Error::Validation(format!(
-            "storage quota exceeded: you are currently using {mevcut_kullanim} bytes, \
-             your quota limit is {quota_bytes} bytes, and this upload would add {byte_size} \
-             more bytes — you may need to delete some of your attachments first"
+            "too many files: {} given, at most {MAX_ATTACHMENTS_PER_CONTENT} allowed per post \
+             or comment",
+            files.len()
         )));
     }
 
-    storage
-        .put_object(&object_key, islenmis.data, ProcessedImage::mime_type())
-        .await?;
+    // Validate + normalize every file up front — see "All-or-nothing" above.
+    // Nothing has touched storage or the database yet at this point.
+    let processed: Vec<ProcessedImage> = files
+        .iter()
+        .map(|bytes| media::process_image(bytes, max_file_bytes))
+        .collect::<Result<Vec<_>>>()?;
 
-    // Önizlemenin başarısız olması yüklemeyi düşürmüyor: asıl dosya zaten
-    // yazıldı ve kayıt onun üzerinden anlamlı. Önizleme bir kolaylık.
-    if let Err(err) = storage
-        .put_object(
-            &thumbnail_key,
-            islenmis.thumbnail,
-            ProcessedImage::mime_type(),
-        )
-        .await
-    {
-        tracing::warn!(object_key = %object_key, error = %err, "önizleme yüklenemedi");
+    let batch_bytes: i64 = processed
+        .iter()
+        .map(|islenmis| i64::try_from(islenmis.data.len()).unwrap_or(i64::MAX))
+        .fold(0i64, i64::saturating_add);
+
+    let mevcut_kullanim = total_storage_bytes_tx(&mut *tx, actor_id).await?;
+    // Taşma savunması: bkz. eski `create_attachment` üzerindeki aynı
+    // gerekçe — `saturating_add` en kötü ihtimalle kotayı "kesin aşılmış"
+    // sayar, asla sessizce izin vermez.
+    if mevcut_kullanim.saturating_add(batch_bytes) > quota_bytes {
+        return Err(Error::Validation(format!(
+            "storage quota exceeded: you are currently using {mevcut_kullanim} bytes, your \
+             quota limit is {quota_bytes} bytes, and this request would add {batch_bytes} more \
+             bytes across {} file(s) — you may need to delete some content first",
+            processed.len()
+        )));
     }
 
-    let width = i32::try_from(islenmis.width).ok();
-    let height = i32::try_from(islenmis.height).ok();
+    let mut ekler = Vec::with_capacity(processed.len());
+    for islenmis in processed {
+        let object_key = object_key_uret(id_codec, actor_id)?;
+        let thumbnail_key = format!("{object_key}{THUMBNAIL_SUFFIX}");
 
-    let row = sqlx::query!(
-        r#"
-        INSERT INTO attachments
-            (actor_id, object_key, byte_size, mime_type, width, height, checksum_sha256)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, created_at
-        "#,
-        actor_id,
-        object_key,
-        byte_size,
-        ProcessedImage::mime_type(),
-        width,
-        height,
-        checksum,
-    )
-    .fetch_one(pool)
-    .await?;
+        // Checksum **normalize edilmiş** çıktının, yüklenen ham dosyanın
+        // değil: saklanan şey bu, bütünlük doğrulaması da bunun üzerinden
+        // anlamlı.
+        let checksum = sha256_hex(&islenmis.data);
+        let byte_size = i64::try_from(islenmis.data.len())
+            .map_err(|_| Error::Internal("file size does not fit in i64".to_owned()))?;
 
-    Ok(Attachment {
-        id: row.id,
-        actor_id,
-        content_id: None,
-        object_key,
-        byte_size,
-        mime_type: ProcessedImage::mime_type().to_owned(),
-        width,
-        height,
-        checksum_sha256: checksum,
-        created_at: row.created_at,
-    })
+        storage
+            .put_object(&object_key, islenmis.data, ProcessedImage::mime_type())
+            .await?;
+
+        // Önizlemenin başarısız olması yüklemeyi düşürmüyor: asıl dosya
+        // zaten yazıldı ve kayıt onun üzerinden anlamlı. Önizleme bir
+        // kolaylık.
+        if let Err(err) = storage
+            .put_object(
+                &thumbnail_key,
+                islenmis.thumbnail,
+                ProcessedImage::mime_type(),
+            )
+            .await
+        {
+            tracing::warn!(object_key = %object_key, error = %err, "önizleme yüklenemedi");
+        }
+
+        let width = i32::try_from(islenmis.width).ok();
+        let height = i32::try_from(islenmis.height).ok();
+
+        let row = sqlx::query!(
+            r#"
+            INSERT INTO attachments
+                (actor_id, content_id, object_key, byte_size, mime_type, width, height, checksum_sha256)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, created_at
+            "#,
+            actor_id,
+            content_id,
+            object_key,
+            byte_size,
+            ProcessedImage::mime_type(),
+            width,
+            height,
+            checksum,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+
+        ekler.push(Attachment {
+            id: row.id,
+            actor_id,
+            content_id,
+            object_key,
+            byte_size,
+            mime_type: ProcessedImage::mime_type().to_owned(),
+            width,
+            height,
+            checksum_sha256: checksum,
+            created_at: row.created_at,
+        });
+    }
+
+    Ok(ekler)
 }
 
-/// Bir actor'ün **tüm** yüklemelerinin toplam bayt kullanımı —
-/// [`create_attachment`]'ın kota kontrolünün ve `DELETE /uploads/{id}`'in
-/// (bkz. [`delete_attachment`]) kotayı serbest bırakmasının tek doğruluk
-/// kaynağı.
+/// Bir actor'ün **tüm** eklerinin toplam bayt kullanımı — [`create_for_content`]'in
+/// kota kontrolünün tek doğruluk kaynağı.
 ///
 /// **Silinen ekler otomatik düşer:** ayrı bir "azalt" adımı yok çünkü hiç
 /// gerekmiyor — `SUM(byte_size)`, sorgu her çalıştığında `attachments`
-/// tablosunun **o anki** satırlarını topluyor; [`delete_attachment`]'ın
-/// `DELETE FROM attachments` çağrısı satırı kaldırdığı an bir sonraki `SUM`
-/// onu zaten görmüyor. Bir sayaç kolonu olsaydı bu senkronu (silme yolunun
-/// hepsinde doğru azaltma) elle korumak gerekirdi; `SUM` bunu bedavaya
-/// veriyor (bkz. [`create_attachment`] üzerindeki "sayaç kolonuna
-/// çevrilmedi" gerekçesi).
+/// tablosunun **o anki** satırlarını topluyor.
 ///
-/// `COALESCE(..., 0)`: actor'ün hiç yüklemesi yoksa `SUM` SQL'de `NULL`
-/// döner (boş küme üzerinde toplam tanımsız) — `0`'a çeviriyoruz ki
-/// çağıranın `Option` ile uğraşmasına gerek kalmasın, "kullanım yok" ile
-/// "kullanım sıfır bayt" burada eşdeğer. `::bigint` cast'i sqlx'in `SUM`
+/// `COALESCE(..., 0)`: actor'ün hiç eki yoksa `SUM` SQL'de `NULL` döner
+/// (boş küme üzerinde toplam tanımsız) — `0`'a çeviriyoruz ki çağıranın
+/// `Option` ile uğraşmasına gerek kalmasın. `::bigint` cast'i sqlx'in `SUM`
 /// çıktısını (Postgres'te `numeric`, `byte_size` `bigint` olsa bile)
-/// `i64`'e güvenle eşlemesi için — `crate::actor`'daki `total_score!`
-/// deseniyle aynı (bkz. `ProfileRow` sorgusu).
+/// `i64`'e güvenle eşlemesi için.
+///
+/// This pool-based variant is used by tests that want to observe usage
+/// outside of a transaction; [`create_for_content`] itself uses the
+/// transaction-scoped `total_storage_bytes_tx` below, so it sees the same
+/// connection's uncommitted state.
 ///
 /// # Errors
 /// Veritabanı hatası [`Error::Database`].
@@ -272,6 +277,26 @@ pub async fn total_storage_bytes(pool: &PgPool, actor_id: i64) -> Result<i64> {
         actor_id,
     )
     .fetch_one(pool)
+    .await?;
+
+    Ok(toplam)
+}
+
+/// [`total_storage_bytes`]'in transaction içinde çalışan hâli — aynı sorgu,
+/// yalnızca yürütücü (`executor`) farklı. sqlx'in `PgPool`/`&mut
+/// PgConnection` için ayrı `Executor` implementasyonları olduğu için tek bir
+/// generic yerine burada bilerek küçük bir kopya tutuluyor (bkz.
+/// [`create_for_content`] — tek çağıran).
+async fn total_storage_bytes_tx(tx: &mut PgConnection, actor_id: i64) -> Result<i64> {
+    let toplam = sqlx::query_scalar!(
+        r#"
+        SELECT COALESCE(SUM(byte_size), 0)::bigint AS "toplam!"
+        FROM attachments
+        WHERE actor_id = $1
+        "#,
+        actor_id,
+    )
+    .fetch_one(tx)
     .await?;
 
     Ok(toplam)
@@ -302,58 +327,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Yüklemeleri bir içeriğe bağlar.
-///
-/// **Aynı transaction'da çağrılmalı** (post/yorum oluşturma ile birlikte):
-/// içerik yazılıp ekler bağlanmadan bir hata olursa, eklerin yetim kalması
-/// yerine bütün işlem geri alınmalı.
-///
-/// Yalnızca çağıranın **kendi** ve **henüz bağlanmamış** yüklemeleri
-/// bağlanabilir. Başkasının yüklemesini kendi post'una iliştirmek ya da bir
-/// dosyayı iki içeriğe birden bağlamak `WHERE` koşuluyla engelleniyor; satır
-/// sayısı tutmazsa hata dönüyor — sessizce daha az ek bağlamak, istemcinin
-/// gönderdiğinden farklı bir post yaratmak olurdu.
-///
-/// # Errors
-/// İstenen eklerden biri yoksa, başkasına aitse ya da zaten bağlıysa
-/// [`Error::Validation`]; veritabanı hatası [`Error::Database`].
-pub async fn attach_to_content(
-    tx: &mut PgConnection,
-    content_id: i64,
-    actor_id: i64,
-    attachment_ids: &[i64],
-) -> Result<()> {
-    if attachment_ids.is_empty() {
-        return Ok(());
-    }
-
-    let sonuc = sqlx::query!(
-        r#"
-        UPDATE attachments
-        SET content_id = $1
-        WHERE id = ANY($2::bigint[])
-          AND actor_id = $3
-          AND content_id IS NULL
-        "#,
-        content_id,
-        attachment_ids,
-        actor_id,
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    let beklenen = u64::try_from(attachment_ids.len()).unwrap_or(u64::MAX);
-    if sonuc.rows_affected() != beklenen {
-        return Err(Error::Validation(
-            "one of the attachments was not found, does not belong to you, or is already \
-             attached to a content item"
-                .to_owned(),
-        ));
-    }
-
-    Ok(())
-}
-
 /// Bir içeriğe bağlı ekleri döner.
 ///
 /// # Errors
@@ -374,147 +347,6 @@ pub async fn list_for_content(pool: &PgPool, content_id: i64) -> Result<Vec<Atta
     .await?;
 
     Ok(rows)
-}
-
-/// `DELETE /uploads/{id}`: yalnızca sahibi.
-///
-/// **Sıra:** önce veritabanı satırı siliniyor, sonra depolamadaki nesne.
-/// [`create_attachment`]'ın tersi ve aynı gerekçeyle: aradaki bir hatada
-/// kalan şey sahipsiz bir nesne olsun (görünmez, temizlenebilir), hiçbir
-/// nesnesi olmayan bir kayıt değil (kırık görsel gösterirdi).
-///
-/// # Errors
-/// Ek yoksa [`Error::NotFound`]; çağıranın değilse [`Error::Forbidden`];
-/// veritabanı hatası [`Error::Database`].
-pub async fn delete_attachment(
-    pool: &PgPool,
-    storage: &Storage,
-    id: i64,
-    actor_id: i64,
-) -> Result<()> {
-    let kayit = sqlx::query!(
-        r#"SELECT actor_id, object_key FROM attachments WHERE id = $1"#,
-        id,
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or(Error::NotFound("attachment"))?;
-
-    if kayit.actor_id != actor_id {
-        return Err(Error::Forbidden);
-    }
-
-    sqlx::query!(r#"DELETE FROM attachments WHERE id = $1"#, id)
-        .execute(pool)
-        .await?;
-
-    nesneleri_sil(storage, &kayit.object_key).await;
-
-    Ok(())
-}
-
-/// Bir ekin asıl dosyasını ve önizlemesini depolamadan siler.
-///
-/// Hata **yutuluyor, loglanıyor**: veritabanı satırı zaten gitti, çağıranın
-/// işlemi başarılı sayılmalı. Kalan nesne görünmez bir çöp ve S3'te var
-/// olmayan bir anahtarı silmek zaten başarılı sayıldığı için tekrar denemek
-/// de güvenli.
-async fn nesneleri_sil(storage: &Storage, object_key: &str) {
-    if let Err(err) = storage.delete_object(object_key).await {
-        tracing::warn!(object_key = %object_key, error = %err, "nesne silinemedi");
-    }
-    let thumb = format!("{object_key}{THUMBNAIL_SUFFIX}");
-    if let Err(err) = storage.delete_object(&thumb).await {
-        tracing::warn!(object_key = %thumb, error = %err, "önizleme silinemedi");
-    }
-}
-
-/// [`ORPHAN_MAX_AGE_HOURS`] saatten uzun süredir hiçbir içeriğe bağlanmamış
-/// yüklemeleri siler; silinen sayıyı döner.
-///
-/// `crate::tag::cleanup_unused` ve `crate::feed::recompute_hot_scores` ile
-/// aynı advisory lock deseni, ayrı anahtarla.
-///
-/// `idx_attachments_orphaned` (kısmi index, `WHERE content_id IS NULL`)
-/// tam bu sorgu için var — bkz. `migrations/0008_attachments.up.sql`.
-///
-/// **No more avatar exclusion here.** Earlier this query carried a `NOT
-/// EXISTS (... actors.avatar_object_key ...)` guard, because an avatar's
-/// bookkeeping row in this table never got a `content_id` and would
-/// otherwise look like an ordinary orphan. Avatars no longer create a row
-/// in `attachments` at all (see `crate::avatar` — `POST`/`DELETE
-/// /actors/me/avatar` write `actors.avatar_object_key` directly and never
-/// touch this table), so there is nothing left for the guard to protect
-/// going forward. The bookkeeping rows for avatars that existed before this
-/// change were removed in `migrations/0026_drop_avatar_attachments.up.sql`
-/// — **that migration must ship before this guard's removal reaches
-/// production**, or every one of those old rows would look like a genuine
-/// orphan to this query and get its S3 object deleted along with it. See
-/// that migration's comment for the full reasoning.
-///
-/// # Errors
-/// Veritabanı hatası [`Error::Database`].
-pub async fn cleanup_orphaned(pool: &PgPool, storage: &Storage) -> Result<u64> {
-    let mut conn = pool.acquire().await?;
-
-    let locked = sqlx::query_scalar!(
-        r#"SELECT pg_try_advisory_lock($1) AS "locked!""#,
-        CLEANUP_ADVISORY_LOCK_KEY,
-    )
-    .fetch_one(&mut *conn)
-    .await?;
-
-    if !locked {
-        tracing::debug!("yetim yükleme temizliği başka bir instance'da çalışıyor, tur atlandı");
-        return Ok(0);
-    }
-
-    let esik = Utc::now() - Duration::hours(ORPHAN_MAX_AGE_HOURS);
-
-    // Satırlar `RETURNING` ile alınıyor: nesneleri de silmek için
-    // anahtarlara ihtiyaç var. Veritabanı önce temizleniyor (bkz.
-    // `delete_attachment`'taki aynı sıra gerekçesi).
-    let silinenler = sqlx::query!(
-        r#"
-        DELETE FROM attachments
-        WHERE id IN (
-            SELECT attachments.id
-            FROM attachments
-            WHERE attachments.content_id IS NULL
-              AND attachments.created_at < $1
-            ORDER BY attachments.created_at
-            LIMIT $2
-        )
-        RETURNING object_key
-        "#,
-        esik,
-        CLEANUP_BATCH,
-    )
-    .fetch_all(&mut *conn)
-    .await;
-
-    if let Err(err) = sqlx::query_scalar!(
-        r#"SELECT pg_advisory_unlock($1) AS "unlocked!""#,
-        CLEANUP_ADVISORY_LOCK_KEY,
-    )
-    .fetch_one(&mut *conn)
-    .await
-    {
-        tracing::warn!(error = %err, "yetim yükleme temizliği advisory lock'ı bırakılamadı");
-    }
-
-    let silinenler = silinenler?;
-
-    for satir in &silinenler {
-        nesneleri_sil(storage, &satir.object_key).await;
-    }
-
-    let sayi = u64::try_from(silinenler.len()).unwrap_or(u64::MAX);
-    if sayi > 0 {
-        tracing::info!(sayi, "bağlanmamış yüklemeler temizlendi");
-    }
-
-    Ok(sayi)
 }
 
 /// Eklerin herkese açık URL'leri.

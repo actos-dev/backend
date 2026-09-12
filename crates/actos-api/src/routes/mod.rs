@@ -127,7 +127,6 @@ pub mod notifications;
 pub mod posts;
 pub mod search;
 pub mod tags;
-pub mod uploads;
 
 use std::sync::Arc;
 
@@ -180,7 +179,6 @@ pub fn router(max_upload_bytes: usize) -> Router<AppState> {
         .merge(interactions::router())
         .merge(notifications::router())
         .merge(feed::router())
-        .merge(uploads::router())
         .merge(admin::router())
         .split_for_parts();
 

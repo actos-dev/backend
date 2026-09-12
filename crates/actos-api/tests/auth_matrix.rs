@@ -20,13 +20,13 @@
 //! Kurulum yardımcıları `tests/admin_api.rs` ile aynı desen — ayrı bir
 //! entegrasyon test binary'si olduğu için (Rust her `tests/*.rs` dosyasını
 //! bağımsız derler) paylaşılan bir modül olmadan tekrar tanımlanıyor.
-//! Yükleme (`/uploads`) testleri gerçek MinIO'ya bağlanıyor (`127.0.0.1:3103`,
-//! bkz. `test_config` — `.env`'teki `S3_*` değerleriyle birebir aynı),
-//! diğer bütün testler `admin_api.rs`'teki gibi erişilemez (`127.0.0.1:1`)
-//! bir depolama uç noktası kullanabilirdi ama tek bir `test_config` tutmak
-//! (ikisi arasında geçiş yapmamak) daha basit — depolamaya hiç dokunmayan
-//! testler için bu ayarın bir maliyeti yok (`Storage::new` ağa hiç
-//! dokunmuyor, yalnızca bir istemci kurar).
+//! Avatar yükleme (`POST /actors/me/avatar`) testleri gerçek MinIO'ya
+//! bağlanıyor (`127.0.0.1:3103`, bkz. `test_config` — `.env`'teki `S3_*`
+//! değerleriyle birebir aynı), diğer bütün testler `admin_api.rs`'teki gibi
+//! erişilemez (`127.0.0.1:1`) bir depolama uç noktası kullanabilirdi ama tek
+//! bir `test_config` tutmak (ikisi arasında geçiş yapmamak) daha basit —
+//! depolamaya hiç dokunmayan testler için bu ayarın bir maliyeti yok
+//! (`Storage::new` ağa hiç dokunmuyor, yalnızca bir istemci kurar).
 //!
 //! ## Roller
 //!
@@ -57,22 +57,15 @@
 //!    ediyor, `roles` parametresi bile almıyor (`delete_post`/
 //!    `delete_comment`'in aksine). Yani bir moderatör başkasının postunu
 //!    **silebilir** ama **düzenleyemez** — düzenleme her zaman `403`.
-//! 3. **`DELETE /uploads/{id}`'de HİÇ moderatör/admin override yok**
-//!    (`actos_core::attachment::delete_attachment` yalnızca
-//!    `actor_id`'yi karşılaştırıyor, `roles` parametresi bile yok) — post/
-//!    yorum silmenin aksine, bir admin bile başkasının yüklemesini bu
-//!    uçtan silemez, her zaman `403`.
-//! 4. **`DELETE /auth/keys/{key_id}`'de başkasının key'i `403` değil `404`**
+//! 3. **`DELETE /auth/keys/{key_id}`'de başkasının key'i `403` değil `404`**
 //!    (`actos_core::auth::revoke_key`) — "biçim geçerli ama bu key sana ait
 //!    değil" ile "böyle bir key hiç yok" ayrımı saldırgana bilgi verirdi.
-//!    `DELETE /uploads/{id}`'nin aynı senaryoda `403` dönmesiyle
-//!    (`actos_core::attachment::delete_attachment`) doğrudan tezat.
-//! 5. **`PUT /contents/{id}/vote`'ta sahip kendi içeriğine oy veremez**
+//! 4. **`PUT /contents/{id}/vote`'ta sahip kendi içeriğine oy veremez**
 //!    (`403 FORBIDDEN`, `actos_core::interaction::set_vote`) — matristeki
 //!    tek satır burada "sahip" için `200` değil `403` bekliyor.
-//! 6. **`PUT /actors/{username}/follow`'ta sahip = kendini takip**, bu da
+//! 5. **`PUT /actors/{username}/follow`'ta sahip = kendini takip**, bu da
 //!    `204` değil `400 VALIDATION_FAILED` (`actos_core::interaction::follow`).
-//! 7. **`POST /auth/recover` kimlik doğrulama gerektirmiyor ama yine de
+//! 6. **`POST /auth/recover` kimlik doğrulama gerektirmiyor ama yine de
 //!    banı kontrol ediyor** (`actos_core::auth::recover` içinde,
 //!    extractor'dan bağımsız, elle bir `if found.is_banned` kontrolü) —
 //!    banlı bir hesap kendi kurtarma koduyla bile yeni key alamıyor.
@@ -116,7 +109,6 @@ fn test_config() -> Config {
             trusted_proxy_hops: 0,
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
-            orphan_cleanup_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -468,21 +460,6 @@ fn multipart_upload_req(
     builder.body(Body::from(body)).expect("istek kurulabilmeli")
 }
 
-#[allow(clippy::expect_used)]
-async fn seed_upload(router: &Router, api_key: &str) -> String {
-    let (status, body, _) = send(
-        router,
-        multipart_upload_req("POST", "/uploads", Some(api_key), &tiny_png()),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::CREATED,
-        "yükleme oluşturulamadı: {body}"
-    );
-    body["id"].as_str().expect("upload id").to_owned()
-}
-
 // ============================================================================
 // Kapsam: spec'ten türetilen operasyon listesiyle bu dosyanın tablosu
 // birebir eşleşmeli.
@@ -541,9 +518,6 @@ const MATRIX_OPERATIONS: &[(&str, &str)] = &[
     ("GET", "/tags"),
     ("GET", "/tags/search"),
     ("GET", "/tags/{name}/posts"),
-    // --- upload_uclarinin_yetki_matrisi ---
-    ("POST", "/uploads"),
-    ("DELETE", "/uploads/{id}"),
     // --- moderasyon_uclarinin_yetki_matrisi ---
     ("POST", "/reports"),
     ("GET", "/admin/reports"),
@@ -2145,102 +2119,6 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
             .await;
         }
     }
-}
-
-// ============================================================================
-// upload_uclarinin_yetki_matrisi — 2 operasyon
-// ============================================================================
-
-#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn upload_uclarinin_yetki_matrisi(pool: PgPool) {
-    let raw_pool = pool.clone();
-    let router = build_router(pool);
-
-    let (owner_id, owner_key) = seed_actor(&raw_pool, "am_upl_owner").await;
-    let (_, normal_key) = seed_actor(&raw_pool, "am_upl_normal").await;
-    let (mod_id, mod_key) = seed_actor(&raw_pool, "am_upl_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
-    let (admin_id, admin_key) = seed_actor(&raw_pool, "am_upl_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
-    let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_upl_banned").await;
-    banla(&raw_pool, owner_id, "am_upl_banned").await;
-    let _ = banned_id;
-
-    // --- POST /uploads ---
-    assert_code(
-        &router,
-        multipart_upload_req("POST", "/uploads", None, &tiny_png()),
-        StatusCode::UNAUTHORIZED,
-        "MISSING_CREDENTIALS",
-        "POST /uploads [anon]",
-    )
-    .await;
-    for (rol, token) in [
-        ("normal", &normal_key),
-        ("sahip", &owner_key),
-        ("moderator", &mod_key),
-        ("admin", &admin_key),
-    ] {
-        assert_status(
-            &router,
-            multipart_upload_req("POST", "/uploads", Some(token), &tiny_png()),
-            StatusCode::CREATED,
-            &format!("POST /uploads [{rol}]"),
-        )
-        .await;
-    }
-    assert_code(
-        &router,
-        multipart_upload_req("POST", "/uploads", Some(&banned_key), &tiny_png()),
-        StatusCode::FORBIDDEN,
-        "BANNED",
-        "POST /uploads [banli]",
-    )
-    .await;
-
-    // --- DELETE /uploads/{id} — HİÇ moderatör/admin override yok
-    // (incelik #3): admin bile başkasınınkini silemez. ---
-    let anon_hedef = seed_upload(&router, &owner_key).await;
-    assert_code(
-        &router,
-        empty_req("DELETE", &format!("/uploads/{anon_hedef}")),
-        StatusCode::UNAUTHORIZED,
-        "MISSING_CREDENTIALS",
-        "DELETE /uploads/{id} [anon]",
-    )
-    .await;
-    for (rol, token) in [
-        ("normal", &normal_key),
-        ("moderator", &mod_key),
-        ("admin", &admin_key),
-    ] {
-        let hedef = seed_upload(&router, &owner_key).await;
-        assert_code(
-            &router,
-            auth_req("DELETE", &format!("/uploads/{hedef}"), token),
-            StatusCode::FORBIDDEN,
-            "FORBIDDEN",
-            &format!("DELETE /uploads/{{id}} (başkasının yüklemesi, override yok) [{rol}]"),
-        )
-        .await;
-    }
-    let sahip_hedef = seed_upload(&router, &owner_key).await;
-    assert_status(
-        &router,
-        auth_req("DELETE", &format!("/uploads/{sahip_hedef}"), &owner_key),
-        StatusCode::NO_CONTENT,
-        "DELETE /uploads/{id} [sahip]",
-    )
-    .await;
-    let banli_hedef = seed_upload(&router, &owner_key).await;
-    assert_code(
-        &router,
-        auth_req("DELETE", &format!("/uploads/{banli_hedef}"), &banned_key),
-        StatusCode::FORBIDDEN,
-        "BANNED",
-        "DELETE /uploads/{id} [banli]",
-    )
-    .await;
 }
 
 // ============================================================================

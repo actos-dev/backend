@@ -46,9 +46,14 @@ pub struct ServerConfig {
     pub max_concurrent_requests: usize,
     /// İstek gövdesi üst sınırı (dosya yükleme kendi daha yüksek limitini kullanır).
     pub max_body_bytes: usize,
-    /// `POST /uploads` için gövde üst sınırı (bkz. PLAN.md Faz 13: 8 MB).
-    /// [`Self::max_body_bytes`]'tan ayrı ve daha yüksek: genel uçlar JSON
-    /// alıyor, yükleme ucu görsel.
+    /// Per-file ceiling for an uploaded image, applied wherever a route
+    /// accepts one: the avatar endpoints, and post and comment creation when
+    /// they are called with `multipart/form-data`.
+    ///
+    /// Separate from and higher than [`Self::max_body_bytes`], which governs
+    /// the JSON bodies the rest of the API takes. Note that this bounds a
+    /// *single file*, not the request: a creation request carrying several
+    /// files is bounded by the route's own body limit instead.
     pub max_upload_bytes: usize,
     /// Kullanılmayan etiketleri toplayan periyodik işin çalışma aralığı
     /// (bkz. `crate::tag::cleanup_unused`). Sıfır verilirse iş hiç
@@ -58,9 +63,6 @@ pub struct ServerConfig {
     /// `hot_score` tazeleme işinin çalışma aralığı (bkz.
     /// `crate::feed::recompute_hot_scores`). Sıfır = iş hiç başlatılmaz.
     pub hot_score_interval: Duration,
-    /// Bağlanmamış yüklemeleri toplayan işin aralığı (bkz.
-    /// `crate::attachment::cleanup_orphaned`). Sıfır = iş hiç başlatılmaz.
-    pub orphan_cleanup_interval: Duration,
     /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
     /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
     /// güvenilebileceğini belirler.
@@ -140,7 +142,7 @@ impl StorageQuotaConfig {
     }
 
     /// A zero or negative quota is a nonsensical configuration in which
-    /// *no* upload in `create_attachment` could ever succeed ("current
+    /// *no* upload in `create_for_content` could ever succeed ("current
     /// usage (>= 0) + new file (> 0) always exceeds the quota") — this
     /// must be caught at startup.
     fn validate(&self) -> Result<(), ConfigError> {
@@ -206,6 +208,10 @@ impl Config {
                 ),
                 max_concurrent_requests: optional("MAX_CONCURRENT_REQUESTS")?.unwrap_or(512),
                 max_body_bytes: optional("MAX_BODY_BYTES")?.unwrap_or(1024 * 1024),
+                // Per-file limit for an image inside a post/comment
+                // multipart body (see `crate::attachment::create_for_content`
+                // and its `MAX_ATTACHMENTS_PER_CONTENT`); also still the
+                // avatar route's own limit.
                 max_upload_bytes: optional("MAX_UPLOAD_BYTES")?.unwrap_or(8 * 1024 * 1024),
                 trusted_proxy_hops: optional("TRUSTED_PROXY_HOPS")?.unwrap_or(0),
                 // Varsayılan 6 saat: etiket çöpü birikmesi yavaş bir olgu
@@ -220,11 +226,6 @@ impl Config {
                 // değerleri tazeliyor, sık koşmasının bir karşılığı yok.
                 hot_score_interval: Duration::from_secs(
                     optional("HOT_SCORE_INTERVAL_SECS")?.unwrap_or(15 * 60),
-                ),
-                // Varsayılan 1 saat. Yetim yüklemeler 24 saatten eski
-                // olduğunda siliniyor, yani daha sık koşmanın karşılığı yok.
-                orphan_cleanup_interval: Duration::from_secs(
-                    optional("ORPHAN_CLEANUP_INTERVAL_SECS")?.unwrap_or(60 * 60),
                 ),
             },
             database: DatabaseConfig {

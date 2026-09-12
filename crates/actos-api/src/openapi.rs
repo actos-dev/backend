@@ -71,7 +71,6 @@ use crate::error::ProblemDetails;
         (name = "feed", description = "Home feed and following feed"),
         (name = "interactions", description = "Vote, save, follow — idempotent PUT/DELETE"),
         (name = "notifications", description = "Inbox (`GET /me/inbox`) and read-state marking"),
-        (name = "uploads", description = "File upload and deletion"),
         (name = "moderation", description = "Report creation (public)"),
         (name = "admin", description = "Moderation queue, bans, roles, audit trail — requires moderator/admin"),
     ),
