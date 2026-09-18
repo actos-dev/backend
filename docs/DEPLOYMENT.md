@@ -41,6 +41,7 @@ zorunlu kılar — biri eksikse yığın açılmaz, sessizce varsayılana düşm
 | `ID_OBFUSCATION_KEY` | `openssl rand -hex 32` | ↓ aşağıdaki uyarı |
 | `CURSOR_SIGNING_KEY` | `openssl rand -hex 32` | `ID_OBFUSCATION_KEY`'den farklı olmalı |
 | `ACTOS_IMAGE` | CI tarafından geçiriliyor | `.env.prod`'a yazma |
+| `WEB_IMAGE` | CI tarafından geçiriliyor | frontend imajı; elle dağıtımda `export` et (bkz. §5) |
 
 İsteğe bağlı (varsayılanı olan): `DATABASE_MAX_CONNECTIONS` (20),
 `TRUSTED_PROXY_HOPS` (1), `MAX_UPLOAD_BYTES` (8 MB), `S3_REGION`,
@@ -241,6 +242,20 @@ workflow'u onu istiyor); istersen oraya manuel onay kuralı ekle.
   sunucuya SSH ile girip imajı çeker ve `compose up -d --wait` koşar.
   Sonunda `https://api.actos.com.tr/health/ready`'ye duman testi atar.
 
+Frontend deposunda aynı desen iki iş akışıyla uygulanır:
+
+- `frontend/.github/workflows/ci.yml` — `check` (lint, typecheck, test,
+  build), `audit` (`pnpm audit --prod`) ve `e2e` (mocked Playwright) paralel
+  koşar; hepsi yeşilse `ghcr.io/actos-dev/frontend:sha-<kısa>` ve `latest`
+  push edilir.
+- `frontend/.github/workflows/deploy.yml` — aynı tetikleme/geri alma
+  düzeniyle sunucuya girip `WEB_IMAGE`'ı ortamdan geçirir ve
+  `compose up -d --wait web` koşar; ardından `https://actos.com.tr/healthz`
+  ile bir gerçek sayfa render'ına duman testi atar. **Compose dosyasını
+  scp'leyen adım yalnızca backend'de**: web servisi aynı
+  `docker-compose.prod.yml` içinde tanımlı, bu yüzden frontend dağıtımı
+  dosyaya dokunmaz.
+
 **Geri alma:** Actions → Deploy → *Run workflow* → `image_tag` alanına
 eski `sha-xxxxxxx` yaz. Her CI koşusu değişmez bir `sha-` etiketi ürettiği
 için geri alma bir etiket seçiminden ibaret.
@@ -258,6 +273,40 @@ ACTOS_UPDATE_OPENAPI=1 cargo test -p actos-api --test openapi \
   commitlenmis_openapi_json_kodla_ayni
 ```
 
+### 4.4 Web servisi (frontend)
+
+`docker-compose.prod.yml` içindeki `web` servisi Next.js imajını çalıştırır.
+İmaj `${WEB_IMAGE:?...}` ile zorunlu kılınır; etiket frontend CI'ında
+üretilen değişmez `sha-<kısa>`'dır (`latest` yalnızca varsayılan dalda
+push edilir). Dağıtım `WEB_IMAGE`'ı ortamdan geçirir, `.env.prod`'a yazmaz:
+
+- `image: ${WEB_IMAGE:?...}`
+- `ports: "127.0.0.1:3000:3000"` — yalnızca loopback; dışarıya açan tek şey
+  nginx (`deploy/nginx/actos.com.tr.conf` → `127.0.0.1:3000`).
+- `depends_on: api: condition: service_healthy` — API sağlıklı olmadan web
+  trafik almaz.
+- ortam: `ACTOS_API_URL=http://api:3100` (konteyner ağı), `ACTOS_SITE_URL`,
+  `NEXT_PUBLIC_ACTOS_API_URL`, `ACTOS_MEDIA_URL`,
+  `NODE_ENV=production`, `NEXT_TELEMETRY_DISABLED=1`.
+- healthcheck: `wget -qO- http://127.0.0.1:3000/healthz`.
+
+`NEXT_PUBLIC_ACTOS_API_URL` ve `ACTOS_MEDIA_URL` **build-time** değerlerdir;
+değiştirmek yeni bir imaj build'i gerektirir (bkz. frontend `PUBLISH.md`).
+
+### 4.5 Cloudflare önbellek kuralları
+
+- **HTML asla önbelleğe alınmaz.** Özellikle oturum çerezi taşıyan
+  yanıtlar; kullanıcı A'nın sayfası kullanıcı B'ye servis edilirse bu bir
+  oturum sızıntısıdır. "Cache Everything" sayfa kuralını kullanma; kenar
+  TTL'ini "Respect Existing Headers" bırak. Next.js HTML'i `Cache-Control:
+  no-store`/`private` üretir.
+- `/_next/static/*` uzun süreli önbelleklenir: dosya adları içerik
+  hash'i taşır, bu yüzden `Cache-Control: public, max-age=31536000,
+  immutable` güvenlidir. Next.js bu başlığı zaten gönderir; ek bir kural
+  gerekmez.
+- `/healthz` ve `app/api/*` istekleri önbellek dışı kalmalı (`no-store`);
+  Cloudflare'de bunları bypass eden bir kural tanımla.
+
 ---
 
 ## 5. İlk dağıtım (elle, bir kez)
@@ -267,6 +316,7 @@ CI'ı beklemeden yığını ayağa kaldırmak için:
 ```bash
 cd /opt/actos
 export ACTOS_IMAGE=ghcr.io/actos-dev/backend:latest
+export WEB_IMAGE=ghcr.io/actos-dev/frontend:latest
 echo "$GHCR_TOKEN" | docker login ghcr.io -u <kullanıcı> --password-stdin
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --wait
 
@@ -329,4 +379,5 @@ psql -d actos_tatbikat -c "
   değerleri **gerçek** kullanılabilir belleğe göre ayarlanmalı, nominal
   8 GB'a göre değil.
 - **Compose V2** kurulmadan dağıtım çalışmaz (bölüm 2.1).
-- **Frontend henüz dağıtılmadı**; `actos.com.tr` şimdilik 503 döner.
+- **Frontend** `web` servisi olarak aynı yığında dağıtılır (bkz. §4.4);
+  `actos.com.tr` artık nginx üzerinden `127.0.0.1:3000`'e proxy'lenir.

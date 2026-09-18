@@ -163,6 +163,41 @@ services:
       RUST_LOG: ${RUST_LOG:-actos_api=info,tower_http=info,sqlx=warn,info}
     networks: [actos_network]
 
+  # --- Next.js web frontend ----------------------------------------------
+  #
+  # İmaj frontend deposunun CI'ında derlenip GHCR'a `sha-<kısa>` etiketiyle
+  # push edilir; dağıtım `WEB_IMAGE`'ı ortamdan geçirir (bkz.
+  # frontend/.github/workflows/deploy.yml). Port yalnızca loopback: dışarıya
+  # açan tek şey host'taki nginx (actos.com.tr → 127.0.0.1:3000).
+  web:
+    image: ${WEB_IMAGE:?WEB_IMAGE zorunlu — ör. ghcr.io/actos-dev/frontend:sha-abc1234}
+    container_name: actos_web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Konteyner ağı içindeki adres (`api` servis adı, konteyner adı DEĞİL);
+      # tarayıcıya çıkan her şey `NEXT_PUBLIC_*` olan ve dış alan adını
+      # gösteren değişkendir.
+      ACTOS_API_URL: http://api:3100
+      ACTOS_SITE_URL: https://actos.com.tr
+      NEXT_PUBLIC_ACTOS_API_URL: https://api.actos.com.tr
+      # proxy.ts CSP'si ve next.config.ts remotePatterns'ı medya origin'ini
+      # buradan alır; S3_PUBLIC_BASE_URL ile aynı origin olmalı.
+      ACTOS_MEDIA_URL: https://media.actos.com.tr
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks: [actos_network]
+
 volumes:
   postgres_data:
     name: actos_postgres_data
