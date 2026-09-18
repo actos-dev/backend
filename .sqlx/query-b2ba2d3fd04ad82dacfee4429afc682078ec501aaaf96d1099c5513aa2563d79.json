@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO bans (actor_id, banned_by, reason, expires_at)\n        VALUES ($1, $2, $3, $4)\n        ON CONFLICT (actor_id) DO UPDATE\n        SET banned_by = EXCLUDED.banned_by,\n            reason = EXCLUDED.reason,\n            banned_at = now(),\n            expires_at = EXCLUDED.expires_at\n        RETURNING banned_at, expires_at\n        ",
+  "query": "\n                INSERT INTO bans (actor_id, banned_by, reason, expires_at, community_id)\n                VALUES ($1, $2, $3, $4, $5)\n                ON CONFLICT (community_id, actor_id) WHERE community_id IS NOT NULL\n                DO UPDATE SET\n                    banned_by = EXCLUDED.banned_by,\n                    reason = EXCLUDED.reason,\n                    banned_at = now(),\n                    expires_at = EXCLUDED.expires_at\n                RETURNING banned_at, expires_at\n                ",
   "describe": {
     "columns": [
       {
@@ -31,7 +31,8 @@
         "Int8",
         "Int8",
         "Text",
-        "Timestamptz"
+        "Timestamptz",
+        "Int8"
       ]
     },
     "nullable": [
@@ -39,5 +40,5 @@
       true
     ]
   },
-  "hash": "6af40d48f79647a02760a8c508a801790227387c44379f46f7566651864b14fd"
+  "hash": "b2ba2d3fd04ad82dacfee4429afc682078ec501aaaf96d1099c5513aa2563d79"
 }

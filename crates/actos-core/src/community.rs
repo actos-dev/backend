@@ -47,6 +47,30 @@ use crate::{
 /// kilitlenerek yapılıyor — iki eşzamanlı istek sınırı aşamasın diye.
 pub const MAX_COMMUNITIES_PER_OWNER: i64 = 3;
 
+/// Bir topluluk sahibinin kendi topluluğunda otomatik olarak tuttuğu
+/// topluluk kapsamlı izinler (COMMUNITY_PLAN.md §4-5).
+///
+/// **Sahiplik gizli bir süper kullanıcı değildir.** Sahip bu satırları
+/// [`create_community`] transaction'ında gerçek `permissions` kayıtları
+/// olarak alır; yetki kontrolü yapan her yer onları yine [`crate::authz`]
+/// üzerinden okur. Böylece "sahip şunu da yapabilmeli" diye ayrı bir kod
+/// yolu yok ve sahip olmak, izinlere sahip olmanın başka bir adıdır.
+///
+/// Liste `migrations/0030_community_moderation.up.sql`'in backfill'iyle
+/// **birebir aynı** olmalı; biri değişirse diğeri de değişmeli.
+pub const OWNER_PERMISSIONS: &[Permission] = &[
+    Permission::ContentDelete,
+    Permission::CommunityEdit,
+    Permission::CommunityClose,
+    Permission::MemberInvite,
+    Permission::MemberApprove,
+    Permission::MemberKick,
+    Permission::MemberBan,
+    Permission::RoleGrant,
+    Permission::ReportView,
+    Permission::ReportResolve,
+];
+
 /// `migrations/0029_communities.up.sql` → `ck_communities_description_length`
 /// üst sınırı. Alt sınır `1` (boş açıklama yok).
 const DESCRIPTION_MAX: usize = 10_000;
@@ -295,6 +319,46 @@ pub async fn is_member(pool: &PgPool, community_id: i64, actor_id: i64) -> Resul
     is_member_in(pool, community_id, actor_id).await
 }
 
+/// Topluluk adını iç kimliğe çevirir; yoksa [`Error::NotFound`].
+///
+/// [`resolve_community_id_in`]'in havuz üzerinden çalışan, `pub` hâli.
+/// API katmanı (izin kapsamı çözümü, ban hedefi) adı kullanıcıdan alıp
+/// içeride id'ye çevirmek zorunda; bu, o çevirinin tek noktası.
+///
+/// # Errors
+/// Böyle bir topluluk yoksa [`Error::NotFound`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn resolve_id_by_name(pool: &PgPool, name: &str) -> Result<i64> {
+    resolve_community_id_in(pool, name).await
+}
+
+/// Verilen topluluk id'lerinin adlarını döner (`id -> name`).
+///
+/// `whoami` gibi topluluk kapsamlı izinleri isimle göstermesi gereken
+/// yanıtlar için: kapsam çözümünde topluluk başına ayrı sorgu atmak N+1
+/// olurdu. Var olmayan id'ler (ör. silinmiş bir topluluk) sonuçta yer
+/// almaz; çağıran `None` olarak ele alır.
+///
+/// # Errors
+/// Veritabanı hatası [`Error::Database`].
+pub async fn names_for(
+    pool: &PgPool,
+    ids: &[i64],
+) -> Result<std::collections::HashMap<i64, String>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let rows = sqlx::query!(
+        r#"SELECT id, name::text AS "name!" FROM communities WHERE id = ANY($1::bigint[])"#,
+        ids,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|row| (row.id, row.name)).collect())
+}
+
 // --- Yazma yolları -----------------------------------------------------
 
 /// Yeni bir topluluk oluşturur: topluluk satırı + sahibin üyeliği, tek
@@ -395,16 +459,32 @@ pub async fn create_community(
     .execute(&mut *tx)
     .await?;
 
+    // Sahiplik = izin (COMMUNITY_PLAN.md §5): gizli bir süper kullanıcı yok,
+    // sahip bütün topluluk kapsamlı izinleri gerçek satırlar olarak alır.
+    // Aynı transaction'da yazılıyor ki topluluk görünüp de sahibi bir an
+    // için yetkisiz kalmasın.
+    for permission in OWNER_PERMISSIONS {
+        crate::auth::grant_permission_in_tx(
+            &mut tx,
+            owner_id,
+            *permission,
+            crate::auth::PermissionScope::Community,
+            Some(community_id),
+            None,
+        )
+        .await?;
+    }
+
     tx.commit().await?;
 
     get_community(pool, &name).await
 }
 
-/// `PATCH /communities/{name}`: yalnızca sahibi **veya** global
+/// `PATCH /communities/{name}`: yalnızca sahibi **veya** bu toplulukta
 /// `community.edit` sahibi; açıklamayı günceller.
 ///
 /// # Errors
-/// Topluluk yoksa [`Error::NotFound`]; çağıran ne sahibi ne
+/// Topluluk yoksa [`Error::NotFound`]; çağıran ne sahibi ne bu toplulukta
 /// `community.edit` sahibiyse [`Error::Forbidden`]; açıklama doğrulamadan
 /// geçmezse [`Error::Validation`]; veritabanı hatası [`Error::Database`].
 pub async fn update_community(
@@ -417,7 +497,7 @@ pub async fn update_community(
     let lookup = lookup_community(pool, name).await?;
 
     let is_owner = lookup.owner_actor_id == actor_id;
-    let can_edit = crate::authz::has_global(permissions, Permission::CommunityEdit);
+    let can_edit = crate::authz::has_for(permissions, Permission::CommunityEdit, Some(lookup.id));
 
     if !is_owner && !can_edit {
         return Err(Error::Forbidden);
@@ -451,6 +531,12 @@ pub async fn join_community(pool: &PgPool, actor_id: i64, name: &str) -> Result<
         return Err(Error::Validation(
             "private communities are not available yet".to_owned(),
         ));
+    }
+
+    // Topluluk ban'ı katılmayı engeller (COMMUNITY_PLAN.md §6): ban
+    // ileriye dönüktür, üyeliği de kapsar.
+    if crate::moderation::is_banned_from_community(pool, lookup.id, actor_id).await? {
+        return Err(Error::Banned);
     }
 
     sqlx::query!(
@@ -493,6 +579,79 @@ pub async fn leave_community(pool: &PgPool, actor_id: i64, name: &str) -> Result
     )
     .execute(pool)
     .await?;
+
+    Ok(())
+}
+
+/// `DELETE /communities/{name}/members/{username}`: bir üyeyi topluluktan
+/// atar.
+///
+/// Yetki [`crate::authz::has_for`] ile `member.kick` için, **hedef
+/// topluluğun** kapsamında sorulur: topluluk kapsamlı bir moderatör yalnızca
+/// kendi topluluğunda atabilir; global `member.kick` her toplulukta.
+///
+/// **Sahip atılamaz** ([`Error::Validation`]): devralma kuralları Faz 4'ün
+/// işi, o gelene kadar sahipsiz topluluk oluşmasın diye kapı burada.
+///
+/// **Üye olmayan için [`Error::NotFound`]:** istek idempotent DEĞİL. "Zaten
+/// değildi" ile "attım" ayrımını saklamıyoruz; denetim izine yalnızca
+/// gerçekten bir üyelik silindiğinde kayıt düşülüyor (`revoke_key`'deki
+/// aynı gerekçe).
+///
+/// # Errors
+/// Topluluk ya da hedef actor yoksa [`Error::NotFound`]; çağıranın
+/// `member.kick` yetkisi yoksa [`Error::Forbidden`]; hedef sahipse ya da
+/// üye değilse [`Error::Validation`] / [`Error::NotFound`]; veritabanı
+/// hatası [`Error::Database`].
+pub async fn kick_member(
+    pool: &PgPool,
+    actor_id: i64,
+    permissions: &[Grant],
+    community_name: &str,
+    target_username: &str,
+) -> Result<()> {
+    let lookup = lookup_community(pool, community_name).await?;
+
+    if !crate::authz::has_for(permissions, Permission::MemberKick, Some(lookup.id)) {
+        return Err(Error::Forbidden);
+    }
+
+    let target_id = crate::moderation::resolve_target_actor(pool, target_username).await?;
+
+    if target_id == lookup.owner_actor_id {
+        return Err(Error::Validation(
+            "the owner cannot be kicked from their community".to_owned(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let silinen = sqlx::query!(
+        r#"DELETE FROM community_members WHERE community_id = $1 AND actor_id = $2"#,
+        lookup.id,
+        target_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    if silinen.rows_affected() == 0 {
+        return Err(Error::NotFound("membership"));
+    }
+
+    // Denetim izi gerekçesi topluluğu anıyor: `admin_actions_log.target_id`
+    // yalnızca actor id'si, hangi topluluktan atıldığı yalnızca metinden
+    // anlaşılıyor (target_type tek başına bunu taşıyamaz).
+    crate::moderation::log_action(
+        &mut tx,
+        actor_id,
+        "member_kick",
+        "actor",
+        target_id,
+        Some(&format!("kicked from community \"{community_name}\"")),
+    )
+    .await?;
+
+    tx.commit().await?;
 
     Ok(())
 }

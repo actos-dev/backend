@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM bans\n        WHERE actor_id = $1 AND community_id IS NOT DISTINCT FROM $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "634829e8e50adeaff1298040856eb676ab0b626536ff91ceea55e10de4c8f2a4"
+}

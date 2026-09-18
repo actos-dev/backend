@@ -14,6 +14,7 @@ use actos_api::{app, state::AppState};
 use actos_core::{
     Config, Storage,
     auth::{self as core_auth, ActorType, Permission, PermissionScope},
+    community as core_community,
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
         StorageQuotaConfig,
@@ -49,6 +50,7 @@ fn test_config() -> Config {
             // için dolduruluyor.
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
+            moderation_job_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -833,9 +835,10 @@ async fn bilinmeyen_izin_400(pool: PgPool) {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
 
-/// Phase 1'de topluluklar yok: `community` alanı doluysa `400`.
+/// Var olmayan bir topluluk adıyla kapsamlı izin istemek `404` (kapsam
+/// doğrulamasından önce id çözümü yapılıyor).
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn topluluk_alani_faz1_de_reddediliyor(pool: PgPool) {
+async fn olmayan_topluluk_404(pool: PgPool) {
     let raw_pool = pool.clone();
     let router = build_router(pool);
     let (admin_id, admin_key) = seed_actor(&raw_pool, "topluluk_admin").await;
@@ -851,12 +854,59 @@ async fn topluluk_alani_faz1_de_reddediliyor(pool: PgPool) {
             json!({
                 "username": "topluluk_hedef",
                 "permission": "content.delete",
-                "community": "bir-topluluk",
+                "community": "hic_olmadi",
             }),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["code"], "NOT_FOUND", "{body}");
+}
+
+/// Topluluk kapsamlı bir izin verilebiliyor ve `whoami` onu topluluk adıyla
+/// birlikte `community` kapsamında gösteriyor.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn topluluk_kapsamli_izin_whoami_de_isimle_gorunuyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (owner_id, _) = seed_actor(&raw_pool, "kapsam_sahibi").await;
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "kapsam_admin").await;
+    let (_, hedef_key) = seed_actor(&raw_pool, "kapsam_hedef").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+
+    core_community::create_community(
+        &raw_pool,
+        owner_id,
+        "kapsam_kulubu",
+        "açıklama",
+        core_community::CommunityVisibility::Public,
+    )
+    .await
+    .expect("topluluk oluşturulabilmeli");
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/admin/permissions",
+            &admin_key,
+            json!({
+                "username": "kapsam_hedef",
+                "permission": "member.ban",
+                "community": "kapsam_kulubu",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(&router, auth_req("GET", "/auth/whoami", &hedef_key)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let permissions = body["permissions"].as_array().expect("permissions dizi");
+    assert_eq!(permissions.len(), 1, "{body}");
+    assert_eq!(permissions[0]["permission"], "member.ban", "{body}");
+    assert_eq!(permissions[0]["scope"], "community", "{body}");
+    assert_eq!(permissions[0]["community"], "kapsam_kulubu", "{body}");
 }
 
 /// Yalnızca topluluk kapsamında anlamlı olan `member.kick` global verilemez.
@@ -941,5 +991,186 @@ async fn icerik_silme_izni_olan_silebilir_ama_banlayamaz(pool: PgPool) {
         ),
     )
     .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+// --- Faz 3: rapor yönlendirme ------------------------------------------
+
+/// Bir aktöre topluluk kapsamlı tek bir izin verir.
+#[allow(clippy::expect_used)]
+async fn grant_scoped(pool: &PgPool, actor_id: i64, permission: Permission, community_id: i64) {
+    core_auth::grant_permission(
+        pool,
+        actor_id,
+        permission,
+        PermissionScope::Community,
+        Some(community_id),
+        None,
+    )
+    .await
+    .expect("topluluk kapsamlı izin verilebilmeli");
+}
+
+/// Sahibi verilen aktör olan bir topluluk oluşturur.
+#[allow(clippy::expect_used)]
+async fn create_community(pool: &PgPool, owner_id: i64, name: &str) -> i64 {
+    core_community::create_community(
+        pool,
+        owner_id,
+        name,
+        "açıklama",
+        core_community::CommunityVisibility::Public,
+    )
+    .await
+    .expect("topluluk oluşturulabilmeli")
+    .id
+}
+
+/// Bir toplulukta post açar, dış id'sini döner.
+#[allow(clippy::expect_used)]
+async fn post_in_community(router: &Router, token: &str, community: &str, title: &str) -> String {
+    let (status, body, _) = send(
+        router,
+        auth_json_req(
+            "POST",
+            "/posts",
+            token,
+            json!({ "title": title, "body": "gövde", "community": community }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "post açılamadı: {body}");
+    body["id"].as_str().expect("post id").to_owned()
+}
+
+/// Topluluk moderatörü yalnızca kendi topluluğunun raporlarını görür ve
+/// çözer; global yetkili hepsini görür.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn topluluk_moderatoru_yalnizca_kendi_raporlarini_gorur(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (a_sahibi, a_key) = seed_actor(&raw_pool, "rapor_a_sahibi").await;
+    let (b_sahibi, b_key) = seed_actor(&raw_pool, "rapor_b_sahibi").await;
+    let (mod_id, mod_key) = seed_actor(&raw_pool, "rapor_moderator").await;
+    let (_, sikayetci_key) = seed_actor(&raw_pool, "rapor_sikayetci").await;
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "rapor_global_admin").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+
+    let a_id = create_community(&raw_pool, a_sahibi, "rapor_bir").await;
+    create_community(&raw_pool, b_sahibi, "rapor_iki").await;
+    grant_scoped(&raw_pool, mod_id, Permission::ReportView, a_id).await;
+    grant_scoped(&raw_pool, mod_id, Permission::ReportResolve, a_id).await;
+
+    let pa = post_in_community(&router, &a_key, "rapor_bir", "a postu").await;
+    let pb = post_in_community(&router, &b_key, "rapor_iki", "b postu").await;
+    let pi = seed_post(&router, &a_key, "bağımsız").await;
+
+    for target in [&pa, &pb, &pi] {
+        let (status, body, _) = send(
+            &router,
+            auth_json_req(
+                "POST",
+                "/reports",
+                &sikayetci_key,
+                json!({ "target_type": "post", "target_id": target, "reason": "spam" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+
+    // Moderatör yalnızca A'nın raporunu görür ve community alanı doludur.
+    let (status, body, _) = send(&router, auth_req("GET", "/admin/reports", &mod_key)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let reports = body["reports"].as_array().expect("reports dizi");
+    assert_eq!(reports.len(), 1, "yalnızca kendi raporunu görmeli: {body}");
+    assert_eq!(reports[0]["target_id"], pa, "{body}");
+    assert_eq!(reports[0]["community"], "rapor_bir", "{body}");
+    let a_report_id = reports[0]["id"].as_str().expect("rapor id").to_owned();
+
+    // Global yetkili üçünü de görür.
+    let (status, body, _) = send(&router, auth_req("GET", "/admin/reports", &admin_key)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["reports"].as_array().expect("reports dizi").len(), 3);
+
+    // B'nin raporunun id'sini global listeden bul.
+    let b_report_id = body["reports"]
+        .as_array()
+        .expect("reports dizi")
+        .iter()
+        .find(|r| r["target_id"] == pb)
+        .and_then(|r| r["id"].as_str())
+        .expect("B raporu bulunmalı")
+        .to_owned();
+
+    // Moderatör B'yi çözemez, kendini çözebilir.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            &format!("/admin/reports/{b_report_id}"),
+            &mod_key,
+            json!({ "status": "resolved" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            &format!("/admin/reports/{a_report_id}"),
+            &mod_key,
+            json!({ "status": "resolved" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// İçerik silme yetkisi içeriğin topluluğunun kapsamında sorulur.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn icerik_silme_topluluk_kapsamina_bagli(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (a_sahibi, a_key) = seed_actor(&raw_pool, "sil_a_sahibi").await;
+    let (b_sahibi, b_key) = seed_actor(&raw_pool, "sil_b_sahibi").await;
+    let (mod_id, mod_key) = seed_actor(&raw_pool, "sil_moderator").await;
+
+    let a_id = create_community(&raw_pool, a_sahibi, "sil_bir").await;
+    create_community(&raw_pool, b_sahibi, "sil_iki").await;
+    grant_scoped(&raw_pool, mod_id, Permission::ContentDelete, a_id).await;
+
+    let pa = post_in_community(&router, &a_key, "sil_bir", "a postu").await;
+    let pb = post_in_community(&router, &b_key, "sil_iki", "b postu").await;
+    let pi = seed_post(&router, &a_key, "bağımsız").await;
+
+    let sil = |id: String| {
+        let router = router.clone();
+        let mod_key = mod_key.clone();
+        async move {
+            send(
+                &router,
+                auth_json_req(
+                    "DELETE",
+                    &format!("/admin/contents/{id}"),
+                    &mod_key,
+                    json!({ "reason": "kapsam testi" }),
+                ),
+            )
+            .await
+        }
+    };
+    // Kendi topluluğunun içeriğini silebilir.
+    let (status, body, _) = sil(pa).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Başka topluluğunki `403`.
+    let (status, body, _) = sil(pb).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Bağımsız içerik de global `content.delete` gerektirdiği için `403`.
+    let (status, body, _) = sil(pi).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }

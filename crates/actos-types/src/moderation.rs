@@ -23,6 +23,9 @@ pub struct ReportSummary {
     /// One of `"pending"`, `"resolved"` or `"dismissed"`.
     pub status: String,
     pub notes: Option<String>,
+    /// Name of the community the reported content belongs to; `None` for an
+    /// independent post.
+    pub community: Option<String>,
     /// RFC 3339.
     pub created_at: String,
     /// RFC 3339. `None` means it has not been resolved yet.
@@ -66,6 +69,14 @@ pub struct CreateBanRequest {
     /// RFC 3339. When omitted, the ban is permanent.
     #[serde(default)]
     pub expires_at: Option<String>,
+    /// Community name for a community-scoped ban. Omitted or `null` means a
+    /// platform-wide ban.
+    #[serde(default)]
+    pub community: Option<String>,
+    /// Also queue the deletion of this actor's posts in the community.
+    /// Only valid together with `community`; rejected with 400 otherwise.
+    #[serde(default)]
+    pub delete_posts: bool,
 }
 
 /// A ban record.
@@ -78,6 +89,8 @@ pub struct BanSummary {
     pub banned_at: String,
     /// RFC 3339. `None` means permanent.
     pub expires_at: Option<String>,
+    /// Name of the community this ban applies to; `None` means platform-wide.
+    pub community: Option<String>,
 }
 
 /// Request body of `PUT /admin/permissions` (grant) and

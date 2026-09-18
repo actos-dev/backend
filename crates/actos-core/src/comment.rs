@@ -254,6 +254,12 @@ struct ParentInfo {
     /// yazılan bir yorum için `comment_on_post` zaten aynı olayı anlatıyor,
     /// ikinci bir bildirime gerek yok).
     is_direct_child_of_post: bool,
+    /// Kök post'un topluluğu; bağımsız post'ta `None`.
+    ///
+    /// Yorum bu değeri **kendi satırına** yazar ([`create_comment`]): ağacın
+    /// her içerik satırı kendi topluluğunu taşısın, görünürlük kapısı (Faz 4)
+    /// tek tip bir sütun üzerinden çalışsın diye.
+    community_id: Option<i64>,
 }
 
 /// `POST /posts/{id}/comments`: bir post'a ya da mevcut bir yoruma yanıt.
@@ -312,15 +318,23 @@ pub async fn create_comment(
         )));
     }
 
+    // Topluluk ban'ı yorum yazmayı da engeller (COMMUNITY_PLAN.md §6).
+    if let Some(community_id) = parent.community_id
+        && crate::moderation::is_banned_from_community_in(&mut *tx, community_id, author.id).await?
+    {
+        return Err(Error::Banned);
+    }
+
     let inserted = sqlx::query!(
         r#"
-        INSERT INTO contents (actor_id, parent_content_id, content_type, body, body_format)
-        VALUES ($1, $2, 'comment'::content_type, $3, 'markdown'::body_format)
+        INSERT INTO contents (actor_id, parent_content_id, content_type, body, body_format, community_id)
+        VALUES ($1, $2, 'comment'::content_type, $3, 'markdown'::body_format, $4)
         RETURNING id
         "#,
         author.id,
         parent.id,
         body,
+        parent.community_id,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -396,7 +410,7 @@ async fn resolve_parent(
     // da aynı kuralı uyguluyor, bkz. modül dokümantasyonu).
     let post = sqlx::query!(
         r#"
-        SELECT id, depth, deleted_at, actor_id
+        SELECT id, depth, deleted_at, actor_id, community_id
         FROM contents
         WHERE id = $1 AND content_type = 'post'::content_type
         FOR UPDATE
@@ -418,6 +432,7 @@ async fn resolve_parent(
             root_author_id: post.actor_id,
             parent_author_id: post.actor_id,
             is_direct_child_of_post: true,
+            community_id: post.community_id,
         });
     };
 
@@ -431,6 +446,7 @@ async fn resolve_parent(
             root_author_id: post.actor_id,
             parent_author_id: post.actor_id,
             is_direct_child_of_post: true,
+            community_id: post.community_id,
         });
     }
 
@@ -464,6 +480,9 @@ async fn resolve_parent(
         root_author_id: post.actor_id,
         parent_author_id: parent.actor_id,
         is_direct_child_of_post: false,
+        // Yorumun topluluğu **kök post'un** topluluğudur; ebeveyn yorumun
+        // kendi sütununa güvenmiyoruz, tek doğruluk kaynağı post.
+        community_id: post.community_id,
     })
 }
 

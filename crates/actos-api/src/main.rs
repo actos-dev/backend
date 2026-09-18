@@ -53,6 +53,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let addr = config.server.addr;
     let tag_cleanup_interval = config.server.tag_cleanup_interval;
     let hot_score_interval = config.server.hot_score_interval;
+    let moderation_job_interval = config.server.moderation_job_interval;
     let state = state::AppState::new(
         config,
         db,
@@ -79,6 +80,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         state.db().clone(),
         hot_score_interval,
         |pool| async move { actos_core::feed::recompute_hot_scores(&pool).await },
+    );
+    jobs::spawn_periodic(
+        "moderasyon işleri",
+        state.db().clone(),
+        moderation_job_interval,
+        |pool| async move { actos_core::moderation::run_pending_jobs(&pool).await },
     );
 
     // NormalizePath yönlendirmeden önce çalışmalı, o yüzden router'ın

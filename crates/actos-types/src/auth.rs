@@ -91,7 +91,6 @@ pub struct PermissionSummary {
     /// `"global"` or `"community"`.
     pub scope: String,
     /// Community name for a community-scoped grant, `None` for global.
-    /// Always `None` until communities exist (COMMUNITY_PLAN.md phase 2).
     pub community: Option<String>,
 }
 

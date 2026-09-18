@@ -9,6 +9,7 @@
 use actos_core::{
     Error,
     auth::{self as core_auth, ActorRecord, ActorType, ApiKeyRecord},
+    community as core_community,
     id::{Actor as ActorIdKind, IdCodec},
 };
 use actos_types::auth::{
@@ -223,14 +224,26 @@ async fn whoami(
     let actor = actor_summary(&current.actor, avatar_url, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
+    // Topluluk kapsamlı izinlerin adı isimle gösterilsin diye topluluk
+    // adları tek sorguda çözülüyor (izin başına sorgu N+1 olurdu).
+    let community_ids: Vec<i64> = current
+        .permissions
+        .iter()
+        .filter_map(|g| g.community_id)
+        .collect();
+    let community_names = core_community::names_for(state.db(), &community_ids)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
     let permissions = current
         .permissions
         .iter()
         .map(|g| PermissionSummary {
             permission: g.permission.as_str().to_owned(),
             scope: g.scope.as_str().to_owned(),
-            // Phase 1'de topluluk yok; Phase 2'de burada isim çözülecek.
-            community: None,
+            community: g
+                .community_id
+                .and_then(|id| community_names.get(&id).cloned()),
         })
         .collect();
 

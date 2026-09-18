@@ -77,7 +77,7 @@ use std::collections::BTreeSet;
 use actos_api::{app, state::AppState};
 use actos_core::{
     Config, Storage,
-    auth::{self as core_auth, ActorType, Permission, PermissionScope},
+    auth::{self as core_auth, ActorType, Grant, Permission, PermissionScope},
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
         StorageQuotaConfig,
@@ -111,6 +111,7 @@ fn test_config() -> Config {
             trusted_proxy_hops: 0,
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
+            moderation_job_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -336,9 +337,23 @@ async fn rol_ver(pool: &PgPool, actor_id: i64, rol: &str) {
 /// ayrı testlerle kapsanıyor — bkz. `moderasyon_uclarinin_yetki_matrisi`).
 #[allow(clippy::expect_used)]
 async fn banla(pool: &PgPool, banlayan_id: i64, username: &str) {
-    core_mod::ban_actor(pool, banlayan_id, username, "yetki matrisi testi", None)
-        .await
-        .expect("actor banlanabilmeli");
+    let izinler = [Grant {
+        permission: Permission::MemberBan,
+        scope: PermissionScope::Global,
+        community_id: None,
+    }];
+    core_mod::ban_actor(
+        pool,
+        banlayan_id,
+        &izinler,
+        username,
+        "yetki matrisi testi",
+        None,
+        None,
+        false,
+    )
+    .await
+    .expect("actor banlanabilmeli");
 }
 
 #[allow(clippy::expect_used)]
@@ -539,6 +554,7 @@ const MATRIX_OPERATIONS: &[(&str, &str)] = &[
     ("POST", "/communities/{name}/join"),
     ("DELETE", "/communities/{name}/join"),
     ("GET", "/communities/{name}/members"),
+    ("DELETE", "/communities/{name}/members/{username}"),
     ("GET", "/communities/{name}/posts"),
     // --- interaction_uclarinin_yetki_matrisi ---
     ("PUT", "/contents/{id}/vote"),

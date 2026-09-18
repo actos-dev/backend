@@ -393,7 +393,7 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
             ) AS "is_banned!"
         FROM api_keys
         JOIN actors ON actors.id = api_keys.actor_id
-        LEFT JOIN bans ON bans.actor_id = actors.id
+        LEFT JOIN bans ON bans.actor_id = actors.id AND bans.community_id IS NULL
         WHERE api_keys.id = $1
         "#,
         parsed.key_id,
@@ -760,7 +760,7 @@ pub async fn recover(pool: &PgPool, username: &str, code: &str) -> Result<(Strin
                 AND (bans.expires_at IS NULL OR bans.expires_at > now())
             ) AS "is_banned!"
         FROM actors
-        LEFT JOIN bans ON bans.actor_id = actors.id
+        LEFT JOIN bans ON bans.actor_id = actors.id AND bans.community_id IS NULL
         WHERE actors.username = $1 AND actors.deleted_at IS NULL
         "#,
         normalized_username.as_str(),

@@ -52,6 +52,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_community, update_community))
         .routes(routes!(join_community, leave_community))
         .routes(routes!(list_members))
+        .routes(routes!(kick_member))
         .routes(routes!(list_community_posts))
 }
 
@@ -399,6 +400,47 @@ async fn list_members(
         members,
         next_cursor: page.next_cursor.map(|c| state.cursor_codec().encode(&c)),
     }))
+}
+
+/// `DELETE /communities/{name}/members/{username}` → `204`. Bir üyeyi
+/// topluluktan atar; `member.kick` yetkisi (o topluluk kapsamında) gerekir.
+#[utoipa::path(
+    delete,
+    path = "/communities/{name}/members/{username}",
+    tag = "communities",
+    summary = "Kick a member from a community",
+    description = "Requires `member.kick` scoped to this community. The owner cannot be kicked. A non-member returns 404.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+        ("username" = String, Path, description = "Username of the member to kick"),
+    ),
+    responses(
+        (status = 204, description = "Member kicked"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        ValidationFailed,
+        RateLimited,
+    )
+)]
+async fn kick_member(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path((name, username)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    core_community::kick_member(
+        state.db(),
+        current.actor.id,
+        &current.permissions,
+        &name,
+        &username,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Bir [`MemberEntry`]'yi yanıt DTO'suna çevirir.

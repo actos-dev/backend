@@ -6,7 +6,7 @@
 
 use actos_core::{
     Storage,
-    auth::{ActorRecord, ActorType},
+    auth::{ActorRecord, ActorType, Grant, Permission, PermissionScope},
     comment,
     config::StorageConfig,
     content,
@@ -15,6 +15,17 @@ use actos_core::{
     interaction, moderation, notification,
 };
 use sqlx::PgPool;
+
+/// Tek bir global izin taşıyan sahte yetki kümesi — moderasyon
+/// fonksiyonlarının yetki parametresi için.
+#[allow(clippy::expect_used)]
+fn global(permission: Permission) -> Vec<Grant> {
+    vec![Grant {
+        permission,
+        scope: PermissionScope::Global,
+        community_id: None,
+    }]
+}
 
 /// A `Storage`/`IdCodec` pair for tests that never carry attachments (every
 /// `seed_post`/`seed_comment` call in this file passes an empty file list) —
@@ -252,9 +263,15 @@ async fn moderatorun_kendi_icerigini_silmesi_bildirim_uretmez(pool: PgPool) {
     let moderator = seed_actor(&pool, "kendine_mod").await;
     let post = seed_post(&pool, &moderator).await;
 
-    moderation::moderate_delete_content(&pool, moderator.id, post, "kendi içeriğimi siliyorum")
-        .await
-        .expect("silinebilmeli");
+    moderation::moderate_delete_content(
+        &pool,
+        moderator.id,
+        &global(Permission::ContentDelete),
+        post,
+        "kendi içeriğimi siliyorum",
+    )
+    .await
+    .expect("silinebilmeli");
 
     assert!(
         inbox_kinds(&pool, moderator.id).await.is_empty(),
@@ -303,9 +320,15 @@ async fn icerik_silme_yazarina_bildirim_uretir(pool: PgPool) {
     let yazar = seed_actor(&pool, "mod_yazar").await;
     let post = seed_post(&pool, &yazar).await;
 
-    moderation::moderate_delete_content(&pool, admin.id, post, "kural ihlali")
-        .await
-        .expect("silinebilmeli");
+    moderation::moderate_delete_content(
+        &pool,
+        admin.id,
+        &global(Permission::ContentDelete),
+        post,
+        "kural ihlali",
+    )
+    .await
+    .expect("silinebilmeli");
 
     let kutu = inbox_kinds(&pool, yazar.id).await;
     assert_eq!(kutu, vec![("moderation_action", Some(admin.id))]);
@@ -316,9 +339,18 @@ async fn ban_banli_actore_bildirim_uretir(pool: PgPool) {
     let admin = seed_actor(&pool, "ban_admin").await;
     let hedef = seed_actor(&pool, "ban_hedef").await;
 
-    moderation::ban_actor(&pool, admin.id, &hedef.username, "kural ihlali", None)
-        .await
-        .expect("banlanabilmeli");
+    moderation::ban_actor(
+        &pool,
+        admin.id,
+        &global(Permission::MemberBan),
+        &hedef.username,
+        "kural ihlali",
+        None,
+        None,
+        false,
+    )
+    .await
+    .expect("banlanabilmeli");
 
     let kutu = inbox_kinds(&pool, hedef.id).await;
     assert_eq!(kutu, vec![("moderation_action", Some(admin.id))]);

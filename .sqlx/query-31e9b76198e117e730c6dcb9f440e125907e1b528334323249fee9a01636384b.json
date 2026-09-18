@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE reports\n        SET status = $2,\n            notes = COALESCE($3, notes),\n            -- Açık cast'ler şart: `NULL` dalı sqlx'e tip ipucu vermiyor\n            -- ve parametre `text` olarak çıkarılıyor.\n            resolved_by = CASE WHEN $4::boolean THEN NULL ELSE $5::bigint END,\n            resolved_at = CASE WHEN $4::boolean THEN NULL ELSE now() END\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "report_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "resolved",
+                "dismissed"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31e9b76198e117e730c6dcb9f440e125907e1b528334323249fee9a01636384b"
+}

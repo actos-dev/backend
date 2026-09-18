@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT actor_id, deleted_at FROM contents WHERE id = $1 FOR UPDATE",
+  "query": "SELECT actor_id, deleted_at, community_id FROM contents WHERE id = $1 FOR UPDATE",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "deleted_at"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "community_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "community_id"
+          }
+        }
       }
     ],
     "parameters": {
@@ -33,8 +44,9 @@
     },
     "nullable": [
       false,
+      true,
       true
     ]
   },
-  "hash": "f7beaa48a84c2682c6ec09b93aa65aeffd31592047c9c73b68481a03c7909e5a"
+  "hash": "84770024d6b340ca6ac98ccbff3aa3b6a93f520951e3ccc5878b242767139813"
 }

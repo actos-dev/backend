@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO contents (actor_id, parent_content_id, content_type, body, body_format)\n        VALUES ($1, $2, 'comment'::content_type, $3, 'markdown'::body_format)\n        RETURNING id\n        ",
+  "query": "\n        INSERT INTO contents (actor_id, parent_content_id, content_type, body, body_format, community_id)\n        VALUES ($1, $2, 'comment'::content_type, $3, 'markdown'::body_format, $4)\n        RETURNING id\n        ",
   "describe": {
     "columns": [
       {
@@ -19,12 +19,13 @@
       "Left": [
         "Int8",
         "Int8",
-        "Text"
+        "Text",
+        "Int8"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "4abafd4a392f7b38684a279ac49cf2388a4291ec94928bf1b0659f1ccd423b47"
+  "hash": "3bec84ad2f5799ea0d60064b8376ce0ded83cda0609aa5b10d88732a8b31b187"
 }

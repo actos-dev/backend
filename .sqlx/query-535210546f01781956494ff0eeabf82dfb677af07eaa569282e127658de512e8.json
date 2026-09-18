@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO moderation_jobs (kind, community_id, actor_id, requested_by)\n            VALUES ('delete_actor_content_in_community'::moderation_job_kind, $1, $2, $3)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "535210546f01781956494ff0eeabf82dfb677af07eaa569282e127658de512e8"
+}

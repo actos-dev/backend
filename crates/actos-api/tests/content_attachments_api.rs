@@ -76,6 +76,7 @@ fn test_config_with_quota(quota_bytes: i64) -> Config {
             trusted_proxy_hops: 0,
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
+            moderation_job_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),

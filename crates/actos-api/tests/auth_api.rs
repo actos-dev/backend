@@ -77,6 +77,7 @@ fn test_config() -> Config {
             // için dolduruluyor.
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
+            moderation_job_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             // Gerçek bağlantı `#[sqlx::test]`'in verdiği `PgPool` ile zaten

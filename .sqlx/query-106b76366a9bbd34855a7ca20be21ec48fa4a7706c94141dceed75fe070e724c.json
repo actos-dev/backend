@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO reports (reporter_actor_id, target_type, target_id, reason)\n        VALUES ($1, $2, $3, $4)\n        RETURNING id, reporter_actor_id,\n                  target_type AS \"target_type: ReportTargetType\",\n                  target_id, reason,\n                  status AS \"status: ReportStatus\",\n                  notes, created_at, resolved_by, resolved_at\n        ",
+  "query": "\n        SELECT reports.id,\n               reports.reporter_actor_id,\n               reports.target_type AS \"target_type: ReportTargetType\",\n               reports.target_id,\n               reports.reason,\n               reports.status AS \"status: ReportStatus\",\n               reports.notes,\n               reports.created_at,\n               reports.resolved_by,\n               reports.resolved_at,\n               communities.name::text AS \"community?\"\n        FROM reports\n        LEFT JOIN communities ON communities.id = reports.community_id\n        WHERE ($1::report_status IS NULL OR reports.status = $1::report_status)\n          AND ($2::boolean OR reports.community_id = ANY($3::bigint[]))\n          AND (\n              $4::timestamptz IS NULL\n              OR (reports.created_at, reports.id) > ($4::timestamptz, $5::bigint)\n          )\n        ORDER BY reports.created_at ASC, reports.id ASC\n        LIMIT $6\n        ",
   "describe": {
     "columns": [
       {
@@ -133,24 +133,33 @@
             "name": "resolved_at"
           }
         }
+      },
+      {
+        "ordinal": 10,
+        "name": "community?",
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Int8",
         {
           "Custom": {
-            "name": "report_target_type",
+            "name": "report_status",
             "kind": {
               "Enum": [
-                "post",
-                "comment"
+                "pending",
+                "resolved",
+                "dismissed"
               ]
             }
           }
         },
+        "Bool",
+        "Int8Array",
+        "Timestamptz",
         "Int8",
-        "Text"
+        "Int8"
       ]
     },
     "nullable": [
@@ -163,8 +172,9 @@
       true,
       false,
       true,
-      true
+      true,
+      null
     ]
   },
-  "hash": "9e96d8a256a55f6619f8c77d1adf741e08d2dbfb3000900ba3f49f640ed5abf5"
+  "hash": "106b76366a9bbd34855a7ca20be21ec48fa4a7706c94141dceed75fe070e724c"
 }

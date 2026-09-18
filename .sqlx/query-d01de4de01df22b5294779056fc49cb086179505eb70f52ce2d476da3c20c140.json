@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, reporter_actor_id,\n               target_type AS \"target_type: ReportTargetType\",\n               target_id, reason,\n               status AS \"status: ReportStatus\",\n               notes, created_at, resolved_by, resolved_at\n        FROM reports\n        WHERE ($1::report_status IS NULL OR status = $1::report_status)\n          AND (\n              $2::timestamptz IS NULL\n              OR (created_at, id) > ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY created_at ASC, id ASC\n        LIMIT $4\n        ",
+  "query": "\n        SELECT reports.id,\n               reports.reporter_actor_id,\n               reports.target_type AS \"target_type: ReportTargetType\",\n               reports.target_id,\n               reports.reason,\n               reports.status AS \"status: ReportStatus\",\n               reports.notes,\n               reports.created_at,\n               reports.resolved_by,\n               reports.resolved_at,\n               communities.name::text AS \"community?\"\n        FROM reports\n        LEFT JOIN communities ON communities.id = reports.community_id\n        WHERE reports.id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -133,24 +133,16 @@
             "name": "resolved_at"
           }
         }
+      },
+      {
+        "ordinal": 10,
+        "name": "community?",
+        "type_info": "Text",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        {
-          "Custom": {
-            "name": "report_status",
-            "kind": {
-              "Enum": [
-                "pending",
-                "resolved",
-                "dismissed"
-              ]
-            }
-          }
-        },
-        "Timestamptz",
-        "Int8",
         "Int8"
       ]
     },
@@ -164,8 +156,9 @@
       true,
       false,
       true,
-      true
+      true,
+      null
     ]
   },
-  "hash": "43c8625dee6cf8f6e60d0548179ff4fbcd0b0cdf9d2ee378544f68e9ac6ef925"
+  "hash": "d01de4de01df22b5294779056fc49cb086179505eb70f52ce2d476da3c20c140"
 }

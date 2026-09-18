@@ -149,10 +149,16 @@ global_permission_marker!(
     CanViewAudit => Permission::AuditView
 );
 
-/// Verilen **global** izni gerektiren extractor.
+/// Verilen izni **herhangi bir kapsamda** taşımayı gerektiren extractor.
 ///
 /// `CurrentActor`'ı (dolayısıyla ban-yazma kontrolünü) temel alır; izin
-/// yoksa handler'ın hiçbir satırı çalışmadan `403` döner.
+/// hiçbir kapsamda yoksa handler'ın hiçbir satırı çalışmadan `403` döner.
+///
+/// **Bu yalnızca kabul kapısıdır, kesin kapsam kontrolü değildir.** Topluluk
+/// kapsamlı bir moderatör de uca girebilsin diye [`authz::has_any`]
+/// kullanılıyor; "bu toplulukta yapabilir mi" sorusunu hedefi bilen core
+/// fonksiyonu ([`authz::has_for`] ile) yanıtlar. `audit.view` pratikte
+/// global-only kalır çünkü o izin yalnızca global verilebiliyor.
 #[derive(Debug, Clone)]
 pub struct Require<P: GlobalPermission>(pub AuthenticatedActor, PhantomData<P>);
 
@@ -172,7 +178,7 @@ impl<P: GlobalPermission> FromRequestParts<AppState> for Require<P> {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let current = CurrentActor::from_request_parts(parts, state).await?;
-        if authz::actor_has_global(&current.0, P::PERMISSION) {
+        if authz::has_any(&current.0.permissions, P::PERMISSION) {
             Ok(Self(current.0, PhantomData))
         } else {
             Err(ApiError::new(actos_core::Error::Forbidden).with_request_id(&parts.headers))

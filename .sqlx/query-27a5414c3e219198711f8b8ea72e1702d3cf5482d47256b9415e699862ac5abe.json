@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM bans WHERE actor_id = $1",
+  "query": "UPDATE moderation_jobs SET processed_at = now() WHERE id = $1",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "3cbf73ff57dee090d8431e95e99b464833a56c3cfadac8ebf955227d8ce6039e"
+  "hash": "27a5414c3e219198711f8b8ea72e1702d3cf5482d47256b9415e699862ac5abe"
 }

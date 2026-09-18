@@ -329,6 +329,14 @@ pub async fn create_post(
         None => None,
         Some(name) => {
             let community_id = crate::community::resolve_community_id_in(&mut *tx, name).await?;
+            // Topluluk ban'ı yazmayı engeller (COMMUNITY_PLAN.md §6). Üyelik
+            // kontrolünden ÖNCE: ban üyeliği zaten sildiği için aksi hâlde
+            // "üye değil" (403) dönüp gerçek sebebi gizlerdik.
+            if crate::moderation::is_banned_from_community_in(&mut *tx, community_id, author.id)
+                .await?
+            {
+                return Err(Error::Banned);
+            }
             if !crate::community::is_member_in(&mut *tx, community_id, author.id).await? {
                 return Err(Error::Forbidden);
             }

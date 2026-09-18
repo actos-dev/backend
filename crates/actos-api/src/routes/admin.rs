@@ -13,6 +13,7 @@
 use actos_core::{
     Error,
     auth::{Permission, PermissionScope},
+    community as core_community,
     id::{Content as ContentIdKind, Report as ReportIdKind},
     moderation::{self as core_mod, ReportStatus, ReportTargetType},
 };
@@ -67,6 +68,14 @@ struct ActionListQuery {
     limit: Option<String>,
 }
 
+/// `DELETE /admin/bans/{username}?community=` query'si.
+#[derive(Debug, Deserialize)]
+struct BanQuery {
+    /// Community name for a community-scoped ban removal. Omitted means the
+    /// platform-wide ban.
+    community: Option<String>,
+}
+
 /// `"post"`/`"comment"` metnini enum'a çevirir.
 fn parse_target_type(raw: &str) -> Result<ReportTargetType, Error> {
     match raw {
@@ -110,6 +119,7 @@ fn report_summary(
         reason: rapor.reason.clone(),
         status: status_str(rapor.status).to_owned(),
         notes: rapor.notes.clone(),
+        community: rapor.community.clone(),
         created_at: rapor.created_at.to_rfc3339(),
         resolved_at: rapor.resolved_at.map(|t| t.to_rfc3339()),
     })
@@ -191,7 +201,7 @@ async fn create_report(
     )
 )]
 async fn list_reports(
-    _viewer: Require<CanViewReports>,
+    viewer: Require<CanViewReports>,
     State(state): State<AppState>,
     Query(query): Query<ReportListQuery>,
     headers: HeaderMap,
@@ -206,7 +216,7 @@ async fn list_reports(
     let limit = parse_limit(query.limit, &headers)?;
     let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
 
-    let sayfa = core_mod::list_reports(state.db(), status, cursor, limit)
+    let sayfa = core_mod::list_reports(state.db(), &viewer.permissions, status, cursor, limit)
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
@@ -262,6 +272,7 @@ async fn update_report(
     let rapor = core_mod::update_report(
         state.db(),
         moderator.actor.id,
+        &moderator.permissions,
         report_id,
         status,
         req.notes.as_deref(),
@@ -314,9 +325,15 @@ async fn moderate_delete_content(
         .decode::<ContentIdKind>(&id)
         .map_err(|_| ApiError::new(Error::NotFound("content")).with_request_id(&headers))?;
 
-    core_mod::moderate_delete_content(state.db(), moderator.actor.id, content_id, &req.reason)
-        .await
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    core_mod::moderate_delete_content(
+        state.db(),
+        moderator.actor.id,
+        &moderator.permissions,
+        content_id,
+        &req.reason,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -360,12 +377,26 @@ async fn create_ban(
         .transpose()
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
+    // Topluluk adı core'a id olarak geçiyor; yoksa `404` (core'daki gerçek
+    // topluluk sorgusuna gitmeden, isimden).
+    let community_id = match req.community.as_deref() {
+        Some(name) => Some(
+            core_community::resolve_id_by_name(state.db(), name)
+                .await
+                .map_err(|e| ApiError::new(e).with_request_id(&headers))?,
+        ),
+        None => None,
+    };
+
     let ban = core_mod::ban_actor(
         state.db(),
         moderator.actor.id,
+        &moderator.permissions,
         &req.username,
         &req.reason,
         expires_at,
+        community_id,
+        req.delete_posts,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
@@ -377,21 +408,24 @@ async fn create_ban(
             reason: ban.reason,
             banned_at: ban.banned_at.to_rfc3339(),
             expires_at: ban.expires_at.map(|t| t.to_rfc3339()),
+            community: ban.community,
         }),
     ))
 }
 
-/// `DELETE /admin/bans/{username}` → `204`, `401`, `403`, `404`.
-/// İdempotent: ban yoksa da başarı döner.
+/// `DELETE /admin/bans/{username}?community=` → `204`, `401`, `403`, `404`.
+/// İdempotent: ban yoksa da başarı döner. `community` verilmezse platform
+/// geneli ban kaldırılır.
 #[utoipa::path(
     delete,
     path = "/admin/bans/{username}",
     tag = "admin",
     summary = "Remove an actor's ban",
-    description = "Requires moderator or admin. Idempotent: succeeds even if no ban exists.",
+    description = "Requires `member.ban` at the relevant scope. Idempotent: succeeds even if no ban exists. Omit `community` to remove the platform-wide ban.",
     security(("api_key" = [])),
     params(
         ("username" = String, Path, description = "Username of the actor whose ban is removed"),
+        ("community" = Option<String>, Query, description = "Community name; omitted means the platform-wide ban"),
     ),
     responses(
         (status = 204, description = "Ban removed (or none existed)"),
@@ -405,11 +439,27 @@ async fn remove_ban(
     moderator: Require<CanBan>,
     State(state): State<AppState>,
     Path(username): Path<String>,
+    Query(query): Query<BanQuery>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    core_mod::unban_actor(state.db(), moderator.actor.id, &username)
-        .await
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    let community_id = match query.community.as_deref() {
+        Some(name) => Some(
+            core_community::resolve_id_by_name(state.db(), name)
+                .await
+                .map_err(|e| ApiError::new(e).with_request_id(&headers))?,
+        ),
+        None => None,
+    };
+
+    core_mod::unban_actor(
+        state.db(),
+        moderator.actor.id,
+        &moderator.permissions,
+        &username,
+        community_id,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -425,7 +475,7 @@ async fn remove_ban(
     path = "/admin/permissions",
     tag = "admin",
     summary = "Grant a scoped permission to an actor",
-    description = "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
+    description = "Requires `role.grant` at the relevant scope. Idempotent. `community` (a name) scopes the grant to that community.",
     security(("api_key" = [])),
     request_body = SetPermissionRequest,
     responses(
@@ -443,11 +493,13 @@ async fn grant_permission(
     headers: HeaderMap,
     Json(req): Json<SetPermissionRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let (permission, scope, community_id) = parse_permission_request(&req, &headers)?;
+    let (permission, scope, community_id) =
+        parse_permission_request(state.db(), &req, &headers).await?;
 
     core_mod::grant_permission(
         state.db(),
         admin.actor.id,
+        &admin.permissions,
         &req.username,
         permission,
         scope,
@@ -467,7 +519,7 @@ async fn grant_permission(
     path = "/admin/permissions",
     tag = "admin",
     summary = "Revoke a scoped permission from an actor",
-    description = "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
+    description = "Requires `role.grant` at the relevant scope. Idempotent. `community` (a name) scopes the grant to that community.",
     security(("api_key" = [])),
     request_body = SetPermissionRequest,
     responses(
@@ -485,11 +537,13 @@ async fn revoke_permission(
     headers: HeaderMap,
     Json(req): Json<SetPermissionRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let (permission, scope, community_id) = parse_permission_request(&req, &headers)?;
+    let (permission, scope, community_id) =
+        parse_permission_request(state.db(), &req, &headers).await?;
 
     core_mod::revoke_permission(
         state.db(),
         admin.actor.id,
+        &admin.permissions,
         &req.username,
         permission,
         scope,
@@ -503,10 +557,13 @@ async fn revoke_permission(
 
 /// İstek gövdesini `(permission, scope, community_id)` üçlüsüne çevirir.
 ///
-/// Phase 1'de `community` alanı reddediliyor: `communities` tablosu henüz
-/// yok, dolayısıyla topluluk kapsamlı bir atama çözülemez. Alan artık
-/// protokolde duruyor ki Phase 2'de yalnızca bu fonksiyon değişsin.
-fn parse_permission_request(
+/// `community` verilmişse adı **önce** iç kimliğe çözülür: var olmayan bir
+/// topluluk `404`, kapsam/izin uyumsuzluğu (`audit.view` global olmalı,
+/// `member.*` topluluk olmalı) ise `400` döner. Ayrımın doğru olması için
+/// çözümleme doğrulamadan önce yapılıyor; kapsam uyumunu yine core'daki
+/// `dogrula_kapsam` işletiyor.
+async fn parse_permission_request(
+    pool: &sqlx::PgPool,
     req: &SetPermissionRequest,
     headers: &HeaderMap,
 ) -> Result<(Permission, PermissionScope, Option<i64>), ApiError> {
@@ -518,14 +575,15 @@ fn parse_permission_request(
         .with_request_id(headers)
     })?;
 
-    if req.community.is_some() {
-        return Err(ApiError::new(Error::Validation(
-            "communities are not available yet; omit `community` for a global grant".to_owned(),
-        ))
-        .with_request_id(headers));
+    match req.community.as_deref() {
+        Some(name) => {
+            let community_id = core_community::resolve_id_by_name(pool, name)
+                .await
+                .map_err(|e| ApiError::new(e).with_request_id(headers))?;
+            Ok((permission, PermissionScope::Community, Some(community_id)))
+        }
+        None => Ok((permission, PermissionScope::Global, None)),
     }
-
-    Ok((permission, PermissionScope::Global, None))
 }
 
 // --- Denetim izi ------------------------------------------------------------

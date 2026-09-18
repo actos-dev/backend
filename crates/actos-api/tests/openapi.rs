@@ -53,6 +53,7 @@ fn test_config() -> Config {
             trusted_proxy_hops: 0,
             tag_cleanup_interval: std::time::Duration::ZERO,
             hot_score_interval: std::time::Duration::ZERO,
+            moderation_job_interval: std::time::Duration::ZERO,
         },
         database: DatabaseConfig {
             url: String::new(),
@@ -171,6 +172,7 @@ const EXPECTED_PATHS: &[&str] = &[
     "/communities/{name}",
     "/communities/{name}/join",
     "/communities/{name}/members",
+    "/communities/{name}/members/{username}",
     "/communities/{name}/posts",
     // tags
     "/tags/search",

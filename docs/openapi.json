@@ -227,6 +227,13 @@
             "description": "RFC 3339.",
             "type": "string"
           },
+          "community": {
+            "description": "Name of the community this ban applies to; `None` means platform-wide.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expires_at": {
             "description": "RFC 3339. `None` means permanent.",
             "type": [
@@ -646,6 +653,17 @@
       "CreateBanRequest": {
         "description": "Request body of `POST /admin/bans`.",
         "properties": {
+          "community": {
+            "description": "Community name for a community-scoped ban. Omitted or `null` means a\nplatform-wide ban.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delete_posts": {
+            "description": "Also queue the deletion of this actor's posts in the community.\nOnly valid together with `community`; rejected with 400 otherwise.",
+            "type": "boolean"
+          },
           "expires_at": {
             "description": "RFC 3339. When omitted, the ban is permanent.",
             "type": [
@@ -951,7 +969,7 @@
         "description": "One scoped permission held by an actor.",
         "properties": {
           "community": {
-            "description": "Community name for a community-scoped grant, `None` for global.\nAlways `None` until communities exist (COMMUNITY_PLAN.md phase 2).",
+            "description": "Community name for a community-scoped grant, `None` for global.",
             "type": [
               "string",
               "null"
@@ -1182,6 +1200,13 @@
       "ReportSummary": {
         "description": "A report record.",
         "properties": {
+          "community": {
+            "description": "Name of the community the reported content belongs to; `None` for an\nindependent post.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "created_at": {
             "description": "RFC 3339.",
             "type": "string"
@@ -3093,7 +3118,7 @@
     },
     "/admin/bans/{username}": {
       "delete": {
-        "description": "Requires moderator or admin. Idempotent: succeeds even if no ban exists.",
+        "description": "Requires `member.ban` at the relevant scope. Idempotent: succeeds even if no ban exists. Omit `community` to remove the platform-wide ban.",
         "operationId": "remove_ban",
         "parameters": [
           {
@@ -3101,6 +3126,15 @@
             "in": "path",
             "name": "username",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Community name; omitted means the platform-wide ban",
+            "in": "query",
+            "name": "community",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3325,7 +3359,7 @@
     },
     "/admin/permissions": {
       "delete": {
-        "description": "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
+        "description": "Requires `role.grant` at the relevant scope. Idempotent. `community` (a name) scopes the grant to that community.",
         "operationId": "revoke_permission",
         "requestBody": {
           "content": {
@@ -3433,7 +3467,7 @@
         ]
       },
       "put": {
-        "description": "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
+        "description": "Requires `role.grant` at the relevant scope. Idempotent. `community` (a name) scopes the grant to that community.",
         "operationId": "grant_permission",
         "requestBody": {
           "content": {
@@ -5409,6 +5443,126 @@
           }
         },
         "summary": "List a community's members",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
+    "/communities/{name}/members/{username}": {
+      "delete": {
+        "description": "Requires `member.kick` scoped to this community. The owner cannot be kicked. A non-member returns 404.",
+        "operationId": "kick_member",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Username of the member to kick",
+            "in": "path",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Member kicked"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated, but not authorized for this action"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Kick a member from a community",
         "tags": [
           "communities"
         ]

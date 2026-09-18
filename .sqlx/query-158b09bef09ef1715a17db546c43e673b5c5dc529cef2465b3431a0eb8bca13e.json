@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            actors.id AS actor_id,\n            (\n                bans.actor_id IS NOT NULL\n                AND (bans.expires_at IS NULL OR bans.expires_at > now())\n            ) AS \"is_banned!\"\n        FROM actors\n        LEFT JOIN bans ON bans.actor_id = actors.id\n        WHERE actors.username = $1 AND actors.deleted_at IS NULL\n        ",
+  "query": "\n        SELECT\n            actors.id AS actor_id,\n            (\n                bans.actor_id IS NOT NULL\n                AND (bans.expires_at IS NULL OR bans.expires_at > now())\n            ) AS \"is_banned!\"\n        FROM actors\n        LEFT JOIN bans ON bans.actor_id = actors.id AND bans.community_id IS NULL\n        WHERE actors.username = $1 AND actors.deleted_at IS NULL\n        ",
   "describe": {
     "columns": [
       {
@@ -36,5 +36,5 @@
       null
     ]
   },
-  "hash": "037da01ab7b2d8285e9ed88be85f659d681b2fc432057bcc2112587037f862e0"
+  "hash": "158b09bef09ef1715a17db546c43e673b5c5dc529cef2465b3431a0eb8bca13e"
 }

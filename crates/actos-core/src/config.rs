@@ -63,6 +63,10 @@ pub struct ServerConfig {
     /// `hot_score` tazeleme işinin çalışma aralığı (bkz.
     /// `crate::feed::recompute_hot_scores`). Sıfır = iş hiç başlatılmaz.
     pub hot_score_interval: Duration,
+    /// Banla-ve-sil moderasyon işlerini işleyen kuyruğun çalışma aralığı
+    /// (bkz. `crate::moderation::run_pending_jobs`). Sıfır = iş hiç
+    /// başlatılmaz.
+    pub moderation_job_interval: Duration,
     /// Önümüzde kaç **güvenilir** ters proxy (reverse proxy) olduğu —
     /// `X-Forwarded-For` header'ının IP başına hız sınırlamada ne kadar
     /// güvenilebileceğini belirler.
@@ -226,6 +230,13 @@ impl Config {
                 // değerleri tazeliyor, sık koşmasının bir karşılığı yok.
                 hot_score_interval: Duration::from_secs(
                     optional("HOT_SCORE_INTERVAL_SECS")?.unwrap_or(15 * 60),
+                ),
+                // Varsayılan 60 saniye: banla-ve-sil işleri kullanıcıya
+                // görece yakın bir zamanda yansımalı, ama her tur boş
+                // kuyruğa bir `SELECT` atmak da anlamsız. Kuyruk yalnızca
+                // topluluk ban'larında doluyor.
+                moderation_job_interval: Duration::from_secs(
+                    optional("MODERATION_JOB_INTERVAL_SECS")?.unwrap_or(60),
                 ),
             },
             database: DatabaseConfig {
