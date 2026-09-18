@@ -297,6 +297,7 @@ struct ContentSearchRow {
     community_id: Option<i64>,
     community_name: Option<String>,
     tags: Vec<String>,
+    cross_post_source_id: Option<i64>,
     /// Bkz. modül dokümantasyonu "Sıralama" bölümü — alaka + tazelik +
     /// popülerlik karışımı, `hot_score` kolonundan değil doğrudan
     /// `created_at`/`score`'dan hesaplanıyor. `Content`'in bir alanı değil,
@@ -334,6 +335,8 @@ impl From<ContentSearchRow> for Content {
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
+            cross_post_source_id: row.cross_post_source_id,
+            cross_post: None,
         }
     }
 }
@@ -424,6 +427,7 @@ pub async fn search_content(
             contents.created_at,
             contents.edited_at,
             contents.deleted_at,
+            contents.cross_post_source_id,
             actors.id AS author_id,
             actors.username AS author_username,
             actors.actor_type AS "author_actor_type: ActorType",
@@ -457,7 +461,7 @@ pub async fn search_content(
     .fetch_all(pool)
     .await?;
 
-    Ok(paginate(
+    let mut page = paginate(
         rows,
         limit,
         |row: &ContentSearchRow| row.id,
@@ -465,7 +469,9 @@ pub async fn search_content(
             hot_score: row.rank,
         },
         Content::from,
-    ))
+    );
+    crate::content::resolve_cross_posts(pool, viewer_communities, &mut page.items).await?;
+    Ok(page)
 }
 
 // --- Actor araması -----------------------------------------------------

@@ -77,6 +77,7 @@ async fn create_post(
         &[],
         8 * 1024 * 1024,
         i64::MAX,
+        None,
     )
     .await
     .expect("post oluşturulabilmeli")

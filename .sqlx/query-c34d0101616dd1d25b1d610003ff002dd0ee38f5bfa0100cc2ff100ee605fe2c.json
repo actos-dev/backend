@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            ata.id,\n            ata.content_type AS \"content_type: ContentType\",\n            ata.title,\n            ata.body,\n            ata.body_format AS \"body_format: BodyFormat\",\n            ata.score,\n            ata.upvotes,\n            ata.downvotes,\n            ata.comment_count,\n            ata.hot_score,\n            ata.created_at,\n            ata.edited_at,\n            ata.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at,\n            communities.id AS \"community_id?\",\n            communities.name AS \"community_name?\"\n        FROM contents AS ata\n        JOIN contents AS hedef ON hedef.id = $1\n        JOIN actors ON actors.id = ata.actor_id\n        LEFT JOIN communities ON communities.id = ata.community_id\n        WHERE ata.path @> hedef.path AND ata.id <> hedef.id\n          AND content_visible_to(ata.community_id, $2::bigint[])\n        ORDER BY ata.depth\n        ",
+  "query": "\n        SELECT\n            contents.id,\n            contents.content_type AS \"content_type: ContentType\",\n            contents.title,\n            contents.body,\n            contents.body_format AS \"body_format: BodyFormat\",\n            contents.score,\n            contents.upvotes,\n            contents.downvotes,\n            contents.comment_count,\n            contents.hot_score,\n            contents.created_at,\n            contents.edited_at,\n            contents.deleted_at,\n            contents.cross_post_source_id,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at,\n            communities.id AS \"community_id?\",\n            communities.name AS \"community_name?\",\n            COALESCE(\n                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                '{}'\n            ) AS \"tags!: Vec<String>\"\n        FROM contents\n        JOIN actors ON actors.id = contents.actor_id\n        LEFT JOIN communities ON communities.id = contents.community_id\n        LEFT JOIN content_tags ON content_tags.content_id = contents.id\n        LEFT JOIN tags ON tags.id = content_tags.tag_id\n        WHERE contents.id = $1 AND contents.content_type = 'post'::content_type\n          AND content_visible_to(contents.community_id, $2::bigint[])\n        GROUP BY contents.id, actors.id, communities.id\n        ",
   "describe": {
     "columns": [
       {
@@ -168,6 +168,17 @@
       },
       {
         "ordinal": 13,
+        "name": "cross_post_source_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "cross_post_source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -178,7 +189,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "author_username",
         "type_info": {
           "Custom": {
@@ -194,7 +205,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "author_actor_type: ActorType",
         "type_info": {
           "Custom": {
@@ -215,7 +226,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "author_display_name",
         "type_info": "Text",
         "origin": {
@@ -226,7 +237,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "author_bio",
         "type_info": "Text",
         "origin": {
@@ -237,7 +248,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "author_created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -248,7 +259,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -259,7 +270,7 @@
         }
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "community_id?",
         "type_info": "Int8",
         "origin": {
@@ -270,7 +281,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "community_name?",
         "type_info": {
           "Custom": {
@@ -284,6 +295,12 @@
             "name": "name"
           }
         }
+      },
+      {
+        "ordinal": 23,
+        "name": "tags!: Vec<String>",
+        "type_info": "TextArray",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -306,6 +323,7 @@
       false,
       true,
       true,
+      true,
       false,
       false,
       false,
@@ -314,8 +332,9 @@
       false,
       true,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "c7cc371b3fbfc32e96d3a451777c77e9a5798406a6eb576ab012d7812dea9069"
+  "hash": "c34d0101616dd1d25b1d610003ff002dd0ee38f5bfa0100cc2ff100ee605fe2c"
 }

@@ -21,7 +21,8 @@ use actos_core::{
 use actos_types::{
     auth::ActorSummary,
     content::{
-        CommunityRefSummary, ContentSummary, CreatePostRequest, PostListResponse, UpdatePostRequest,
+        CommunityRefSummary, ContentSummary, CreatePostRequest, CrossPostPreviewSummary,
+        PostListResponse, UpdatePostRequest,
     },
 };
 use axum::{
@@ -460,13 +461,33 @@ fn content_summary_inner(
     // topluluk postu için kodlanmış id + ad. `community.name` burada ham
     // gerçek: ad topluluğun kendi kaynağından geldiği için maskelenecek
     // kişisel veri değil.
-    let community = match &content.community {
+    let community = content
+        .community
+        .as_ref()
+        .map(|reference| community_ref_summary(reference, id_codec))
+        .transpose()?;
+
+    // Çapraz-gönderi kartı, okuyucuya çözülmüş hâliyle. `is_cross_post` tek
+    // başına `cross_post_source_id`'den türetiliyor (kaynağın silinmiş
+    // olması bunu değiştirmez — o durumda `cross_post` `None` kalır ve
+    // istemci mezar taşı çizer, §8).
+    let cross_post = match &content.cross_post {
         None => None,
-        Some(reference) => Some(CommunityRefSummary {
-            id: id_codec
-                .encode::<CommunityIdKind>(reference.id)
-                .map_err(|e| Error::Internal(format!("could not encode community id: {e}")))?,
-            name: reference.name.clone(),
+        Some(preview) => Some(CrossPostPreviewSummary {
+            id: id_codec.encode::<ContentIdKind>(preview.source_id)?,
+            title: preview.title.clone(),
+            // Kaynağın yazarı silinmişse içerik yazarındaki maskeleme
+            // kuralının aynısı uygulanıyor (bkz. `masked_actor_summary`).
+            author: if preview.author_deleted {
+                masked_actor_summary(&preview.author, id_codec)?
+            } else {
+                actor_summary(&preview.author, None, id_codec)?
+            },
+            community: preview
+                .community
+                .as_ref()
+                .map(|reference| community_ref_summary(reference, id_codec))
+                .transpose()?,
         }),
     };
 
@@ -489,6 +510,25 @@ fn content_summary_inner(
         edited_at: content.edited_at.map(|t| t.to_rfc3339()),
         attachments,
         deleted,
+        is_cross_post: content.cross_post_source_id.is_some(),
+        cross_post,
+    })
+}
+
+/// Bir çekirdek [`actos_core::community::CommunityRef`]'ini yanıt DTO'suna
+/// çevirir: id'yi kodlar, adı olduğu gibi taşır.
+///
+/// Hem içeriğin kendi topluluğu hem çapraz-gönderi önizlemesinin topluluğu
+/// aynı şekle sahip olduğu için tek yerde tutuluyor.
+fn community_ref_summary(
+    reference: &actos_core::community::CommunityRef,
+    id_codec: &IdCodec,
+) -> Result<CommunityRefSummary, Error> {
+    Ok(CommunityRefSummary {
+        id: id_codec
+            .encode::<CommunityIdKind>(reference.id)
+            .map_err(|e| Error::Internal(format!("could not encode community id: {e}")))?,
+        name: reference.name.clone(),
     })
 }
 
@@ -619,6 +659,17 @@ async fn create_post(
         }
     }
 
+    // `cross_post_source` dış referans biçiminde (`c_...`) geliyor; iç
+    // kimliğe çözülüp çekirdeğe öyle geçiyor. Bozuk/bilinmeyen bir id
+    // `NotFound` — [`decode_content_id`] dokümanındaki gerekçe.
+    let cross_post_source = match req.cross_post_source.as_deref() {
+        None => None,
+        Some(raw) => Some(
+            decode_content_id(raw, state.id_codec(), "post")
+                .map_err(|e| ApiError::new(e).with_request_id(&headers))?,
+        ),
+    };
+
     let content = core_content::create_post(
         state.db(),
         state.storage(),
@@ -631,6 +682,7 @@ async fn create_post(
         &files,
         state.config().server.max_upload_bytes,
         state.config().storage_quota.bytes,
+        cross_post_source,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;

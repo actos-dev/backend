@@ -31,7 +31,7 @@
 //! `ck_tags_name_format`'la birebir); "kaç tane" sorusu içerik oluşturma
 //! iş kuralı olduğu için [`MAX_TAGS_PER_POST`] burada.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
@@ -39,7 +39,7 @@ use sqlx::{PgConnection, PgPool};
 use crate::{
     actor::{Page, paginate, resolve_live_actor_id, split_new_cursor},
     auth::{ActorRecord, ActorType, Grant, Permission},
-    community::CommunityRef,
+    community::{CommunityRef, CommunityVisibility},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
     id::IdCodec,
@@ -118,6 +118,38 @@ pub struct Content {
     /// `[deleted]` olarak göstermek isteyen bir çağıran buna ihtiyaç
     /// duyacak.
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Bu içerik bir çapraz-gönderi ise kaynağın iç kimliği; `None` normal
+    /// bir post. Çapraz-gönderi bir **kopya değil referanstır** (§8): satır
+    /// yalnızca kaynağın id'sini taşır, kart okuma anında okuyucunun
+    /// izinleriyle çözülür. Yorumlarda her zaman `None` (şemadaki
+    /// `ck_contents_cross_post_is_post`).
+    pub cross_post_source_id: Option<i64>,
+    /// Kaynağın bu okuyucu için çözülmüş hâli — bkz. [`resolve_cross_posts`].
+    ///
+    /// `cross_post_source_id` dolu olup burası `None` ise kaynak erişilemez
+    /// demektir: silinmiş ya da okuyucunun göremediği özel bir toplulukta —
+    /// ikisi bilerek ayrılmaz, gerekçe açıklanmaz (§8). Liste/tekil okuma
+    /// fonksiyonları doldurur; [`create_post`] yeni oluşturulan gönderi için
+    /// hemen çözer.
+    pub cross_post: Option<CrossPostPreview>,
+}
+
+/// Bir çapraz-gönderinin kaynağının, okuyucuya çözülmüş hâli.
+///
+/// **`deleted` diye bir alan yok:** silinmiş bir kaynak [`Content::cross_post`]'u
+/// `None` yapar (mezar taşı); `Some` içinde asla "silinmiş" taşınmaz. Böylece
+/// istemci tek bir `None` kontrolüyle aynı kartı çizer ve iki sebep (silinme
+/// / görünmez özel topluluk) yapısal olarak ayırt edilemez (§8).
+#[derive(Debug, Clone)]
+pub struct CrossPostPreview {
+    pub source_id: i64,
+    pub title: Option<String>,
+    pub author: ActorRecord,
+    /// Kaynağın yazarı silinmişse `true`; maskeleme kararı [`Content`]'in
+    /// `author_deleted` alanıyla birebir aynı gerekçeyle HTTP katmanında
+    /// veriliyor (bkz. `actos-api/src/routes/posts.rs` → `masked_actor_summary`).
+    pub author_deleted: bool,
+    pub community: Option<CommunityRef>,
 }
 
 struct ContentRow {
@@ -144,6 +176,7 @@ struct ContentRow {
     community_id: Option<i64>,
     community_name: Option<String>,
     tags: Vec<String>,
+    cross_post_source_id: Option<i64>,
 }
 
 impl From<ContentRow> for Content {
@@ -176,6 +209,8 @@ impl From<ContentRow> for Content {
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
+            cross_post_source_id: row.cross_post_source_id,
+            cross_post: None,
         }
     }
 }
@@ -274,6 +309,25 @@ async fn attach_tags(conn: &mut PgConnection, content_id: i64, tags: &[String]) 
 /// zaten `title` yok, bu kural post'a özel olduğu için `text.rs`'e değil
 /// buraya ait).
 ///
+/// ## `cross_post_source` (COMMUNITY_PLAN.md §8, Faz 5)
+///
+/// `Some(source_id)` ise bu bir **çapraz-gönderi**dir: satır kaynağın
+/// yalnızca id'sini taşır, `title = NULL`, `body = ''`, etiketsiz. Bu
+/// yolda başlık/gövde/etiket doğrulaması **atlanır** (gönderi kendi
+/// içeriğini taşımıyor). Kaynak yüklenirken sırasıyla:
+///
+/// 1. yaratıcının göremediği (`content_visible_to`, yaratıcının kendi
+///    görünür topluluk kümesiyle) ya da hiç var olmayan kaynak →
+///    [`Error::NotFound`];
+/// 2. post olmayan ya da kendisi de bir çapraz-gönderi olan kaynak →
+///    [`Error::Validation`] (derinlik sınırı **tek seviye**; zincir yok);
+/// 3. özel bir topluluktaki kaynak → [`Error::Forbidden`], yaratıcı o
+///    topluluğun üyesi olsa bile ("özel topluluktan hiçbir şey çıkmaz");
+/// 4. silinmiş kaynak → [`Error::Gone`].
+///
+/// Yaratıcının görünür kümesi yalnızca çapraz-gönderi yolunda hesaplanır;
+/// normal post sıfır ek sorgu öder.
+///
 /// `path`/`depth`/`root_post_id`'ye dokunulmuyor (bkz. modül
 /// dokümantasyonu) — `INSERT`, `trg_contents_set_path` trigger'ının
 /// bunları hesaplamasına bırakılıyor.
@@ -288,10 +342,13 @@ async fn attach_tags(conn: &mut PgConnection, content_id: i64, tags: &[String]) 
 /// check itself.
 ///
 /// # Errors
-/// `title`/`body`/`tags` doğrulamadan geçmezse [`Error::Validation`]; a file
-/// fails validation, exceeds the per-file limit, or the batch would exceed
-/// the storage quota: [`Error::Validation`] / [`Error::UnsupportedMedia`]
-/// (see [`crate::attachment::create_for_content`]); veritabanı hatası
+/// `title`/`body`/`tags` doğrulamadan geçmezse ya da kaynak geçersizse
+/// [`Error::Validation`]; hedef topluluk kuralları ihlâl edilirse
+/// [`Error::Forbidden`]/[`Error::Banned`]; kaynak yok/görünmezse
+/// [`Error::NotFound`]; kaynak silinmişse [`Error::Gone`]; a file fails
+/// validation, exceeds the per-file limit, or the batch would exceed the
+/// storage quota: [`Error::Validation`] / [`Error::UnsupportedMedia`] (see
+/// [`crate::attachment::create_for_content`]); veritabanı hatası
 /// [`Error::Database`].
 #[allow(clippy::too_many_arguments)]
 pub async fn create_post(
@@ -306,15 +363,77 @@ pub async fn create_post(
     files: &[Vec<u8>],
     max_file_bytes: usize,
     quota_bytes: i64,
+    cross_post_source: Option<i64>,
 ) -> Result<Content> {
-    let title = text::validate_title(title).map_err(|e| Error::Validation(e.to_string()))?;
-    if title.is_empty() {
-        return Err(Error::Validation("post title cannot be empty".to_owned()));
-    }
-    let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
-    let tags = normalize_tags(tags)?;
+    // Çapraz-gönderi yolu doğrulamayı atlar (yukarıdaki doküman): başlık
+    // kaynaktan çözülür, gövde boş, etiket yok. Normal yol eski hâliyle
+    // aynen işliyor.
+    let (title, body, tags) = match cross_post_source {
+        None => {
+            let title =
+                text::validate_title(title).map_err(|e| Error::Validation(e.to_string()))?;
+            if title.is_empty() {
+                return Err(Error::Validation("post title cannot be empty".to_owned()));
+            }
+            let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
+            (Some(title), body, normalize_tags(tags)?)
+        }
+        Some(_) => (None, String::new(), Vec::new()),
+    };
+
+    // Yaratıcının görünür toplulukları yalnızca kaynak kapısı için gerekli;
+    // normal post bu sorguyu hiç atmıyor. `visible_community_ids` transaction
+    // dışında çalışıyor (havuz istiyor) — üyelik ile INSERT arasındaki
+    // teorik yarış, `resolve_community_id_in` ile aynı sınıfta ve kabul
+    // edilebilir.
+    let creator_communities = match cross_post_source {
+        None => Vec::new(),
+        Some(_) => crate::visibility::visible_community_ids(pool, Some(author.id)).await?,
+    };
 
     let mut tx = pool.begin().await?;
+
+    if let Some(source_id) = cross_post_source {
+        // Kaynak sorgusu görünürlük kapısını içeriyor: görünmeyen bir satır
+        // hiç dönmez, dolayısıyla ayrı bir "görünür mü" kontrolü yok (§9).
+        let source = sqlx::query!(
+            r#"
+            SELECT
+                kaynak.content_type AS "content_type: ContentType",
+                kaynak.deleted_at,
+                kaynak.cross_post_source_id,
+                topluluk.visibility AS "community_visibility?: CommunityVisibility"
+            FROM contents AS kaynak
+            LEFT JOIN communities AS topluluk ON topluluk.id = kaynak.community_id
+            WHERE kaynak.id = $1
+              AND content_visible_to(kaynak.community_id, $2::bigint[])
+            "#,
+            source_id,
+            &creator_communities,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(Error::NotFound("post"))?;
+
+        // Derinlik sınırı: yorum ya da başka bir çapraz-gönderi kaynak
+        // olamaz — yoksa zincir oluşur (§8).
+        if source.content_type != ContentType::Post || source.cross_post_source_id.is_some() {
+            return Err(Error::Validation(
+                "the cross-post source must be a post that is not itself a cross-post".to_owned(),
+            ));
+        }
+
+        // Özel topluluktan hiçbir şey çıkmaz (§8) — yaratıcı üye olsa bile.
+        // Bu kontrol görünürlükten SONRA: üye olmayan bir yaratıcı zaten
+        // yukarıda `NotFound` alıp topluluğun varlığını öğrenemiyor.
+        if source.community_visibility == Some(CommunityVisibility::Private) {
+            return Err(Error::Forbidden);
+        }
+
+        if source.deleted_at.is_some() {
+            return Err(Error::Gone("post"));
+        }
+    }
 
     // Topluluk isteğe bağlıdır: verilmediyse post bağımsızdır. Verildiyse
     // topluluk **var olmalı** (yoksa 404) ve yazar **üye olmalı** (değilse
@@ -353,14 +472,15 @@ pub async fn create_post(
 
     let row = sqlx::query!(
         r#"
-        INSERT INTO contents (actor_id, content_type, title, body, body_format, community_id)
-        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4)
+        INSERT INTO contents (actor_id, content_type, title, body, body_format, community_id, cross_post_source_id)
+        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4, $5)
         RETURNING id, created_at, score, upvotes, downvotes, comment_count, hot_score
         "#,
         author.id,
         title,
         body,
         community_id,
+        cross_post_source,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -385,12 +505,12 @@ pub async fn create_post(
 
     tx.commit().await?;
 
-    Ok(Content {
+    let mut content = Content {
         id: row.id,
         content_type: ContentType::Post,
         author: author.clone(),
         author_deleted: false,
-        title: Some(title),
+        title,
         body,
         body_format: BodyFormat::Markdown,
         tags,
@@ -403,7 +523,24 @@ pub async fn create_post(
         created_at: row.created_at,
         edited_at: None,
         deleted_at: None,
-    })
+        cross_post_source_id: cross_post_source,
+        cross_post: None,
+    };
+
+    // Yeni oluşturulan çapraz-gönderinin kaynağı, yukarıdaki kontrollerden
+    // geçtiği için kesin görünür; kartı ilk `201` yanıtında da dolu vermek
+    // için önizlemeyi hemen çözüyoruz (tek ek sorgu, yalnızca çapraz-gönderi
+    // yolunda).
+    if cross_post_source.is_some() {
+        resolve_cross_posts(
+            pool,
+            &creator_communities,
+            std::slice::from_mut(&mut content),
+        )
+        .await?;
+    }
+
+    Ok(content)
 }
 
 // --- Post okuma ------------------------------------------------------------
@@ -456,6 +593,7 @@ pub async fn get_post(pool: &PgPool, id: i64, viewer_communities: &[i64]) -> Res
             contents.created_at,
             contents.edited_at,
             contents.deleted_at,
+            contents.cross_post_source_id,
             actors.id AS author_id,
             actors.username AS author_username,
             actors.actor_type AS "author_actor_type: ActorType",
@@ -490,7 +628,141 @@ pub async fn get_post(pool: &PgPool, id: i64, viewer_communities: &[i64]) -> Res
         return Err(Error::Gone("post"));
     }
 
-    Ok(row.into())
+    let mut content: Content = row.into();
+    resolve_cross_posts(pool, viewer_communities, std::slice::from_mut(&mut content)).await?;
+    Ok(content)
+}
+
+/// Bir sayfadaki çapraz-gönderilerin kaynaklarını **tek sorguda** çözer:
+/// önce sayfadaki farklı `cross_post_source_id`'ler toplanır, kaynaklar
+/// `id = ANY(...)` ile bir kez yüklenir, sonra her içeriğe kendi önizlemesi
+/// yazılır. Kaynak başına ayrı sorgu (N+1) yok.
+///
+/// Erişilemeyen kaynak [`Content::cross_post`]'u `None` yapar — mezar taşı:
+///
+///   * kaynak soft-delete edilmişse,
+///   * kaynak özel bir toplulukta ve o topluluk `viewer_communities`'te
+///     yoksa,
+///   * kaynak hiç yoksa (hard delete).
+///
+/// Üçü **bilerek ayırt edilmez**; ayrımı sızdırmak özel içeriğin varlığını
+/// ele verirdi (COMMUNITY_PLAN.md §8).
+///
+/// `viewer_communities` çağıranın zaten geçirdiği görünür topluluk kümesi.
+/// Public yüzeyler `'{}'` geçtiği için (§9) orada özel kaynaklar koşulsuz
+/// mezar taşıdır; okuyucunun kendi listeleri gerçek kümeyi geçirir.
+///
+/// Bu fonksiyon yalnızca `cross_post_source_id` dolu içerikleri değiştirir;
+/// diğerlerine dokunmaz.
+///
+/// # Errors
+/// Veritabanı hatası [`Error::Database`].
+pub async fn resolve_cross_posts(
+    pool: &PgPool,
+    viewer_communities: &[i64],
+    contents: &mut [Content],
+) -> Result<()> {
+    // Farklı kaynak id'leri: `BTreeSet` hem tekilleştiriyor hem
+    // deterministik sıra veriyor (parametre sırası test edilebilir olsun
+    // diye; semantik önemi yok).
+    let source_ids: Vec<i64> = contents
+        .iter()
+        .filter_map(|content| content.cross_post_source_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if source_ids.is_empty() {
+        return Ok(());
+    }
+
+    struct SourceRow {
+        id: i64,
+        title: Option<String>,
+        deleted_at: Option<DateTime<Utc>>,
+        author_id: i64,
+        author_username: String,
+        author_actor_type: ActorType,
+        author_display_name: Option<String>,
+        author_bio: Option<String>,
+        author_created_at: DateTime<Utc>,
+        author_deleted_at: Option<DateTime<Utc>>,
+        community_id: Option<i64>,
+        community_name: Option<String>,
+        community_visibility: Option<CommunityVisibility>,
+    }
+
+    let rows = sqlx::query_as!(
+        SourceRow,
+        r#"
+        SELECT
+            kaynak.id,
+            kaynak.title,
+            kaynak.deleted_at,
+            actors.id AS author_id,
+            actors.username AS author_username,
+            actors.actor_type AS "author_actor_type: ActorType",
+            actors.display_name AS author_display_name,
+            actors.bio AS author_bio,
+            actors.created_at AS author_created_at,
+            actors.deleted_at AS author_deleted_at,
+            topluluk.id AS "community_id?",
+            topluluk.name AS "community_name?",
+            topluluk.visibility AS "community_visibility?: CommunityVisibility"
+        FROM contents AS kaynak
+        JOIN actors ON actors.id = kaynak.actor_id
+        LEFT JOIN communities AS topluluk ON topluluk.id = kaynak.community_id
+        WHERE kaynak.id = ANY($1::bigint[])
+        "#,
+        &source_ids,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let sources: HashMap<i64, SourceRow> = rows.into_iter().map(|row| (row.id, row)).collect();
+
+    for content in contents.iter_mut() {
+        let Some(source_id) = content.cross_post_source_id else {
+            continue;
+        };
+
+        let Some(source) = sources.get(&source_id) else {
+            // Kaynak hiç yok — mezar taşı.
+            content.cross_post = None;
+            continue;
+        };
+
+        // Kaynak görünürlüğü: silinmemiş VE (bağımsız ya da public ya da
+        // okuyucunun gördüğü bir toplulukta). Public yüzeyler boş küme
+        // geçtiği için özel kaynaklar burada elenir.
+        let reachable = source.deleted_at.is_none()
+            && match source.community_visibility {
+                Some(CommunityVisibility::Private) => source
+                    .community_id
+                    .is_some_and(|id| viewer_communities.contains(&id)),
+                Some(CommunityVisibility::Public) | None => true,
+            };
+
+        content.cross_post = reachable.then(|| CrossPostPreview {
+            source_id: source.id,
+            title: source.title.clone(),
+            author: ActorRecord {
+                id: source.author_id,
+                username: source.author_username.clone(),
+                actor_type: source.author_actor_type,
+                display_name: source.author_display_name.clone(),
+                bio: source.author_bio.clone(),
+                created_at: source.author_created_at,
+            },
+            author_deleted: source.author_deleted_at.is_some(),
+            community: source.community_id.map(|id| CommunityRef {
+                id,
+                name: source.community_name.clone().unwrap_or_default(),
+            }),
+        });
+    }
+
+    Ok(())
 }
 
 // --- Post güncelleme ---------------------------------------------------
@@ -740,6 +1012,7 @@ pub async fn list_posts_by_actor(
             contents.created_at,
             contents.edited_at,
             contents.deleted_at,
+            contents.cross_post_source_id,
             actors.id AS author_id,
             actors.username AS author_username,
             actors.actor_type AS "author_actor_type: ActorType",
@@ -771,7 +1044,7 @@ pub async fn list_posts_by_actor(
     .fetch_all(pool)
     .await?;
 
-    Ok(paginate(
+    let mut page = paginate(
         rows,
         limit,
         |row: &ContentRow| row.id,
@@ -779,7 +1052,9 @@ pub async fn list_posts_by_actor(
             created_at: row.created_at,
         },
         Content::from,
-    ))
+    );
+    resolve_cross_posts(pool, viewer_communities, &mut page.items).await?;
+    Ok(page)
 }
 
 // --- Etikete göre post listesi (Faz 10) ------------------------------------
@@ -966,6 +1241,7 @@ pub async fn list_posts_by_tag(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     actors.id AS author_id,
                     actors.username AS author_username,
                     actors.actor_type AS "author_actor_type: ActorType",
@@ -1030,6 +1306,7 @@ pub async fn list_posts_by_tag(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     actors.id AS author_id,
                     actors.username AS author_username,
                     actors.actor_type AS "author_actor_type: ActorType",
@@ -1094,6 +1371,7 @@ pub async fn list_posts_by_tag(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     actors.id AS author_id,
                     actors.username AS author_username,
                     actors.actor_type AS "author_actor_type: ActorType",
@@ -1127,11 +1405,13 @@ pub async fn list_posts_by_tag(
         }
     };
 
-    Ok(paginate(
+    let mut page = paginate(
         rows,
         limit,
         |row: &ContentRow| row.id,
         |row: &ContentRow| post_sort_key(sort, row),
         Content::from,
-    ))
+    );
+    resolve_cross_posts(pool, viewer_communities, &mut page.items).await?;
+    Ok(page)
 }

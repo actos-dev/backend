@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contents SET title = 'aranabilir capraz' WHERE cross_post_source_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e49a5a5f67fd3e67fba4300459e069166ca85c1f4c17e14775b3678394d78be8"
+}

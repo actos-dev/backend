@@ -1415,6 +1415,7 @@ struct CommunityPostRow {
     author_created_at: DateTime<Utc>,
     author_deleted_at: Option<DateTime<Utc>>,
     tags: Vec<String>,
+    cross_post_source_id: Option<i64>,
 }
 
 impl From<CommunityPostRow> for Content {
@@ -1447,6 +1448,8 @@ impl From<CommunityPostRow> for Content {
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
+            cross_post_source_id: row.cross_post_source_id,
+            cross_post: None,
         }
     }
 }
@@ -1525,6 +1528,7 @@ pub async fn list_posts_in_community(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     communities.id AS "community_id?",
                     communities.name AS "community_name?",
                     actors.id AS author_id,
@@ -1588,6 +1592,7 @@ pub async fn list_posts_in_community(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     communities.id AS "community_id?",
                     communities.name AS "community_name?",
                     actors.id AS author_id,
@@ -1651,6 +1656,7 @@ pub async fn list_posts_in_community(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     communities.id AS "community_id?",
                     communities.name AS "community_name?",
                     actors.id AS author_id,
@@ -1684,13 +1690,15 @@ pub async fn list_posts_in_community(
         }
     };
 
-    Ok(paginate(
+    let mut page = paginate(
         rows,
         limit,
         |row: &CommunityPostRow| row.id,
         |row: &CommunityPostRow| community_post_sort_key(sort, row),
         Content::from,
-    ))
+    );
+    crate::content::resolve_cross_posts(pool, viewer_communities, &mut page.items).await?;
+    Ok(page)
 }
 
 // --- Faz 4B-2: davetler ve başvurular ----------------------------------

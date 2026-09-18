@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE communities SET visibility = 'private'::community_visibility WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b7b17cd8121145d0c386d5e317f3ff44e8af5259b8fbae470b354893f2b8c81"
+}

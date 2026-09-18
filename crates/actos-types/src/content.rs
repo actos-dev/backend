@@ -57,6 +57,33 @@ pub struct CommunityRefSummary {
     pub name: String,
 }
 
+/// The source a cross-post points at, resolved for the requesting reader.
+///
+/// **This is a reference resolved at read time, never a stored copy**
+/// (COMMUNITY_PLAN.md §8): the cross-post row keeps only the source's id, so
+/// an edit, a delete, or a move behind a private door all take effect
+/// immediately. The five fields here are everything the card needs.
+///
+/// ## `None` in [`ContentSummary::cross_post`] is the tombstone
+///
+/// When [`ContentSummary::is_cross_post`] is `true` and `cross_post` is
+/// `None`, the source is unreachable for this reader. There are exactly two
+/// causes — it was deleted, or it lives in a community the reader cannot see
+/// — and they are **deliberately undifferentiated**: disclosing the reason
+/// would leak the existence of private content. The client renders the same
+/// empty card in both cases (§8).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CrossPostPreviewSummary {
+    /// The encoded external id (`c_...`) of the source content.
+    pub id: String,
+    /// Resolved from the source; the cross-post row stores no title of its
+    /// own. `None` is a legitimate title on the source, not a tombstone.
+    pub title: Option<String>,
+    pub author: ActorSummary,
+    pub community: Option<CommunityRefSummary>,
+}
+
 /// The outward-facing summary of a content (post or comment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -138,6 +165,15 @@ pub struct ContentSummary {
     /// When `true` this content is soft-deleted; `title`/`body` do not
     /// carry the real values (see the module documentation).
     pub deleted: bool,
+    /// `true` when this post is a cross-post — a reference to another
+    /// content, not a copy (COMMUNITY_PLAN.md §8). Its own `title` is
+    /// `null`; `body` is empty.
+    pub is_cross_post: bool,
+    /// The resolved source. Meaningful only when `is_cross_post` is `true`.
+    /// `None` there is the unreachable-source tombstone — deleted or
+    /// invisible to this reader, the two deliberately undifferentiated (see
+    /// [`CrossPostPreviewSummary`]).
+    pub cross_post: Option<CrossPostPreviewSummary>,
 }
 
 /// Request body of `POST /posts`.
@@ -165,6 +201,21 @@ pub struct CreatePostRequest {
     /// exist is `404`.
     #[serde(default)]
     pub community: Option<String>,
+    /// External content id (`c_...`) to cross-post instead of writing a
+    /// title/body (COMMUNITY_PLAN.md §8). When present, `title` and `body`
+    /// are **accepted but ignored** (the acceptance is deliberate: it lets a
+    /// generic client send its usual payload and add one field). The new post
+    /// is a reference to the source, resolved at read time.
+    ///
+    ///   * A source that does not exist, or that the creator cannot see, is
+    ///     `404`.
+    ///   * A source in a private community is `403` even for a member of it —
+    ///     nothing leaves a private community.
+    ///   * A deleted source is `410`.
+    ///   * A source that is not a post, or is itself a cross-post, is `400`
+    ///     (depth is capped at one level).
+    #[serde(default)]
+    pub cross_post_source: Option<String>,
 }
 
 /// Request body of `PATCH /posts/{id}`.

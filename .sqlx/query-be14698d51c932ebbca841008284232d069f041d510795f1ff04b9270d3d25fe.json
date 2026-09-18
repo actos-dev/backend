@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            saves.created_at AS saved_at,\n            contents.id,\n            contents.content_type AS \"content_type: ContentType\",\n            contents.title,\n            contents.body,\n            contents.body_format AS \"body_format: BodyFormat\",\n            contents.score,\n            contents.upvotes,\n            contents.downvotes,\n            contents.comment_count,\n            contents.hot_score,\n            contents.created_at,\n            contents.edited_at,\n            contents.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at,\n            communities.id AS \"community_id?\",\n            communities.name AS \"community_name?\",\n            COALESCE(\n                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                '{}'\n            ) AS \"tags!: Vec<String>\"\n        FROM saves\n        JOIN contents ON contents.id = saves.content_id\n        JOIN actors ON actors.id = contents.actor_id\n        LEFT JOIN communities ON communities.id = contents.community_id\n        LEFT JOIN content_tags ON content_tags.content_id = contents.id\n        LEFT JOIN tags ON tags.id = content_tags.tag_id\n        WHERE saves.actor_id = $1\n          AND contents.deleted_at IS NULL\n          AND content_visible_to(contents.community_id, $5::bigint[])\n          AND (\n              $2::timestamptz IS NULL\n              OR (saves.created_at, contents.id) < ($2::timestamptz, $3::bigint)\n          )\n        GROUP BY saves.created_at, contents.id, actors.id, communities.id\n        ORDER BY saves.created_at DESC, contents.id DESC\n        LIMIT $4\n        ",
+  "query": "\n        SELECT\n            saves.created_at AS saved_at,\n            contents.id,\n            contents.content_type AS \"content_type: ContentType\",\n            contents.title,\n            contents.body,\n            contents.body_format AS \"body_format: BodyFormat\",\n            contents.score,\n            contents.upvotes,\n            contents.downvotes,\n            contents.comment_count,\n            contents.hot_score,\n            contents.created_at,\n            contents.edited_at,\n            contents.deleted_at,\n            contents.cross_post_source_id,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at,\n            communities.id AS \"community_id?\",\n            communities.name AS \"community_name?\",\n            COALESCE(\n                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                '{}'\n            ) AS \"tags!: Vec<String>\"\n        FROM saves\n        JOIN contents ON contents.id = saves.content_id\n        JOIN actors ON actors.id = contents.actor_id\n        LEFT JOIN communities ON communities.id = contents.community_id\n        LEFT JOIN content_tags ON content_tags.content_id = contents.id\n        LEFT JOIN tags ON tags.id = content_tags.tag_id\n        WHERE saves.actor_id = $1\n          AND contents.deleted_at IS NULL\n          AND content_visible_to(contents.community_id, $5::bigint[])\n          AND (\n              $2::timestamptz IS NULL\n              OR (saves.created_at, contents.id) < ($2::timestamptz, $3::bigint)\n          )\n        GROUP BY saves.created_at, contents.id, actors.id, communities.id\n        ORDER BY saves.created_at DESC, contents.id DESC\n        LIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -179,6 +179,17 @@
       },
       {
         "ordinal": 14,
+        "name": "cross_post_source_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "cross_post_source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -189,7 +200,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "author_username",
         "type_info": {
           "Custom": {
@@ -205,7 +216,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "author_actor_type: ActorType",
         "type_info": {
           "Custom": {
@@ -226,7 +237,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "author_display_name",
         "type_info": "Text",
         "origin": {
@@ -237,7 +248,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "author_bio",
         "type_info": "Text",
         "origin": {
@@ -248,7 +259,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "author_created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -259,7 +270,7 @@
         }
       },
       {
-        "ordinal": 20,
+        "ordinal": 21,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -270,7 +281,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "community_id?",
         "type_info": "Int8",
         "origin": {
@@ -281,7 +292,7 @@
         }
       },
       {
-        "ordinal": 22,
+        "ordinal": 23,
         "name": "community_name?",
         "type_info": {
           "Custom": {
@@ -297,7 +308,7 @@
         }
       },
       {
-        "ordinal": 23,
+        "ordinal": 24,
         "name": "tags!: Vec<String>",
         "type_info": "TextArray",
         "origin": "Expression"
@@ -327,6 +338,7 @@
       false,
       true,
       true,
+      true,
       false,
       false,
       false,
@@ -339,5 +351,5 @@
       null
     ]
   },
-  "hash": "ce3ca260df69f9dde8645d8476c5fad02ee2f46c9e6a467afce60f9872cb204d"
+  "hash": "be14698d51c932ebbca841008284232d069f041d510795f1ff04b9270d3d25fe"
 }

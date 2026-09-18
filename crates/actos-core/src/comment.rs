@@ -176,6 +176,10 @@ impl From<CommentRow> for Content {
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
+            // Yorumlar çapraz-gönderi olamaz (`ck_contents_cross_post_is_post`);
+            // alan [`Content`] genel tip olduğu için taşınıyor.
+            cross_post_source_id: None,
+            cross_post: None,
         }
     }
 }
@@ -627,6 +631,7 @@ pub async fn ancestors_of(
         author_deleted_at: Option<DateTime<Utc>>,
         community_id: Option<i64>,
         community_name: Option<String>,
+        cross_post_source_id: Option<i64>,
     }
 
     let rows = sqlx::query_as!(
@@ -654,7 +659,8 @@ pub async fn ancestors_of(
             actors.created_at AS author_created_at,
             actors.deleted_at AS author_deleted_at,
             communities.id AS "community_id?",
-            communities.name AS "community_name?"
+            communities.name AS "community_name?",
+            ata.cross_post_source_id
         FROM contents AS ata
         JOIN contents AS hedef ON hedef.id = $1
         JOIN actors ON actors.id = ata.actor_id
@@ -669,7 +675,7 @@ pub async fn ancestors_of(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
+    let mut ancestors: Vec<Content> = rows
         .into_iter()
         .map(|row| Content {
             id: row.id,
@@ -699,8 +705,15 @@ pub async fn ancestors_of(
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
+            cross_post_source_id: row.cross_post_source_id,
+            cross_post: None,
         })
-        .collect())
+        .collect();
+    // Atalar zincirinin kökü bir çapraz-gönderi olabilir; kartı okuyucunun
+    // izinleriyle çözmek için liste yollarındaki çözümleme burada da
+    // çağrılıyor.
+    crate::content::resolve_cross_posts(pool, viewer_communities, &mut ancestors).await?;
+    Ok(ancestors)
 }
 
 // --- Yorum ağacı listeleme -------------------------------------------------

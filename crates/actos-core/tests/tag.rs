@@ -63,6 +63,7 @@ async fn seed_post(pool: &PgPool, username: &str, tags: &[&str]) -> i64 {
         &[],
         8 * 1024 * 1024,
         i64::MAX,
+        None,
     )
     .await
     .expect("post oluşturulabilmeli");

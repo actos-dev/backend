@@ -1,0 +1,85 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                kaynak.content_type AS \"content_type: ContentType\",\n                kaynak.deleted_at,\n                kaynak.cross_post_source_id,\n                topluluk.visibility AS \"community_visibility?: CommunityVisibility\"\n            FROM contents AS kaynak\n            LEFT JOIN communities AS topluluk ON topluluk.id = kaynak.community_id\n            WHERE kaynak.id = $1\n              AND content_visible_to(kaynak.community_id, $2::bigint[])\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content_type: ContentType",
+        "type_info": {
+          "Custom": {
+            "name": "content_type",
+            "kind": {
+              "Enum": [
+                "post",
+                "comment"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "content_type"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "deleted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "deleted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "cross_post_source_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "cross_post_source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "community_visibility?: CommunityVisibility",
+        "type_info": {
+          "Custom": {
+            "name": "community_visibility",
+            "kind": {
+              "Enum": [
+                "public",
+                "private"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "visibility"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "71f41c1f6efed9c3ddd2b1e7fcbf9ccef2e0a04b3d050dd50c723047079739a0"
+}

@@ -480,6 +480,7 @@ pub async fn list_saves(
         community_id: Option<i64>,
         community_name: Option<String>,
         tags: Vec<String>,
+        cross_post_source_id: Option<i64>,
     }
 
     let rows = sqlx::query_as!(
@@ -500,6 +501,7 @@ pub async fn list_saves(
             contents.created_at,
             contents.edited_at,
             contents.deleted_at,
+            contents.cross_post_source_id,
             actors.id AS author_id,
             actors.username AS author_username,
             actors.actor_type AS "author_actor_type: ActorType",
@@ -539,7 +541,7 @@ pub async fn list_saves(
     .fetch_all(pool)
     .await?;
 
-    Ok(paginate(
+    let mut page = paginate(
         rows,
         limit,
         |row: &SavedRow| row.id,
@@ -574,6 +576,10 @@ pub async fn list_saves(
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
+            cross_post_source_id: row.cross_post_source_id,
+            cross_post: None,
         },
-    ))
+    );
+    crate::content::resolve_cross_posts(pool, viewer_communities, &mut page.items).await?;
+    Ok(page)
 }

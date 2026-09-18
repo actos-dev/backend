@@ -286,6 +286,7 @@ pub async fn list_feed(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     actors.id AS author_id,
                     actors.username AS author_username,
                     actors.actor_type AS "author_actor_type: ActorType",
@@ -364,6 +365,7 @@ pub async fn list_feed(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     actors.id AS author_id,
                     actors.username AS author_username,
                     actors.actor_type AS "author_actor_type: ActorType",
@@ -442,6 +444,7 @@ pub async fn list_feed(
                     contents.created_at,
                     contents.edited_at,
                     contents.deleted_at,
+                    contents.cross_post_source_id,
                     actors.id AS author_id,
                     actors.username AS author_username,
                     actors.actor_type AS "author_actor_type: ActorType",
@@ -477,7 +480,7 @@ pub async fn list_feed(
         }
     };
 
-    Ok(paginate(
+    let mut page = paginate(
         rows,
         limit,
         |row: &FeedRow| row.id,
@@ -491,7 +494,9 @@ pub async fn list_feed(
             },
         },
         Content::from_feed_row,
-    ))
+    );
+    crate::content::resolve_cross_posts(pool, viewer_communities, &mut page.items).await?;
+    Ok(page)
 }
 
 /// Feed sorgularının satır tipi.
@@ -525,6 +530,7 @@ pub(crate) struct FeedRow {
     pub(crate) community_id: Option<i64>,
     pub(crate) community_name: Option<String>,
     pub(crate) tags: Vec<String>,
+    pub(crate) cross_post_source_id: Option<i64>,
 }
 
 impl Content {
@@ -562,6 +568,8 @@ impl Content {
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
+            cross_post_source_id: row.cross_post_source_id,
+            cross_post: None,
         }
     }
 }

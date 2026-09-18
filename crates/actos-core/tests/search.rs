@@ -61,6 +61,7 @@ async fn seed_post(pool: &PgPool, author: &auth::ActorRecord, title: &str, body:
         &[],
         8 * 1024 * 1024,
         i64::MAX,
+        None,
     )
     .await
     .expect("post oluşturulabilmeli")

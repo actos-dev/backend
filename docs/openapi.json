@@ -656,6 +656,17 @@
             "description": "RFC 3339.",
             "type": "string"
           },
+          "cross_post": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CrossPostPreviewSummary",
+                "description": "The resolved source. Meaningful only when `is_cross_post` is `true`.\n`None` there is the unreachable-source tombstone — deleted or\ninvisible to this reader, the two deliberately undifferentiated (see\n[`CrossPostPreviewSummary`])."
+              }
+            ]
+          },
           "deleted": {
             "description": "When `true` this content is soft-deleted; `title`/`body` do not\ncarry the real values (see the module documentation).",
             "type": "boolean"
@@ -674,6 +685,10 @@
           "id": {
             "description": "The encoded external id (`c_7fGh2Kd`) — the raw `bigint` never leaks\ninto it.",
             "type": "string"
+          },
+          "is_cross_post": {
+            "description": "`true` when this post is a cross-post — a reference to another\ncontent, not a copy (COMMUNITY_PLAN.md §8). Its own `title` is\n`null`; `body` is empty.",
+            "type": "boolean"
           },
           "score": {
             "format": "int32",
@@ -710,7 +725,8 @@
           "downvotes",
           "comment_count",
           "created_at",
-          "deleted"
+          "deleted",
+          "is_cross_post"
         ],
         "type": "object"
       },
@@ -858,6 +874,13 @@
               "null"
             ]
           },
+          "cross_post_source": {
+            "description": "External content id (`c_...`) to cross-post instead of writing a\ntitle/body (COMMUNITY_PLAN.md §8). When present, `title` and `body`\nare **accepted but ignored** (the acceptance is deliberate: it lets a\ngeneric client send its usual payload and add one field). The new post\nis a reference to the source, resolved at read time.\n\n  * A source that does not exist, or that the creator cannot see, is\n    `404`.\n  * A source in a private community is `403` even for a member of it —\n    nothing leaves a private community.\n  * A deleted source is `410`.\n  * A source that is not a post, or is itself a cross-post, is `400`\n    (depth is capped at one level).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "tags": {
             "description": "May be empty. Tags that do not exist yet are created in the same\ntransaction.",
             "items": {
@@ -893,6 +916,40 @@
           "target_type",
           "target_id",
           "reason"
+        ],
+        "type": "object"
+      },
+      "CrossPostPreviewSummary": {
+        "description": "The source a cross-post points at, resolved for the requesting reader.\n\n**This is a reference resolved at read time, never a stored copy**\n(COMMUNITY_PLAN.md §8): the cross-post row keeps only the source's id, so\nan edit, a delete, or a move behind a private door all take effect\nimmediately. The five fields here are everything the card needs.\n\n## `None` in [`ContentSummary::cross_post`] is the tombstone\n\nWhen [`ContentSummary::is_cross_post`] is `true` and `cross_post` is\n`None`, the source is unreachable for this reader. There are exactly two\ncauses — it was deleted, or it lives in a community the reader cannot see\n— and they are **deliberately undifferentiated**: disclosing the reason\nwould leak the existence of private content. The client renders the same\nempty card in both cases (§8).",
+        "properties": {
+          "author": {
+            "$ref": "#/components/schemas/ActorSummary"
+          },
+          "community": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommunityRefSummary"
+              }
+            ]
+          },
+          "id": {
+            "description": "The encoded external id (`c_...`) of the source content.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Resolved from the source; the cross-post row stores no title of its\nown. `None` is a legitimate title on the source, not a tombstone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "author"
         ],
         "type": "object"
       },
