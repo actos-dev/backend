@@ -201,6 +201,7 @@ use sqlx::PgPool;
 use crate::{
     actor::{Page, paginate},
     auth::{ActorRecord, ActorType},
+    community::CommunityRef,
     content::{BodyFormat, Content, ContentType},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
@@ -293,6 +294,8 @@ struct ContentSearchRow {
     author_bio: Option<String>,
     author_created_at: DateTime<Utc>,
     author_deleted_at: Option<DateTime<Utc>>,
+    community_id: Option<i64>,
+    community_name: Option<String>,
     tags: Vec<String>,
     /// Bkz. modül dokümantasyonu "Sıralama" bölümü — alaka + tazelik +
     /// popülerlik karışımı, `hot_score` kolonundan değil doğrudan
@@ -324,6 +327,10 @@ impl From<ContentSearchRow> for Content {
             downvotes: row.downvotes,
             comment_count: row.comment_count,
             hot_score: row.hot_score,
+            community: row.community_id.map(|id| CommunityRef {
+                id,
+                name: row.community_name.unwrap_or_default(),
+            }),
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
@@ -422,6 +429,8 @@ pub async fn search_content(
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
             actors.deleted_at AS author_deleted_at,
+            communities.id AS "community_id?",
+            communities.name AS "community_name?",
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                 '{}'
@@ -430,9 +439,10 @@ pub async fn search_content(
         FROM page
         JOIN contents ON contents.id = page.id
         JOIN actors ON actors.id = contents.actor_id
+        LEFT JOIN communities ON communities.id = contents.community_id
         LEFT JOIN content_tags ON content_tags.content_id = contents.id
         LEFT JOIN tags ON tags.id = content_tags.tag_id
-        GROUP BY contents.id, actors.id, page.rank
+        GROUP BY contents.id, actors.id, communities.id, page.rank
         ORDER BY "rank!" DESC, contents.id DESC
         "#,
         normalized,

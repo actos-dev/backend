@@ -43,6 +43,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::ActorSummary;
 
+/// A community a content belongs to, as carried inside
+/// [`ContentSummary::community`].
+///
+/// Deliberately narrow: a post's response only needs the community's id and
+/// name, not its description, member count or owner. The full summary lives
+/// in [`crate::community::CommunitySummary`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CommunityRefSummary {
+    /// The encoded external id (`m_...`) — the raw `bigint` never leaks.
+    pub id: String,
+    pub name: String,
+}
+
 /// The outward-facing summary of a content (post or comment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -58,6 +72,10 @@ pub struct ContentSummary {
     /// When `true`, `author` has been masked (see the module documentation,
     /// "Masking a deleted author").
     pub author_deleted: bool,
+    /// The community this content belongs to; `None` for an independent
+    /// post (or, in phase 2, always for a comment). A post outside any
+    /// community is not a lesser post — see COMMUNITY_PLAN.md §1.
+    pub community: Option<CommunityRefSummary>,
     /// Populated only when `content_type == "post"`; always `None` on
     /// comments.
     pub title: Option<String>,
@@ -141,6 +159,12 @@ pub struct CreatePostRequest {
     /// transaction.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Name of the community to post into. Omitted means an independent
+    /// post. When given, the author must be a member of that community
+    /// (public or private) or the request is `403`; a name that does not
+    /// exist is `404`.
+    #[serde(default)]
+    pub community: Option<String>,
 }
 
 /// Request body of `PATCH /posts/{id}`.

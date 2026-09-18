@@ -67,6 +67,30 @@ const RESERVED_USERNAMES: &[&str] = &[
     "undefined",
 ];
 
+/// `migrations/0029_communities.up.sql` → `ck_communities_name_reserved`.
+///
+/// **Bu liste o CHECK constraint'iyle birebir aynı olmalı** — gerekçe
+/// [`RESERVED_USERNAMES`] ile aynı; testte (`rezerve_topululuk_...`)
+/// karşılaştırılır. Ayrı bir sabit tutuluyor (username listesini yeniden
+/// kullanmak yerine): ikisi bugün aynı olsa da iki farklı şema kısıtına
+/// karşılık geliyorlar, birinin değişip diğerinin unutulması bu testle
+/// yakalanmalı.
+const RESERVED_COMMUNITY_NAMES: &[&str] = &[
+    "admin",
+    "administrator",
+    "actos",
+    "api",
+    "root",
+    "system",
+    "moderator",
+    "support",
+    "help",
+    "about",
+    "me",
+    "null",
+    "undefined",
+];
+
 /// Bu karakter görünmez (sıfır genişlikli) veya çift yönlü (bidi) bir
 /// kontrol karakteri mi?
 ///
@@ -137,6 +161,15 @@ pub enum TextError {
     ReservedUsername(String),
 
     #[error(
+        "community name must be {USERNAME_MIN}-{USERNAME_MAX} characters and may only contain \
+         lowercase letters, digits, and underscore (_)"
+    )]
+    InvalidCommunityName,
+
+    #[error("\"{0}\" is a reserved community name, pick another one")]
+    ReservedCommunityName(String),
+
+    #[error(
         "tag name must be 1-{TAG_NAME_MAX} characters, must start with a lowercase letter or \
          digit, and may only contain lowercase letters, digits, and hyphen (-)"
     )]
@@ -190,6 +223,44 @@ pub fn validate_username(raw: &str) -> Result<String, TextError> {
 
     if !format_ok {
         return Err(TextError::InvalidUsername);
+    }
+
+    Ok(normalized)
+}
+
+/// Topluluk adını doğrular: [`normalize_text`] uygular, format ve rezerve
+/// isim kuralını işletir.
+///
+/// Format ve rezerve liste `migrations/0029_communities.up.sql`'deki
+/// `ck_communities_name_format`/`ck_communities_name_reserved` ile birebir
+/// örtüşür — `COMMUNITY_PLAN.md` §10: topluluk adları kullanıcı adlarıyla
+/// aynı kurallara uyar (aynı isim, farklı önekler altında çakışmadan
+/// yaşayabilir; asıl risk taklit — `actos`/`moderator` gibi isimlerin resmi
+/// görünmesi).
+///
+/// Rezerve kontrolü format kontrolünden **önce** gelir — bkz.
+/// [`validate_username`] üzerindeki aynı gerekçe (`me` listede ama asgari
+/// uzunluğun altında; kullanıcı format hatasından önce rezerve olduğunu
+/// görmeli).
+///
+/// # Errors
+/// Uzunluk/karakter kuralı ihlal edilirse [`TextError::InvalidCommunityName`];
+/// isim rezerve listedeyse [`TextError::ReservedCommunityName`].
+pub fn validate_community_name(raw: &str) -> Result<String, TextError> {
+    let normalized = normalize_text(raw);
+    let len = normalized.chars().count();
+
+    if RESERVED_COMMUNITY_NAMES.contains(&normalized.as_str()) {
+        return Err(TextError::ReservedCommunityName(normalized));
+    }
+
+    let format_ok = (USERNAME_MIN..=USERNAME_MAX).contains(&len)
+        && normalized
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+
+    if !format_ok {
+        return Err(TextError::InvalidCommunityName);
     }
 
     Ok(normalized)
@@ -559,6 +630,57 @@ mod tests {
         // "rezerve" hatası değil ama sonuç yine reddediliyor olmalı.
         assert!(validate_username("ADMIN").is_err());
         assert!(validate_username("Admin").is_err());
+    }
+
+    // --- validate_community_name -----------------------------------------
+
+    #[test]
+    fn topluluk_adı_sınır_değerleri() {
+        assert!(validate_community_name(&"a".repeat(2)).is_err());
+        assert!(validate_community_name(&"a".repeat(3)).is_ok());
+        assert!(validate_community_name(&"a".repeat(32)).is_ok());
+        assert!(validate_community_name(&"a".repeat(33)).is_err());
+    }
+
+    #[test]
+    fn topluluk_adında_izin_verilmeyen_karakterler_reddediliyor() {
+        assert!(validate_community_name("Topluluk").is_err()); // büyük harf
+        assert!(validate_community_name("topluluk adi").is_err()); // boşluk
+        assert!(validate_community_name("topluluk-adi").is_err()); // tire
+        assert!(validate_community_name("topluluk_adi_1").is_ok());
+    }
+
+    #[test]
+    fn rezerve_topululuk_adları_0029_migration_ile_birebir_eşleşiyor() {
+        // migrations/0029_communities.up.sql -> ck_communities_name_reserved
+        // ile birebir aynı olmalı; biri değişip diğeri unutulursa bu test
+        // kırılır (kullanıcı adı testindeki aynı desen).
+        let expected_from_migration: [&str; 13] = [
+            "admin",
+            "administrator",
+            "actos",
+            "api",
+            "root",
+            "system",
+            "moderator",
+            "support",
+            "help",
+            "about",
+            "me",
+            "null",
+            "undefined",
+        ];
+        assert_eq!(RESERVED_COMMUNITY_NAMES, &expected_from_migration[..]);
+
+        for name in expected_from_migration {
+            assert!(
+                matches!(
+                    validate_community_name(name),
+                    Err(TextError::ReservedCommunityName(_))
+                ),
+                "rezerve topluluk adı reddedilmeliydi: {name}"
+            );
+        }
     }
 
     // --- validate_tag_name -----------------------------------------------

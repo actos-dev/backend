@@ -73,6 +73,7 @@ async fn seed_post(pool: &PgPool, author: &ActorRecord) -> i64 {
         &test_storage(),
         &test_id_codec(),
         author,
+        None,
         "başlık",
         "gövde",
         &[],

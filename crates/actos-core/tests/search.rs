@@ -54,6 +54,7 @@ async fn seed_post(pool: &PgPool, author: &auth::ActorRecord, title: &str, body:
         &test_storage(),
         &test_id_codec(),
         author,
+        None,
         title,
         body,
         &[],

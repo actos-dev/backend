@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM community_members WHERE community_id = $1 AND actor_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "528b3ec931d1cc23c74165b641b5013368cb7ca89ba5c20e32762118a5c849a6"
+}

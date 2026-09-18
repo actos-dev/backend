@@ -119,6 +119,7 @@ pub mod actors;
 pub mod admin;
 pub mod auth;
 pub mod comments;
+pub mod communities;
 pub mod feed;
 pub mod health;
 pub mod interactions;
@@ -174,6 +175,7 @@ pub fn router(max_upload_bytes: usize) -> Router<AppState> {
         .merge(actors::router(max_upload_bytes))
         .merge(posts::router())
         .merge(comments::router())
+        .merge(communities::router())
         .merge(tags::router())
         .merge(search::router())
         .merge(interactions::router())

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            ata.id,\n            ata.content_type AS \"content_type: ContentType\",\n            ata.title,\n            ata.body,\n            ata.body_format AS \"body_format: BodyFormat\",\n            ata.score,\n            ata.upvotes,\n            ata.downvotes,\n            ata.comment_count,\n            ata.hot_score,\n            ata.created_at,\n            ata.edited_at,\n            ata.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at\n        FROM contents AS ata\n        JOIN contents AS hedef ON hedef.id = $1\n        JOIN actors ON actors.id = ata.actor_id\n        WHERE ata.path @> hedef.path AND ata.id <> hedef.id\n        ORDER BY ata.depth\n        ",
+  "query": "\n        SELECT\n            ata.id,\n            ata.content_type AS \"content_type: ContentType\",\n            ata.title,\n            ata.body,\n            ata.body_format AS \"body_format: BodyFormat\",\n            ata.score,\n            ata.upvotes,\n            ata.downvotes,\n            ata.comment_count,\n            ata.hot_score,\n            ata.created_at,\n            ata.edited_at,\n            ata.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at,\n            communities.id AS \"community_id?\",\n            communities.name AS \"community_name?\"\n        FROM contents AS ata\n        JOIN contents AS hedef ON hedef.id = $1\n        JOIN actors ON actors.id = ata.actor_id\n        LEFT JOIN communities ON communities.id = ata.community_id\n        WHERE ata.path @> hedef.path AND ata.id <> hedef.id\n        ORDER BY ata.depth\n        ",
   "describe": {
     "columns": [
       {
@@ -257,6 +257,33 @@
             "name": "deleted_at"
           }
         }
+      },
+      {
+        "ordinal": 20,
+        "name": "community_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "community_name?",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "name"
+          }
+        }
       }
     ],
     "parameters": {
@@ -284,8 +311,10 @@
       true,
       true,
       false,
-      true
+      true,
+      false,
+      false
     ]
   },
-  "hash": "5a1aa511bae6452fa5ef492984337ff3e1f585a18cbb48aada3d1a04218ebc8a"
+  "hash": "5a62a22455f10e2f4abe543a9315f233cf35c622479cb134a6b9b6bc217eb8df"
 }

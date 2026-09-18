@@ -15,12 +15,14 @@ use actos_core::{
     Error,
     auth::ActorRecord,
     content as core_content,
-    id::{Content as ContentIdKind, IdCodec},
+    id::{Community as CommunityIdKind, Content as ContentIdKind, IdCodec},
     idempotency::{Begin as IdempotencyBegin, StoredResponse},
 };
 use actos_types::{
     auth::ActorSummary,
-    content::{ContentSummary, CreatePostRequest, PostListResponse, UpdatePostRequest},
+    content::{
+        CommunityRefSummary, ContentSummary, CreatePostRequest, PostListResponse, UpdatePostRequest,
+    },
 };
 use axum::{
     Json,
@@ -245,7 +247,10 @@ const fn body_format_str(f: core_content::BodyFormat) -> &'static str {
 /// üzerinden birbirine bağlamak (ör. moderasyonda) hâlâ mümkün olsun diye
 /// korunuyor. `actor_type`/`created_at` too are kept for the same reason
 /// (not sensitive).
-fn masked_actor_summary(actor: &ActorRecord, id_codec: &IdCodec) -> Result<ActorSummary, Error> {
+pub(crate) fn masked_actor_summary(
+    actor: &ActorRecord,
+    id_codec: &IdCodec,
+) -> Result<ActorSummary, Error> {
     Ok(ActorSummary {
         id: encode_actor_id(id_codec, actor.id)?,
         username: "[deleted]".to_owned(),
@@ -451,11 +456,26 @@ fn content_summary_inner(
     // yok, maskeleme otomatik devrediyor.
     let body_html = include_body_html.then(|| render_body_html(&body, &body_format));
 
+    // Topluluk referansı: bağımsız bir post için `None` (yani `null`),
+    // topluluk postu için kodlanmış id + ad. `community.name` burada ham
+    // gerçek: ad topluluğun kendi kaynağından geldiği için maskelenecek
+    // kişisel veri değil.
+    let community = match &content.community {
+        None => None,
+        Some(reference) => Some(CommunityRefSummary {
+            id: id_codec
+                .encode::<CommunityIdKind>(reference.id)
+                .map_err(|e| Error::Internal(format!("could not encode community id: {e}")))?,
+            name: reference.name.clone(),
+        }),
+    };
+
     Ok(ContentSummary {
         id,
         content_type: content_type_str(content.content_type).to_owned(),
         author,
         author_deleted: content.author_deleted,
+        community,
         title,
         body,
         body_format,
@@ -604,6 +624,7 @@ async fn create_post(
         state.storage(),
         state.id_codec(),
         &current.actor,
+        req.community.as_deref(),
         &req.title,
         &req.body,
         &req.tags,

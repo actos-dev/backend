@@ -56,6 +56,7 @@ async fn seed_post(pool: &PgPool, username: &str, tags: &[&str]) -> i64 {
         &test_storage(),
         &test_id_codec(),
         &reg.actor,
+        None,
         "başlık",
         "gövde",
         &owned,

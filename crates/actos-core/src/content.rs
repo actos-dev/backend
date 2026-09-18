@@ -39,6 +39,7 @@ use sqlx::{PgConnection, PgPool};
 use crate::{
     actor::{Page, paginate, resolve_live_actor_id, split_new_cursor},
     auth::{ActorRecord, ActorType, Grant, Permission},
+    community::CommunityRef,
     cursor::{Cursor, SortKey},
     error::{Error, Result},
     id::IdCodec,
@@ -100,6 +101,13 @@ pub struct Content {
     /// kadar şema varsayılanı olan `0`. `PostSort::Hot` sıralamasının ve
     /// onun cursor'ının dayandığı alan (bkz. [`PostSort::Hot`]).
     pub hot_score: f64,
+    /// Bu içeriğin ait olduğu topluluk; `None` bağımsız bir post demektir
+    /// (COMMUNITY_PLAN.md §1 — topluluksuz post "aşağı" bir tür değil).
+    ///
+    /// Yorumlarda Faz 2'de her zaman `None` (yorumlar topluluklara ait
+    /// değil); kolon yine de satırdan okunuyor ki ileride bir yorum
+    /// topluluğa bağlanırsa bu alan kendiliğinden dolsun.
+    pub community: Option<CommunityRef>,
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
     /// `Some` ise bu içerik soft-delete edilmiş. HTTP katmanı `get_post`
@@ -133,6 +141,8 @@ struct ContentRow {
     author_bio: Option<String>,
     author_created_at: DateTime<Utc>,
     author_deleted_at: Option<DateTime<Utc>>,
+    community_id: Option<i64>,
+    community_name: Option<String>,
     tags: Vec<String>,
 }
 
@@ -159,6 +169,10 @@ impl From<ContentRow> for Content {
             downvotes: row.downvotes,
             comment_count: row.comment_count,
             hot_score: row.hot_score,
+            community: row.community_id.map(|id| CommunityRef {
+                id,
+                name: row.community_name.unwrap_or_default(),
+            }),
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
@@ -285,6 +299,7 @@ pub async fn create_post(
     storage: &Storage,
     id_codec: &IdCodec,
     author: &ActorRecord,
+    community: Option<&str>,
     title: &str,
     body: &str,
     tags: &[String],
@@ -301,15 +316,43 @@ pub async fn create_post(
 
     let mut tx = pool.begin().await?;
 
+    // Topluluk isteğe bağlıdır: verilmediyse post bağımsızdır. Verildiyse
+    // topluluk **var olmalı** (yoksa 404) ve yazar **üye olmalı** (değilse
+    // 403) — okuma için üyelik gerekmez ama yazmak için her zaman gerekir
+    // (COMMUNITY_PLAN.md §3). Kontroller INSERT'ten önce, aynı transaction
+    // içinde; yazma ile üyelik kontrolü arasında ayrılma yarışı olmasın.
+    //
+    // Yanıt DTO'su için saklanan (normalize edilmiş) ismi de okuyoruz: `name`
+    // citext olduğu için büyük/küçük harf farkıyla da eşleşebilirdi, ama dış
+    // referans DB'deki gerçek yazımı taşımalı.
+    let community_ref: Option<(i64, String)> = match community {
+        None => None,
+        Some(name) => {
+            let community_id = crate::community::resolve_community_id_in(&mut *tx, name).await?;
+            if !crate::community::is_member_in(&mut *tx, community_id, author.id).await? {
+                return Err(Error::Forbidden);
+            }
+            let stored_name = sqlx::query_scalar!(
+                r#"SELECT name::text AS "name!" FROM communities WHERE id = $1"#,
+                community_id,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            Some((community_id, stored_name))
+        }
+    };
+    let community_id = community_ref.as_ref().map(|(id, _)| *id);
+
     let row = sqlx::query!(
         r#"
-        INSERT INTO contents (actor_id, content_type, title, body, body_format)
-        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format)
+        INSERT INTO contents (actor_id, content_type, title, body, body_format, community_id)
+        VALUES ($1, 'post'::content_type, $2, $3, 'markdown'::body_format, $4)
         RETURNING id, created_at, score, upvotes, downvotes, comment_count, hot_score
         "#,
         author.id,
         title,
         body,
+        community_id,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -348,6 +391,7 @@ pub async fn create_post(
         downvotes: row.downvotes,
         comment_count: row.comment_count,
         hot_score: row.hot_score,
+        community: community_ref.map(|(id, name)| CommunityRef { id, name }),
         created_at: row.created_at,
         edited_at: None,
         deleted_at: None,
@@ -404,16 +448,19 @@ pub async fn get_post(pool: &PgPool, id: i64) -> Result<Content> {
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
             actors.deleted_at AS author_deleted_at,
+            communities.id AS "community_id?",
+            communities.name AS "community_name?",
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                 '{}'
             ) AS "tags!: Vec<String>"
         FROM contents
         JOIN actors ON actors.id = contents.actor_id
+        LEFT JOIN communities ON communities.id = contents.community_id
         LEFT JOIN content_tags ON content_tags.content_id = contents.id
         LEFT JOIN tags ON tags.id = content_tags.tag_id
         WHERE contents.id = $1 AND contents.content_type = 'post'::content_type
-        GROUP BY contents.id, actors.id
+        GROUP BY contents.id, actors.id, communities.id
         "#,
         id,
     )
@@ -678,6 +725,8 @@ pub async fn list_posts_by_actor(
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
             actors.deleted_at AS author_deleted_at,
+            communities.id AS "community_id?",
+            communities.name AS "community_name?",
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                 '{}'
@@ -685,9 +734,10 @@ pub async fn list_posts_by_actor(
         FROM page
         JOIN contents ON contents.id = page.id
         JOIN actors ON actors.id = contents.actor_id
+        LEFT JOIN communities ON communities.id = contents.community_id
         LEFT JOIN content_tags ON content_tags.content_id = page.id
         LEFT JOIN tags ON tags.id = content_tags.tag_id
-        GROUP BY contents.id, actors.id
+        GROUP BY contents.id, actors.id, communities.id
         ORDER BY contents.created_at DESC, contents.id DESC
         "#,
         actor_id,
@@ -898,6 +948,8 @@ pub async fn list_posts_by_tag(
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
                     actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?",
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
@@ -905,9 +957,10 @@ pub async fn list_posts_by_tag(
                 FROM page
                 JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                GROUP BY contents.id, actors.id
+                GROUP BY contents.id, actors.id, communities.id
                 ORDER BY contents.created_at DESC, contents.id DESC
                 "#,
                 tag_id,
@@ -957,6 +1010,8 @@ pub async fn list_posts_by_tag(
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
                     actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?",
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
@@ -964,9 +1019,10 @@ pub async fn list_posts_by_tag(
                 FROM page
                 JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                GROUP BY contents.id, actors.id
+                GROUP BY contents.id, actors.id, communities.id
                 ORDER BY contents.score DESC, contents.id DESC
                 "#,
                 tag_id,
@@ -1016,6 +1072,8 @@ pub async fn list_posts_by_tag(
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
                     actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?",
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
@@ -1023,9 +1081,10 @@ pub async fn list_posts_by_tag(
                 FROM page
                 JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                GROUP BY contents.id, actors.id
+                GROUP BY contents.id, actors.id, communities.id
                 ORDER BY contents.hot_score DESC, contents.id DESC
                 "#,
                 tag_id,

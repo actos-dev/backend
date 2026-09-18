@@ -370,6 +370,141 @@
         ],
         "type": "object"
       },
+      "CommunityListResponse": {
+        "description": "Response body of `GET /communities`.",
+        "properties": {
+          "communities": {
+            "items": {
+              "$ref": "#/components/schemas/CommunitySummary"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "`None` means this is the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "communities"
+        ],
+        "type": "object"
+      },
+      "CommunityMemberListResponse": {
+        "description": "Response body of `GET /communities/{name}/members`.",
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/CommunityMemberSummary"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "`None` means this is the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "members"
+        ],
+        "type": "object"
+      },
+      "CommunityMemberSummary": {
+        "description": "One member in the member list.",
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/ActorSummary"
+          },
+          "joined_at": {
+            "description": "RFC 3339. The list is ordered by this ascending (longest-serving\nfirst) — see `actos_core::community::list_members`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "joined_at"
+        ],
+        "type": "object"
+      },
+      "CommunityRefSummary": {
+        "description": "A community a content belongs to, as carried inside\n[`ContentSummary::community`].\n\nDeliberately narrow: a post's response only needs the community's id and\nname, not its description, member count or owner. The full summary lives\nin [`crate::community::CommunitySummary`].",
+        "properties": {
+          "id": {
+            "description": "The encoded external id (`m_...`) — the raw `bigint` never leaks.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "CommunitySummary": {
+        "description": "The outward-facing summary of a community.",
+        "properties": {
+          "created_at": {
+            "description": "RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Markdown. The server does not render it; clients decide how to show\nit (COMMUNITY_PLAN.md §11).",
+            "type": "string"
+          },
+          "id": {
+            "description": "The encoded external id (`m_...`).",
+            "type": "string"
+          },
+          "is_member": {
+            "description": "Whether the requesting actor is a member. `false` for anonymous\nrequests, and `false` on directory listings (there is no actor to\nask about).",
+            "type": "boolean"
+          },
+          "member_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ActorSummary",
+            "description": "The community's single owner."
+          },
+          "post_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "RFC 3339.",
+            "type": "string"
+          },
+          "visibility": {
+            "description": "`\"public\"` or `\"private\"`. Phase 2 always returns `\"public\"`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "visibility",
+          "owner",
+          "member_count",
+          "post_count",
+          "is_member",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "ContentSearchResponse": {
         "description": "Response of `GET /search?type=post` / `?type=comment`.",
         "properties": {
@@ -430,6 +565,17 @@
           "comment_count": {
             "format": "int32",
             "type": "integer"
+          },
+          "community": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommunityRefSummary",
+                "description": "The community this content belongs to; `None` for an independent\npost (or, in phase 2, always for a comment). A post outside any\ncommunity is not a lesser post — see COMMUNITY_PLAN.md §1."
+              }
+            ]
           },
           "content_type": {
             "description": "`\"post\"` or `\"comment\"`. Deliberately a `String` rather than the\nserver's enum (see the independence rule at the top of the module —\nthe same pattern as `actor_type` on `ActorSummary`).",
@@ -539,6 +685,23 @@
         ],
         "type": "object"
       },
+      "CreateCommunityRequest": {
+        "description": "Request body of `POST /communities`.\n\nThere is deliberately **no `visibility` field**: phase 2 creates public\ncommunities only (COMMUNITY_PLAN.md §13), and the server rejects\n`private` at the core level. A field that can only ever hold one value\nwould be a lie in the contract; phase 4 adds it together with the gate\nthat makes the second value real.",
+        "properties": {
+          "description": {
+            "description": "Markdown; stored as text and length-validated (1-10000 characters).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object"
+      },
       "CreateKeyRequest": {
         "description": "Request body of `POST /auth/keys`.",
         "properties": {
@@ -573,6 +736,13 @@
         "properties": {
           "body": {
             "type": "string"
+          },
+          "community": {
+            "description": "Name of the community to post into. Omitted means an independent\npost. When given, the author must be a member of that community\n(public or private) or the request is `403`; a name that does not\nexist is `404`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tags": {
             "description": "May be empty. Tags that do not exist yet are created in the same\ntransaction.",
@@ -1183,6 +1353,18 @@
         },
         "required": [
           "body"
+        ],
+        "type": "object"
+      },
+      "UpdateCommunityRequest": {
+        "description": "Request body of `PATCH /communities/{name}`.\n\nOnly the description is editable — the name is the community's address\nand the owner cannot change it in phase 2.",
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
         ],
         "type": "object"
       },
@@ -4527,6 +4709,840 @@
         ]
       }
     },
+    "/communities": {
+      "get": {
+        "description": "Public communities, newest first. Private communities are never listed.",
+        "operationId": "list_communities",
+        "parameters": [
+          {
+            "description": "The previous page's `next_cursor`",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityListResponse"
+                }
+              }
+            },
+            "description": "Community list, with a cursor"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List communities (the directory)",
+        "tags": [
+          "communities"
+        ]
+      },
+      "post": {
+        "description": "The creator becomes the owner and the first member. An actor may own at most 3 communities. Only public communities can be created; private ones land in a later phase.",
+        "operationId": "create_community",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCommunityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunitySummary"
+                }
+              }
+            },
+            "description": "Community created",
+            "headers": {
+              "location": {
+                "description": "Path of the new community: /communities/{name}",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Conflict (uniqueness violation or a concurrent request)"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Create a community",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
+    "/communities/{name}": {
+      "get": {
+        "description": "If an `Authorization` header is present, `is_member` reflects the requesting actor; anonymous requests get `false`.",
+        "operationId": "get_community",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunitySummary"
+                }
+              }
+            },
+            "description": "Community summary"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read a community",
+        "tags": [
+          "communities"
+        ]
+      },
+      "patch": {
+        "description": "Callable by the owner or a holder of the global `community.edit` permission.",
+        "operationId": "update_community",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCommunityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunitySummary"
+                }
+              }
+            },
+            "description": "Updated community"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated, but not authorized for this action"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Edit a community's description",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
+    "/communities/{name}/join": {
+      "delete": {
+        "description": "Idempotent. The owner cannot leave their own community (`400`).",
+        "operationId": "leave_community",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No longer a member (or never was)"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Leave a community",
+        "tags": [
+          "communities"
+        ]
+      },
+      "post": {
+        "description": "Instant and idempotent for public communities. Being a member already is not an error.",
+        "operationId": "join_community",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Now a member (or already was)"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Join a community",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
+    "/communities/{name}/members": {
+      "get": {
+        "description": "Longest-serving member first (`joined_at` ascending).",
+        "operationId": "list_members",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityMemberListResponse"
+                }
+              }
+            },
+            "description": "Member list, with a cursor"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a community's members",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
+    "/communities/{name}/posts": {
+      "get": {
+        "description": "Supports the three sorts (`new`, `top`, `hot`). A community that exists but has no live posts returns an empty list, not `404`.",
+        "operationId": "list_community_posts",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`new`, `top`, or `hot`",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated field names; applied to each post item",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostListResponse"
+                }
+              }
+            },
+            "description": "Post list, with a cursor"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a community's posts",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
     "/contents/{id}/save": {
       "delete": {
         "operationId": "unsave",
@@ -7117,6 +8133,10 @@
     {
       "description": "Comment tree: creation, listing, editing, deletion",
       "name": "comments"
+    },
+    {
+      "description": "Public communities: creation, the directory, membership, and the community feed",
+      "name": "communities"
     },
     {
       "description": "Tag popularity listing, autocomplete, post listing by tag",

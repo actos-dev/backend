@@ -27,6 +27,7 @@ use sqlx::PgPool;
 use crate::{
     actor::{Page, paginate, resolve_live_actor_id},
     auth::{ActorRecord, ActorType},
+    community::CommunityRef,
     content::{BodyFormat, Content, ContentType},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
@@ -453,6 +454,8 @@ pub async fn list_saves(
         author_bio: Option<String>,
         author_created_at: DateTime<Utc>,
         author_deleted_at: Option<DateTime<Utc>>,
+        community_id: Option<i64>,
+        community_name: Option<String>,
         tags: Vec<String>,
     }
 
@@ -481,6 +484,8 @@ pub async fn list_saves(
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
             actors.deleted_at AS author_deleted_at,
+            communities.id AS "community_id?",
+            communities.name AS "community_name?",
             COALESCE(
                 array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                 '{}'
@@ -488,6 +493,7 @@ pub async fn list_saves(
         FROM saves
         JOIN contents ON contents.id = saves.content_id
         JOIN actors ON actors.id = contents.actor_id
+        LEFT JOIN communities ON communities.id = contents.community_id
         LEFT JOIN content_tags ON content_tags.content_id = contents.id
         LEFT JOIN tags ON tags.id = content_tags.tag_id
         WHERE saves.actor_id = $1
@@ -496,7 +502,7 @@ pub async fn list_saves(
               $2::timestamptz IS NULL
               OR (saves.created_at, contents.id) < ($2::timestamptz, $3::bigint)
           )
-        GROUP BY saves.created_at, contents.id, actors.id
+        GROUP BY saves.created_at, contents.id, actors.id, communities.id
         ORDER BY saves.created_at DESC, contents.id DESC
         LIMIT $4
         "#,
@@ -536,6 +542,10 @@ pub async fn list_saves(
             downvotes: row.downvotes,
             comment_count: row.comment_count,
             hot_score: row.hot_score,
+            community: row.community_id.map(|id| CommunityRef {
+                id,
+                name: row.community_name.unwrap_or_default(),
+            }),
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,

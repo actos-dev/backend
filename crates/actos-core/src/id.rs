@@ -174,6 +174,18 @@ impl IdKind for Notification {
     const PREFIX: &'static str = "n";
 }
 
+/// `communities` tablosundaki satırlar (Faz 2, topluluklar).
+///
+/// `m` öneki (`community`), `c` (content) ile karışmasın diye seçildi. Topluluk
+/// dış ID'si yalnızca `ContentSummary.community` içinde taşınıyor; rota
+/// parametreleri isim üzerinden çalışıyor (`/communities/{name}`) ve isim
+/// zaten insan-okunur — bu yüzden topluluk ID'si hiçbir path'te görünmüyor.
+pub struct Community;
+impl IdKind for Community {
+    const TAG: u8 = 6;
+    const PREFIX: &'static str = "m";
+}
+
 /// ID üretme/ayrıştırma sırasında oluşan hatalar. Hiçbiri panik değildir:
 /// istemciden gelen bozuk bir ID, bu tiplerden biriyle geri döner.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

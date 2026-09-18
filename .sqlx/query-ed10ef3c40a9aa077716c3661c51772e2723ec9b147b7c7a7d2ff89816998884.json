@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO community_members (community_id, actor_id)\n        VALUES ($1, $2)\n        ON CONFLICT DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ed10ef3c40a9aa077716c3661c51772e2723ec9b147b7c7a7d2ff89816998884"
+}

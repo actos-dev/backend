@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO communities (name, description, visibility, owner_actor_id)\n        VALUES ($1, $2, $3, $4)\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "Text",
+        {
+          "Custom": {
+            "name": "community_visibility",
+            "kind": {
+              "Enum": [
+                "public",
+                "private"
+              ]
+            }
+          }
+        },
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2250b06c2911426031a6ded79138bf02c16a02777d2fadbf31c14919c81011fd"
+}

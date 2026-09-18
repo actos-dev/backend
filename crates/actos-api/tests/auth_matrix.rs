@@ -531,6 +531,15 @@ const MATRIX_OPERATIONS: &[(&str, &str)] = &[
     ("PATCH", "/comments/{id}"),
     ("DELETE", "/comments/{id}"),
     ("GET", "/actors/{username}/comments"),
+    // --- topluluk_uclarinin_yetki_matrisi ---
+    ("POST", "/communities"),
+    ("GET", "/communities"),
+    ("GET", "/communities/{name}"),
+    ("PATCH", "/communities/{name}"),
+    ("POST", "/communities/{name}/join"),
+    ("DELETE", "/communities/{name}/join"),
+    ("GET", "/communities/{name}/members"),
+    ("GET", "/communities/{name}/posts"),
     // --- interaction_uclarinin_yetki_matrisi ---
     ("PUT", "/contents/{id}/vote"),
     ("GET", "/me/votes"),
@@ -2651,6 +2660,250 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
         StatusCode::FORBIDDEN,
         "FORBIDDEN",
         "GET /admin/actions [banli] (GET güvenli, ban kontrolüne takılmıyor)",
+    )
+    .await;
+}
+
+// ============================================================================
+// topluluk_uclarinin_yetki_matrisi — 8 operasyon
+// ============================================================================
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+#[allow(clippy::too_many_lines)]
+async fn topluluk_uclarinin_yetki_matrisi(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+
+    let (owner_id, owner_key) = seed_actor(&raw_pool, "am_top_owner").await;
+    let (_, normal_key) = seed_actor(&raw_pool, "am_top_normal").await;
+    let (mod_id, mod_key) = seed_actor(&raw_pool, "am_top_mod").await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "am_top_admin").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+    let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_top_banned").await;
+    banla(&raw_pool, owner_id, "am_top_banned").await;
+    let _ = banned_id;
+
+    // --- POST /communities — her kimlikli hesap 201, banlı 403 BANNED. ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "POST",
+            "/communities",
+            None,
+            json!({ "name": "am_top_anon", "description": "x" }),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /communities [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
+        assert_status(
+            &router,
+            auth_json_req(
+                "POST",
+                "/communities",
+                token,
+                json!({ "name": format!("am_top_{rol}"), "description": "matris" }),
+            ),
+            StatusCode::CREATED,
+            &format!("POST /communities [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities",
+            &banned_key,
+            json!({ "name": "am_top_banli", "description": "x" }),
+        ),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /communities [banli]",
+    )
+    .await;
+
+    // Matrisin geri kalanı için sahibi tarafından bir topluluk.
+    let owner_community = assert_status(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities",
+            &owner_key,
+            json!({ "name": "am_top_kulup", "description": "eski" }),
+        ),
+        StatusCode::CREATED,
+        "POST /communities [sahip]",
+    )
+    .await;
+    assert_eq!(owner_community["is_member"], true);
+
+    // --- Salt okunur uçlar: anon ve bütün roller 200 (banlı dahil — GET
+    // güvenli, ban kontrolüne takılmıyor). ---
+    let public_reads: &[(&str, &str)] = &[
+        ("GET", "/communities"),
+        ("GET", "/communities/am_top_kulup"),
+        ("GET", "/communities/am_top_kulup/members"),
+        ("GET", "/communities/am_top_kulup/posts"),
+    ];
+    for (method, uri) in public_reads {
+        assert_status(
+            &router,
+            empty_req(method, uri),
+            StatusCode::OK,
+            &format!("{method} {uri} [anon]"),
+        )
+        .await;
+        for (rol, token) in [
+            ("normal", &normal_key),
+            ("sahip", &owner_key),
+            ("moderator", &mod_key),
+            ("admin", &admin_key),
+            ("banli", &banned_key),
+        ] {
+            assert_status(
+                &router,
+                auth_req(method, uri, token),
+                StatusCode::OK,
+                &format!("{method} {uri} [{rol}]"),
+            )
+            .await;
+        }
+    }
+
+    // --- PATCH /communities/{name} — yalnızca sahibi veya global
+    // `community.edit` (admin kümesi); moderatör bu izni tutmuyor. ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "PATCH",
+            "/communities/am_top_kulup",
+            None,
+            json!({ "description": "x" }),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "PATCH /communities/{name} [anon]",
+    )
+    .await;
+    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key)] {
+        assert_code(
+            &router,
+            auth_json_req(
+                "PATCH",
+                "/communities/am_top_kulup",
+                token,
+                json!({ "description": "olmaz" }),
+            ),
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            &format!("PATCH /communities/{{name}} [{rol}]"),
+        )
+        .await;
+    }
+    for (rol, token) in [("sahip", &owner_key), ("admin", &admin_key)] {
+        assert_status(
+            &router,
+            auth_json_req(
+                "PATCH",
+                "/communities/am_top_kulup",
+                token,
+                json!({ "description": format!("düzenledi-{rol}") }),
+            ),
+            StatusCode::OK,
+            &format!("PATCH /communities/{{name}} [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/am_top_kulup",
+            &banned_key,
+            json!({ "description": "x" }),
+        ),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "PATCH /communities/{name} [banli]",
+    )
+    .await;
+
+    // --- POST /communities/{name}/join — idempotent, sahip zaten üye. ---
+    assert_code(
+        &router,
+        maybe_auth_json_req("POST", "/communities/am_top_kulup/join", None, json!({})),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /communities/{name}/join [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("sahip", &owner_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
+        assert_status(
+            &router,
+            auth_req("POST", "/communities/am_top_kulup/join", token),
+            StatusCode::NO_CONTENT,
+            &format!("POST /communities/{{name}}/join [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_req("POST", "/communities/am_top_kulup/join", &banned_key),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /communities/{name}/join [banli]",
+    )
+    .await;
+
+    // --- DELETE /communities/{name}/join — sahip ayrılamaz (400). ---
+    assert_code(
+        &router,
+        maybe_auth_json_req("DELETE", "/communities/am_top_kulup/join", None, json!({})),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "DELETE /communities/{name}/join [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
+        assert_status(
+            &router,
+            auth_req("DELETE", "/communities/am_top_kulup/join", token),
+            StatusCode::NO_CONTENT,
+            &format!("DELETE /communities/{{name}}/join [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_req("DELETE", "/communities/am_top_kulup/join", &owner_key),
+        StatusCode::BAD_REQUEST,
+        "VALIDATION_FAILED",
+        "DELETE /communities/{name}/join [sahip ayrılamaz]",
+    )
+    .await;
+    assert_code(
+        &router,
+        auth_req("DELETE", "/communities/am_top_kulup/join", &banned_key),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "DELETE /communities/{name}/join [banli]",
     )
     .await;
 }

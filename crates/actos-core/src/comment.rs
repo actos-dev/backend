@@ -43,6 +43,7 @@ use sqlx::{PgConnection, PgPool};
 use crate::{
     actor::{Page, paginate, resolve_live_actor_id, split_new_cursor},
     auth::{ActorRecord, ActorType, Grant, Permission},
+    community::CommunityRef,
     content::{BodyFormat, Content, ContentType},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
@@ -141,6 +142,8 @@ struct CommentRow {
     author_bio: Option<String>,
     author_created_at: DateTime<Utc>,
     author_deleted_at: Option<DateTime<Utc>>,
+    community_id: Option<i64>,
+    community_name: Option<String>,
 }
 
 impl From<CommentRow> for Content {
@@ -166,6 +169,10 @@ impl From<CommentRow> for Content {
             downvotes: row.downvotes,
             comment_count: row.comment_count,
             hot_score: row.hot_score,
+            community: row.community_id.map(|id| CommunityRef {
+                id,
+                name: row.community_name.unwrap_or_default(),
+            }),
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
@@ -525,9 +532,12 @@ pub async fn get_comment(pool: &PgPool, id: i64) -> Result<Content> {
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
-            actors.deleted_at AS author_deleted_at
+            actors.deleted_at AS author_deleted_at,
+            communities.id AS "community_id?",
+            communities.name AS "community_name?"
         FROM contents
         JOIN actors ON actors.id = contents.actor_id
+        LEFT JOIN communities ON communities.id = contents.community_id
         WHERE contents.id = $1 AND contents.content_type = 'comment'::content_type
         "#,
         id,
@@ -573,6 +583,8 @@ pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
         author_bio: Option<String>,
         author_created_at: DateTime<Utc>,
         author_deleted_at: Option<DateTime<Utc>>,
+        community_id: Option<i64>,
+        community_name: Option<String>,
     }
 
     let rows = sqlx::query_as!(
@@ -598,10 +610,13 @@ pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
-            actors.deleted_at AS author_deleted_at
+            actors.deleted_at AS author_deleted_at,
+            communities.id AS "community_id?",
+            communities.name AS "community_name?"
         FROM contents AS ata
         JOIN contents AS hedef ON hedef.id = $1
         JOIN actors ON actors.id = ata.actor_id
+        LEFT JOIN communities ON communities.id = ata.community_id
         WHERE ata.path @> hedef.path AND ata.id <> hedef.id
         ORDER BY ata.depth
         "#,
@@ -633,6 +648,10 @@ pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
             downvotes: row.downvotes,
             comment_count: row.comment_count,
             hot_score: row.hot_score,
+            community: row.community_id.map(|id| CommunityRef {
+                id,
+                name: row.community_name.unwrap_or_default(),
+            }),
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,
@@ -796,9 +815,12 @@ async fn fetch_children_page(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
-                    actors.deleted_at AS author_deleted_at
+                    actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?"
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 WHERE contents.parent_content_id = $1
                   AND contents.content_type = 'comment'::content_type
                   AND (
@@ -840,9 +862,12 @@ async fn fetch_children_page(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
-                    actors.deleted_at AS author_deleted_at
+                    actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?"
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 WHERE contents.parent_content_id = $1
                   AND contents.content_type = 'comment'::content_type
                   AND (
@@ -911,9 +936,12 @@ async fn fetch_descendants(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
-                    actors.deleted_at AS author_deleted_at
+                    actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?"
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 WHERE contents.path <@ ANY(
                           ARRAY(SELECT ust.path FROM contents AS ust WHERE ust.id = ANY($1::bigint[]))
                       )
@@ -950,9 +978,12 @@ async fn fetch_descendants(
                     actors.display_name AS author_display_name,
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
-                    actors.deleted_at AS author_deleted_at
+                    actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?"
                 FROM contents
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 WHERE contents.path <@ ANY(
                           ARRAY(SELECT ust.path FROM contents AS ust WHERE ust.id = ANY($1::bigint[]))
                       )
@@ -1173,9 +1204,12 @@ pub async fn list_comments_by_actor(
             actors.display_name AS author_display_name,
             actors.bio AS author_bio,
             actors.created_at AS author_created_at,
-            actors.deleted_at AS author_deleted_at
+            actors.deleted_at AS author_deleted_at,
+            communities.id AS "community_id?",
+            communities.name AS "community_name?"
         FROM contents
         JOIN actors ON actors.id = contents.actor_id
+        LEFT JOIN communities ON communities.id = contents.community_id
         WHERE contents.actor_id = $1
           AND contents.content_type = 'comment'::content_type
           AND contents.deleted_at IS NULL

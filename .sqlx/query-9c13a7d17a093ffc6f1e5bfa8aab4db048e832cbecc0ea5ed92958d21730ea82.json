@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, owner_actor_id, visibility AS \"visibility: CommunityVisibility\"\n        FROM communities\n        WHERE name = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "owner_actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "owner_actor_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "visibility: CommunityVisibility",
+        "type_info": {
+          "Custom": {
+            "name": "community_visibility",
+            "kind": {
+              "Enum": [
+                "public",
+                "private"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "visibility"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9c13a7d17a093ffc6f1e5bfa8aab4db048e832cbecc0ea5ed92958d21730ea82"
+}

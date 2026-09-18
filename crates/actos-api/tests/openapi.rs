@@ -5,7 +5,7 @@
 //! entegrasyon test binary'si olduğu için (Rust her `tests/*.rs` dosyasını
 //! bağımsız derler) paylaşılan bir modül olmadan tekrar tanımlanıyor.
 //!
-//! **Neden 40 yolu burada elle listeliyoruz:** `crate::routes::mod`
+//! **Neden tüm yolları burada elle listeliyoruz:** `crate::routes::mod`
 //! dokümantasyonundaki garanti ("bir uç axum'da yaşıyorsa spec'te de yaşar")
 //! yalnızca *kayıtlı* uçlar için geçerli — yeni bir uç eklenip
 //! `OpenApiRouter::routes(routes!(...))`'a hiç eklenmemesi (ya da
@@ -132,12 +132,12 @@ fn empty_req(method: &str, uri: &str) -> Request<Body> {
         .expect("istek kurulabilmeli")
 }
 
-/// Spec'te bulunması **zorunlu** 46 yol. `crate::routes::mod`'daki her
+/// Spec'te bulunması **zorunlu** yollar. `crate::routes::mod`'daki her
 /// `router()` merge'ünden bir tane — bkz. dosya başındaki modül dokümanı.
 ///
 /// Sıra, `crates/actos-api/src/routes/mod.rs`'teki `merge` sırasıyla aynı:
-/// health/meta, auth, actors, posts, comments, tags, search, interactions,
-/// feed, admin.
+/// health/meta, auth, actors, posts, comments, communities, tags, search,
+/// interactions, feed, admin.
 const EXPECTED_PATHS: &[&str] = &[
     // health / meta
     "/health",
@@ -166,6 +166,12 @@ const EXPECTED_PATHS: &[&str] = &[
     "/posts/{id}/comments",
     "/comments/{id}",
     "/actors/{username}/comments",
+    // communities
+    "/communities",
+    "/communities/{name}",
+    "/communities/{name}/join",
+    "/communities/{name}/members",
+    "/communities/{name}/posts",
     // tags
     "/tags/search",
     "/tags",
@@ -214,7 +220,7 @@ async fn openapi_json_200_ve_gecerli_json(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn openapi_json_46_yolun_hepsini_iceriyor(pool: PgPool) {
+async fn openapi_json_tum_yolların_hepsini_iceriyor(pool: PgPool) {
     let router = build_router(pool);
     let (status, body, _) = send(&router, empty_req("GET", "/openapi.json")).await;
     assert_eq!(status, StatusCode::OK);
@@ -381,10 +387,10 @@ async fn docs_agent_kimlik_gerektirmiyor(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn docs_agent_46_yolun_hepsini_iceriyor(pool: PgPool) {
+async fn docs_agent_tum_yolların_hepsini_iceriyor(pool: PgPool) {
     // Bu test [`EXPECTED_PATHS`]'ın (`/docs/agent`'ın kendisi dahil) her
     // birinin **üretilen metinde de** göründüğünü doğruluyor —
-    // `openapi_json_46_yolun_hepsini_iceriyor` bunu `/openapi.json` için
+    // `openapi_json_tum_yolların_hepsini_iceriyor` bunu `/openapi.json` için
     // zaten garanti ediyor, ama `/docs/agent`'ın kendi üretim mantığı
     // (`crate::routes::meta::render_endpoint_reference`, JSON'u ikinci kez
     // gezip metne döken ayrı bir kod yolu) spec'i doğru okumazsa bir yolu

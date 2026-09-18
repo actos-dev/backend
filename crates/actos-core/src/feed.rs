@@ -49,6 +49,7 @@ use sqlx::PgPool;
 use crate::{
     actor::{Page, paginate},
     auth::{ActorRecord, ActorType},
+    community::CommunityRef,
     content::{BodyFormat, Content, ContentType, PostSort},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
@@ -289,6 +290,8 @@ pub async fn list_feed(
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
                     actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?",
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
@@ -296,9 +299,10 @@ pub async fn list_feed(
                 FROM page
                 JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                GROUP BY contents.id, actors.id
+                GROUP BY contents.id, actors.id, communities.id
                 ORDER BY contents.created_at DESC, contents.id DESC
                 "#,
                 cutoff,
@@ -362,6 +366,8 @@ pub async fn list_feed(
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
                     actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?",
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
@@ -369,9 +375,10 @@ pub async fn list_feed(
                 FROM page
                 JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                GROUP BY contents.id, actors.id
+                GROUP BY contents.id, actors.id, communities.id
                 ORDER BY contents.score DESC, contents.id DESC
                 "#,
                 cutoff,
@@ -435,6 +442,8 @@ pub async fn list_feed(
                     actors.bio AS author_bio,
                     actors.created_at AS author_created_at,
                     actors.deleted_at AS author_deleted_at,
+                    communities.id AS "community_id?",
+                    communities.name AS "community_name?",
                     COALESCE(
                         array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),
                         '{}'
@@ -442,9 +451,10 @@ pub async fn list_feed(
                 FROM page
                 JOIN contents ON contents.id = page.id
                 JOIN actors ON actors.id = contents.actor_id
+                LEFT JOIN communities ON communities.id = contents.community_id
                 LEFT JOIN content_tags ON content_tags.content_id = page.id
                 LEFT JOIN tags ON tags.id = content_tags.tag_id
-                GROUP BY contents.id, actors.id
+                GROUP BY contents.id, actors.id, communities.id
                 ORDER BY contents.hot_score DESC, contents.id DESC
                 "#,
                 cutoff,
@@ -504,6 +514,8 @@ pub(crate) struct FeedRow {
     pub(crate) author_bio: Option<String>,
     pub(crate) author_created_at: DateTime<Utc>,
     pub(crate) author_deleted_at: Option<DateTime<Utc>>,
+    pub(crate) community_id: Option<i64>,
+    pub(crate) community_name: Option<String>,
     pub(crate) tags: Vec<String>,
 }
 
@@ -535,6 +547,10 @@ impl Content {
             downvotes: row.downvotes,
             comment_count: row.comment_count,
             hot_score: row.hot_score,
+            community: row.community_id.map(|id| CommunityRef {
+                id,
+                name: row.community_name.unwrap_or_default(),
+            }),
             created_at: row.created_at,
             edited_at: row.edited_at,
             deleted_at: row.deleted_at,

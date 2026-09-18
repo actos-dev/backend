@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                WITH page AS (\n                    SELECT contents.id\n                    FROM contents\n                    JOIN content_tags AS filtre ON filtre.content_id = contents.id\n                    WHERE filtre.tag_id = $1\n                      AND contents.content_type = 'post'::content_type\n                      AND contents.deleted_at IS NULL\n                      AND (\n                          $2::double precision IS NULL\n                          OR (contents.hot_score, contents.id) < ($2::double precision, $3::bigint)\n                      )\n                    ORDER BY contents.hot_score DESC, contents.id DESC\n                    LIMIT $4\n                )\n                SELECT\n                    contents.id,\n                    contents.content_type AS \"content_type: ContentType\",\n                    contents.title,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at,\n                    COALESCE(\n                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                        '{}'\n                    ) AS \"tags!: Vec<String>\"\n                FROM page\n                JOIN contents ON contents.id = page.id\n                JOIN actors ON actors.id = contents.actor_id\n                LEFT JOIN content_tags ON content_tags.content_id = page.id\n                LEFT JOIN tags ON tags.id = content_tags.tag_id\n                GROUP BY contents.id, actors.id\n                ORDER BY contents.hot_score DESC, contents.id DESC\n                ",
+  "query": "\n                WITH page AS (\n                    SELECT contents.id\n                    FROM contents\n                    JOIN content_tags AS filtre ON filtre.content_id = contents.id\n                    WHERE filtre.tag_id = $1\n                      AND contents.content_type = 'post'::content_type\n                      AND contents.deleted_at IS NULL\n                      AND (\n                          $2::int IS NULL\n                          OR (contents.score, contents.id) < ($2::int, $3::bigint)\n                      )\n                    ORDER BY contents.score DESC, contents.id DESC\n                    LIMIT $4\n                )\n                SELECT\n                    contents.id,\n                    contents.content_type AS \"content_type: ContentType\",\n                    contents.title,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at,\n                    communities.id AS \"community_id?\",\n                    communities.name AS \"community_name?\",\n                    COALESCE(\n                        array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                        '{}'\n                    ) AS \"tags!: Vec<String>\"\n                FROM page\n                JOIN contents ON contents.id = page.id\n                JOIN actors ON actors.id = contents.actor_id\n                LEFT JOIN communities ON communities.id = contents.community_id\n                LEFT JOIN content_tags ON content_tags.content_id = page.id\n                LEFT JOIN tags ON tags.id = content_tags.tag_id\n                GROUP BY contents.id, actors.id, communities.id\n                ORDER BY contents.score DESC, contents.id DESC\n                ",
   "describe": {
     "columns": [
       {
@@ -260,6 +260,33 @@
       },
       {
         "ordinal": 20,
+        "name": "community_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "community_name?",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
         "name": "tags!: Vec<String>",
         "type_info": "TextArray",
         "origin": "Expression"
@@ -268,7 +295,7 @@
     "parameters": {
       "Left": [
         "Int8",
-        "Float8",
+        "Int4",
         "Int8",
         "Int8"
       ]
@@ -294,8 +321,10 @@
       true,
       false,
       true,
+      false,
+      false,
       null
     ]
   },
-  "hash": "89977ecc682b498d99313e8c7487e39080465999b1cf7519e743e30e7a2bb41e"
+  "hash": "fc611709fb1ca8bf64810ad82552504331a2b0c815c2520cd291b556d9f2d7e8"
 }

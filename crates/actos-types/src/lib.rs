@@ -35,6 +35,9 @@ pub mod auth;
 /// Request/response types for the content (post + comment) endpoints.
 pub mod content;
 
+/// Request/response types for the community endpoints.
+pub mod community;
+
 /// Request/response types for the vote, follow and save endpoints.
 pub mod interaction;
 

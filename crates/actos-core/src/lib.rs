@@ -11,6 +11,7 @@ pub mod authz;
 pub mod avatar;
 pub mod cache;
 pub mod comment;
+pub mod community;
 pub mod config;
 pub mod content;
 pub mod cursor;

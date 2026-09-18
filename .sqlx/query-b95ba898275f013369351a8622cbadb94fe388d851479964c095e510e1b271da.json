@@ -1,10 +1,21 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                SELECT\n                    contents.id,\n                    contents.parent_content_id,\n                    contents.body,\n                    contents.body_format AS \"body_format: BodyFormat\",\n                    contents.score,\n                    contents.upvotes,\n                    contents.downvotes,\n                    contents.comment_count,\n                    contents.hot_score,\n                    contents.created_at,\n                    contents.edited_at,\n                    contents.deleted_at,\n                    actors.id AS author_id,\n                    actors.username AS author_username,\n                    actors.actor_type AS \"author_actor_type: ActorType\",\n                    actors.display_name AS author_display_name,\n                    actors.bio AS author_bio,\n                    actors.created_at AS author_created_at,\n                    actors.deleted_at AS author_deleted_at\n                FROM contents\n                JOIN actors ON actors.id = contents.actor_id\n                WHERE contents.parent_content_id = $1\n                  AND contents.content_type = 'comment'::content_type\n                  AND (\n                      $2::timestamptz IS NULL\n                      OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)\n                  )\n                ORDER BY contents.created_at DESC, contents.id DESC\n                LIMIT $4\n                ",
+  "query": "\n        SELECT\n            saves.created_at AS saved_at,\n            contents.id,\n            contents.content_type AS \"content_type: ContentType\",\n            contents.title,\n            contents.body,\n            contents.body_format AS \"body_format: BodyFormat\",\n            contents.score,\n            contents.upvotes,\n            contents.downvotes,\n            contents.comment_count,\n            contents.hot_score,\n            contents.created_at,\n            contents.edited_at,\n            contents.deleted_at,\n            actors.id AS author_id,\n            actors.username AS author_username,\n            actors.actor_type AS \"author_actor_type: ActorType\",\n            actors.display_name AS author_display_name,\n            actors.bio AS author_bio,\n            actors.created_at AS author_created_at,\n            actors.deleted_at AS author_deleted_at,\n            communities.id AS \"community_id?\",\n            communities.name AS \"community_name?\",\n            COALESCE(\n                array_agg(tags.name::text) FILTER (WHERE tags.id IS NOT NULL),\n                '{}'\n            ) AS \"tags!: Vec<String>\"\n        FROM saves\n        JOIN contents ON contents.id = saves.content_id\n        JOIN actors ON actors.id = contents.actor_id\n        LEFT JOIN communities ON communities.id = contents.community_id\n        LEFT JOIN content_tags ON content_tags.content_id = contents.id\n        LEFT JOIN tags ON tags.id = content_tags.tag_id\n        WHERE saves.actor_id = $1\n          AND contents.deleted_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (saves.created_at, contents.id) < ($2::timestamptz, $3::bigint)\n          )\n        GROUP BY saves.created_at, contents.id, actors.id, communities.id\n        ORDER BY saves.created_at DESC, contents.id DESC\n        LIMIT $4\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "saved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "saves",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
         "name": "id",
         "type_info": "Int8",
         "origin": {
@@ -15,18 +26,39 @@
         }
       },
       {
-        "ordinal": 1,
-        "name": "parent_content_id",
-        "type_info": "Int8",
+        "ordinal": 2,
+        "name": "content_type: ContentType",
+        "type_info": {
+          "Custom": {
+            "name": "content_type",
+            "kind": {
+              "Enum": [
+                "post",
+                "comment"
+              ]
+            }
+          }
+        },
         "origin": {
           "Table": {
             "table": "contents",
-            "name": "parent_content_id"
+            "name": "content_type"
           }
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "body",
         "type_info": "Text",
         "origin": {
@@ -37,7 +69,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 5,
         "name": "body_format: BodyFormat",
         "type_info": {
           "Custom": {
@@ -58,7 +90,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 6,
         "name": "score",
         "type_info": "Int4",
         "origin": {
@@ -69,7 +101,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "upvotes",
         "type_info": "Int4",
         "origin": {
@@ -80,7 +112,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "downvotes",
         "type_info": "Int4",
         "origin": {
@@ -91,7 +123,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 9,
         "name": "comment_count",
         "type_info": "Int4",
         "origin": {
@@ -102,7 +134,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 10,
         "name": "hot_score",
         "type_info": "Float8",
         "origin": {
@@ -113,7 +145,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 11,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -124,7 +156,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 12,
         "name": "edited_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -135,7 +167,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 13,
         "name": "deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -146,7 +178,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 14,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -157,7 +189,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 15,
         "name": "author_username",
         "type_info": {
           "Custom": {
@@ -173,7 +205,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 16,
         "name": "author_actor_type: ActorType",
         "type_info": {
           "Custom": {
@@ -194,7 +226,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 17,
         "name": "author_display_name",
         "type_info": "Text",
         "origin": {
@@ -205,7 +237,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 18,
         "name": "author_bio",
         "type_info": "Text",
         "origin": {
@@ -216,7 +248,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 19,
         "name": "author_created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -227,7 +259,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 20,
         "name": "author_deleted_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -236,6 +268,39 @@
             "name": "deleted_at"
           }
         }
+      },
+      {
+        "ordinal": 21,
+        "name": "community_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "community_name?",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "tags!: Vec<String>",
+        "type_info": "TextArray",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -248,25 +313,30 @@
     },
     "nullable": [
       false,
-      true,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
       false,
       false,
       true,
-      true,
+      false,
+      false,
+      false,
+      false,
+      false,
       false,
       false,
       false,
       true,
       true,
       false,
-      true
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      null
     ]
   },
-  "hash": "cf19d80f5e02253cd1cdb61cdbb796a92859f6dab61b2be58054a4709424feb4"
+  "hash": "b95ba898275f013369351a8622cbadb94fe388d851479964c095e510e1b271da"
 }
