@@ -149,14 +149,29 @@ async fn get_inbox(
     let limit = parse_limit(query.limit, &headers)?;
     let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
 
-    let page =
-        core_notification::list_inbox(state.db(), current.actor.id, unread_only, cursor, limit)
-            .await
-            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
-
-    let unread_count = core_notification::count_unread(state.db(), current.actor.id)
+    // Gelen kutusu kişinin kendi listesi (COMMUNITY_PLAN.md §9): görünürlük
+    // çağıranın **güncel** üyeliklerine göre. Liste ve sayaç aynı kümeyi
+    // paylaşıyor ki `unread_count` listeden düşen bir bildirimi saymasın.
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let page = core_notification::list_inbox(
+        state.db(),
+        current.actor.id,
+        unread_only,
+        cursor,
+        limit,
+        &viewer_communities,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let unread_count =
+        core_notification::count_unread(state.db(), current.actor.id, &viewer_communities)
+            .await
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let notifications = page
         .items

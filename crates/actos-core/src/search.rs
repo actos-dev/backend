@@ -356,6 +356,7 @@ pub async fn search_content(
     content_type: ContentType,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Content>> {
     let normalized = text::normalize_text(query);
     if normalized.is_empty() {
@@ -395,6 +396,7 @@ pub async fn search_content(
             WHERE contents.search_vector @@ websearch_to_tsquery('actos_simple', $1)
               AND contents.content_type = $2::content_type
               AND contents.deleted_at IS NULL
+              AND content_visible_to(contents.community_id, $6::bigint[])
               AND (
                   $3::double precision IS NULL
                   OR (
@@ -450,6 +452,7 @@ pub async fn search_content(
         cursor_rank,
         cursor_id,
         limit + 1,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;

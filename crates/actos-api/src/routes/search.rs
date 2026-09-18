@@ -118,7 +118,9 @@ async fn search(
     };
 
     if let Some(content_type) = content_type {
-        let page = core_search::search_content(state.db(), &q, content_type, cursor, limit)
+        // İçerik araması public bir yüzeydir (COMMUNITY_PLAN.md §9):
+        // sonuçlar koşulsuz public-only, okuyucu üye olsa bile.
+        let page = core_search::search_content(state.db(), &q, content_type, cursor, limit, &[])
             .await
             .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 

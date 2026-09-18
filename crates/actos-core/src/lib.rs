@@ -30,6 +30,7 @@ pub mod secret;
 pub mod storage;
 pub mod tag;
 pub mod text;
+pub mod visibility;
 
 pub use config::Config;
 pub use error::{Error, Result};

@@ -35,7 +35,7 @@ use serde_json::Value;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-    auth::CurrentActor,
+    auth::{CurrentActor, OptionalActor},
     error::ApiError,
     fields,
     openapi::{Conflict, Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
@@ -692,6 +692,7 @@ async fn create_post(
     )
 )]
 async fn get_post(
+    current: OptionalActor,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<PostFieldsQuery>,
@@ -700,7 +701,14 @@ async fn get_post(
     let content_id = decode_content_id(&id, state.id_codec(), "post")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let content = core_content::get_post(state.db(), content_id)
+    // Tekil okuma "üye yüzeyi"dir (COMMUNITY_PLAN.md §9): bir üye özel bir
+    // postu bağlantıyla açabilir. Anonim okuyucu boş küme alır.
+    let viewer_communities = state
+        .viewer_communities(current.0.as_ref().map(|actor| actor.actor.id))
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let content = core_content::get_post(state.db(), content_id, &viewer_communities)
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
@@ -753,12 +761,18 @@ async fn update_post(
     let content_id = decode_content_id(&id, state.id_codec(), "post")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
     let content = core_content::update_post(
         state.db(),
         content_id,
         current.actor.id,
         req.title,
         req.body,
+        &viewer_communities,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
@@ -851,7 +865,7 @@ async fn list_actor_posts(
     let limit = parse_limit(query.limit, &headers)?;
     let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
 
-    let page = core_content::list_posts_by_actor(state.db(), &username, cursor, limit)
+    let page = core_content::list_posts_by_actor(state.db(), &username, cursor, limit, &[])
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 

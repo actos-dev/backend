@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, depth, deleted_at, actor_id, community_id\n        FROM contents\n        WHERE id = $1 AND content_type = 'post'::content_type\n          AND content_visible_to(contents.community_id, $2::bigint[])\n        FOR UPDATE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "depth",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "depth"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "deleted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "deleted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "actor_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "community_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "community_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "7a4bb4df0575669a4ea580afb400c160c2166353e7141d7b4286845ab3150d76"
+}

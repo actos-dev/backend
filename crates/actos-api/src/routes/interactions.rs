@@ -99,9 +99,20 @@ async fn set_vote(
     let content_id = decode_content_id(&id, state.id_codec(), "content")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let sonuc = core_interaction::set_vote(state.db(), current.actor.id, content_id, req.value)
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let sonuc = core_interaction::set_vote(
+        state.db(),
+        current.actor.id,
+        content_id,
+        req.value,
+        &viewer_communities,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(Json(VoteResponse {
         value: sonuc.value,
@@ -164,9 +175,15 @@ async fn list_votes(
         .filter_map(|s| state.id_codec().decode::<ContentIdKind>(s).ok())
         .collect();
 
-    let oylar = core_interaction::votes_for(state.db(), current.actor.id, &ic_idler)
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let oylar =
+        core_interaction::votes_for(state.db(), current.actor.id, &ic_idler, &viewer_communities)
+            .await
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let votes = oylar
         .into_iter()
@@ -213,9 +230,19 @@ async fn save(
     let content_id = decode_content_id(&id, state.id_codec(), "content")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    core_interaction::save(state.db(), current.actor.id, content_id)
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    core_interaction::save(
+        state.db(),
+        current.actor.id,
+        content_id,
+        &viewer_communities,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -351,9 +378,20 @@ async fn list_saves(
     let limit = parse_limit(query.limit, &headers)?;
     let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
 
-    let page = core_interaction::list_saves(state.db(), current.actor.id, cursor, limit)
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let page = core_interaction::list_saves(
+        state.db(),
+        current.actor.id,
+        cursor,
+        limit,
+        &viewer_communities,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());
     let include_body_html = fields::wants_body_html(selected_fields.as_deref());

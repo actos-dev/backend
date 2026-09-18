@@ -161,12 +161,18 @@ async fn create_report(
         .decode::<ContentIdKind>(&req.target_id)
         .map_err(|_| ApiError::new(Error::NotFound("content")).with_request_id(&headers))?;
 
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
     let rapor = core_mod::create_report(
         state.db(),
         current.actor.id,
         target_type,
         target_id,
         &req.reason,
+        &viewer_communities,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;

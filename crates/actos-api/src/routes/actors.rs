@@ -163,7 +163,7 @@ async fn get_profile(
     Path(username): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<ActorProfileResponse>, ApiError> {
-    let profile = core_actor::get_profile(state.db(), &username)
+    let profile = core_actor::get_profile(state.db(), &username, &[])
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 

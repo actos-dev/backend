@@ -377,6 +377,7 @@ async fn leave_community(
     )
 )]
 async fn list_members(
+    current: OptionalActor,
     State(state): State<AppState>,
     Path(name): Path<String>,
     Query(query): Query<ListQuery>,
@@ -385,7 +386,14 @@ async fn list_members(
     let limit = parse_limit(query.limit, &headers)?;
     let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
 
-    let page = core_community::list_members(state.db(), &name, cursor, limit)
+    // Özel topluluğun üye listesi public bir yüzey değil; göremeyen
+    // okuyucuya core `403` döner (bkz. `list_members` dokümanı).
+    let viewer_communities = state
+        .viewer_communities(current.0.as_ref().map(|actor| actor.actor.id))
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let page = core_community::list_members(state.db(), &name, cursor, limit, &viewer_communities)
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
@@ -482,6 +490,7 @@ fn member_summary(
     )
 )]
 async fn list_community_posts(
+    current: OptionalActor,
     State(state): State<AppState>,
     Path(name): Path<String>,
     Query(query): Query<CommunityPostsQuery>,
@@ -498,9 +507,23 @@ async fn list_community_posts(
         &headers,
     )?;
 
-    let page = core_community::list_posts_in_community(state.db(), &name, sort, cursor, limit)
+    // Topluluk akışı public bir yüzey DEĞİL (Faz 4A): özel bir topluluğu
+    // göremeyen okuyucuya core `403` döner; görebilen üye içeriği okur.
+    let viewer_communities = state
+        .viewer_communities(current.0.as_ref().map(|actor| actor.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let page = core_community::list_posts_in_community(
+        state.db(),
+        &name,
+        sort,
+        cursor,
+        limit,
+        &viewer_communities,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let selected_fields = fields::parse_fields(query.fields.as_deref());
     let include_body_html = fields::wants_body_html(selected_fields.as_deref());

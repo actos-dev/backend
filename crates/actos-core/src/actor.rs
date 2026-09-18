@@ -85,6 +85,15 @@ struct ProfileRow {
 /// hesaplanır: silinmiş bir post/yorum artık actor'ün "üretkenliğinin"
 /// parçası olarak gösterilmemeli.
 ///
+/// **İstatistikler koşulsuz public-only** (COMMUNITY_PLAN.md §9): sayaçlar
+/// `content_visible_to`'yu `'{}'` ile süzer, yani özel topluluk içeriği
+/// hiçbir izleyici için — actor'ün kendisi dahil — sayılmaz. Aksi hâlde aynı
+/// profil farklı kişilere farklı sayılar gösterir ve hiçbir şey
+/// önbelleklenemezdi. Filtre `FILTER` içinde, `WHERE`'de değil: yalnızca
+/// özel içeriği olan bir actor profili kaybolmasın, sayıları sıfır görünsün.
+/// `viewer_communities` parametresi yine de alınıyor ki çağıran tek tip
+/// olsun; public yüzeyler her zaman `&[]` geçer.
+///
 /// **Silinmiş actor `404` değil `410` döner:** `username` soft-delete'te
 /// serbest bırakılmıyor (impersonation riskine karşı, bkz.
 /// `migrations/0002_actors.up.sql` üzerindeki COMMENT) — yani bu kullanıcı
@@ -97,7 +106,11 @@ struct ProfileRow {
 /// # Errors
 /// Kullanıcı adı hiç yoksa [`Error::NotFound`]; actor soft-delete
 /// edilmişse [`Error::Gone`]; veritabanı hatası [`Error::Database`].
-pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
+pub async fn get_profile(
+    pool: &PgPool,
+    username: &str,
+    viewer_communities: &[i64],
+) -> Result<Profile> {
     let normalized = text::normalize_text(username);
 
     let row = sqlx::query_as!(
@@ -114,12 +127,17 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
             actors.deleted_at,
             COUNT(contents.id) FILTER (
                 WHERE contents.content_type = 'post' AND contents.deleted_at IS NULL
+                  AND content_visible_to(contents.community_id, $2::bigint[])
             ) AS "post_count!",
             COUNT(contents.id) FILTER (
                 WHERE contents.content_type = 'comment' AND contents.deleted_at IS NULL
+                  AND content_visible_to(contents.community_id, $2::bigint[])
             ) AS "comment_count!",
             COALESCE(
-                SUM(contents.score) FILTER (WHERE contents.deleted_at IS NULL),
+                SUM(contents.score) FILTER (
+                    WHERE contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $2::bigint[])
+                ),
                 0
             )::bigint AS "total_score!"
         FROM actors
@@ -128,6 +146,7 @@ pub async fn get_profile(pool: &PgPool, username: &str) -> Result<Profile> {
         GROUP BY actors.id
         "#,
         normalized.as_str(),
+        viewer_communities,
     )
     .fetch_optional(pool)
     .await?;

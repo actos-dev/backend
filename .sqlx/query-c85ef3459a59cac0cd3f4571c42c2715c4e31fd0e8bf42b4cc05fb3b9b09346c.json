@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT community_id AS \"community_id!\"\n        FROM community_members\n        WHERE actor_id = $1\n        UNION\n        SELECT community_id AS \"community_id!\"\n        FROM permissions\n        WHERE actor_id = $1 AND community_id IS NOT NULL\n        ORDER BY 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "community_id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c85ef3459a59cac0cd3f4571c42c2715c4e31fd0e8bf42b4cc05fb3b9b09346c"
+}

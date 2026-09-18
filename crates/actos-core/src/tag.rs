@@ -149,6 +149,7 @@ pub async fn list_popular(
     pool: &PgPool,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<TagSummary>> {
     let (cursor_count, cursor_id) = split_count_cursor(cursor)?;
 
@@ -161,6 +162,7 @@ pub async fn list_popular(
             COUNT(contents.id) FILTER (
                 WHERE contents.deleted_at IS NULL
                   AND contents.content_type = 'post'::content_type
+                  AND content_visible_to(contents.community_id, $4::bigint[])
             )::int AS "post_count!",
             tags.created_at
         FROM tags
@@ -170,6 +172,7 @@ pub async fn list_popular(
         HAVING COUNT(contents.id) FILTER (
                    WHERE contents.deleted_at IS NULL
                      AND contents.content_type = 'post'::content_type
+                     AND content_visible_to(contents.community_id, $4::bigint[])
                ) > 0
            AND (
                $1::int IS NULL
@@ -177,6 +180,7 @@ pub async fn list_popular(
                    COUNT(contents.id) FILTER (
                        WHERE contents.deleted_at IS NULL
                          AND contents.content_type = 'post'::content_type
+                         AND content_visible_to(contents.community_id, $4::bigint[])
                    )::int,
                    tags.id
                ) < ($1::int, $2::bigint)
@@ -187,6 +191,7 @@ pub async fn list_popular(
         cursor_count,
         cursor_id,
         limit + 1,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;
@@ -224,11 +229,21 @@ pub async fn list_popular(
 ///
 /// # Errors
 /// Veritabanı hatası [`Error::Database`].
-pub async fn search(pool: &PgPool, query: &str) -> Result<Vec<TagMatch>> {
+pub async fn search(
+    pool: &PgPool,
+    query: &str,
+    viewer_communities: &[i64],
+) -> Result<Vec<TagMatch>> {
     let Ok(normalized) = text::validate_tag_name(&query.to_lowercase()) else {
         return Ok(Vec::new());
     };
 
+    // Etiket yalnızca **görünür** en az bir canlı post'ta kullanılıyorsa
+    // önerilir (Faz 4A): özel bir topluluktaki bir post'a takılmış etiketin
+    // adı otomatik tamamlamada belirirse, o içeriğin varlığı sızardı
+    // (COMMUNITY_PLAN.md §2 "does not appear in search"). Silinmiş
+    // post'ların etiketleri de artık önerilmiyor — zaten görünür bir
+    // kullanımları yok.
     let rows = sqlx::query_as!(
         TagMatchRow,
         r#"
@@ -236,8 +251,18 @@ pub async fn search(pool: &PgPool, query: &str) -> Result<Vec<TagMatch>> {
             tags.id,
             tags.name::text AS "name!"
         FROM tags
-        WHERE tags.name::text LIKE $1 || '%'
-           OR similarity(tags.name::text, $1) >= $2
+        WHERE (
+                tags.name::text LIKE $1 || '%'
+                OR similarity(tags.name::text, $1) >= $2
+              )
+          AND EXISTS (
+              SELECT 1
+              FROM content_tags
+              JOIN contents ON contents.id = content_tags.content_id
+              WHERE content_tags.tag_id = tags.id
+                AND contents.deleted_at IS NULL
+                AND content_visible_to(contents.community_id, $4::bigint[])
+          )
         ORDER BY
             (tags.name::text LIKE $1 || '%') DESC,
             similarity(tags.name::text, $1) DESC,
@@ -247,6 +272,7 @@ pub async fn search(pool: &PgPool, query: &str) -> Result<Vec<TagMatch>> {
         normalized,
         SIMILARITY_THRESHOLD,
         SEARCH_LIMIT,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;

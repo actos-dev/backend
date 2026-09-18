@@ -302,6 +302,7 @@ pub async fn create_comment(
     files: &[Vec<u8>],
     max_file_bytes: usize,
     quota_bytes: i64,
+    viewer_communities: &[i64],
 ) -> Result<Content> {
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     if body.is_empty() {
@@ -310,7 +311,7 @@ pub async fn create_comment(
 
     let mut tx = pool.begin().await?;
 
-    let parent = resolve_parent(&mut tx, post_id, parent_id).await?;
+    let parent = resolve_parent(&mut tx, post_id, parent_id, viewer_communities).await?;
 
     if parent.depth + 1 > MAX_COMMENT_DEPTH {
         return Err(Error::Validation(format!(
@@ -392,7 +393,7 @@ pub async fn create_comment(
 
     tx.commit().await?;
 
-    get_comment(pool, inserted.id).await
+    get_comment(pool, inserted.id, viewer_communities).await
 }
 
 /// [`create_comment`]'in ebeveyn çözümü: `parent_id` verilmişse o yorum,
@@ -400,10 +401,16 @@ pub async fn create_comment(
 ///
 /// Satır `FOR UPDATE` ile kilitleniyor — kontrol ile `INSERT` arasında
 /// ebeveynin silinmesi mümkün olmasın diye.
+///
+/// **Görünmeyen hedef `404`** (Faz 4A): okuyucunun göremediği özel bir
+/// topluluktaki posta/yoruma yanıt yazılamaz. `content_visible_to` filtresi
+/// hem kök postta hem doğrudan ebeveynde; aksi hâlde özel içeriğe yorum
+/// yazmak onun var olduğunu doğrulardı.
 async fn resolve_parent(
     tx: &mut PgConnection,
     post_id: i64,
     parent_id: Option<i64>,
+    viewer_communities: &[i64],
 ) -> Result<ParentInfo> {
     // Kök post her durumda kontrol ediliyor: `parent_id` bir yorum olsa
     // bile, silinmiş bir post'un ağacına yeni yorum eklenmemeli (trigger
@@ -413,9 +420,11 @@ async fn resolve_parent(
         SELECT id, depth, deleted_at, actor_id, community_id
         FROM contents
         WHERE id = $1 AND content_type = 'post'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         FOR UPDATE
         "#,
         post_id,
+        viewer_communities,
     )
     .fetch_optional(&mut *tx)
     .await?
@@ -455,9 +464,11 @@ async fn resolve_parent(
         SELECT id, depth, deleted_at, root_post_id, actor_id
         FROM contents
         WHERE id = $1 AND content_type = 'comment'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         FOR UPDATE
         "#,
         parent_id,
+        viewer_communities,
     )
     .fetch_optional(&mut *tx)
     .await?
@@ -526,9 +537,15 @@ async fn increment_ancestor_counts(tx: &mut PgConnection, content_id: i64) -> Re
 /// `actos-api`'deki `content_summary` bunu `deleted_at`'e bakarak zaten
 /// yapıyor, maskeleme çağıranın unutabileceği bir adım değil.
 ///
+/// **Görünmeyen özel yorum `404`** (Faz 4A): `content_visible_to` filtresi
+/// silinmişlik kontrolünden bağımsız; okuyucunun göremediği bir topluluktaki
+/// yorumun varlığı bile sızmıyor. Silinmiş ama **görünür** yorum ise
+/// yukarıdaki gibi `deleted_at` dolu döner.
+///
 /// # Errors
-/// Yorum yoksa [`Error::NotFound`]; veritabanı hatası [`Error::Database`].
-pub async fn get_comment(pool: &PgPool, id: i64) -> Result<Content> {
+/// Yorum yoksa ya da okuyucuya görünmüyorsa [`Error::NotFound`]; veritabanı
+/// hatası [`Error::Database`].
+pub async fn get_comment(pool: &PgPool, id: i64, viewer_communities: &[i64]) -> Result<Content> {
     let row = sqlx::query_as!(
         CommentRow,
         r#"
@@ -558,8 +575,10 @@ pub async fn get_comment(pool: &PgPool, id: i64) -> Result<Content> {
         JOIN actors ON actors.id = contents.actor_id
         LEFT JOIN communities ON communities.id = contents.community_id
         WHERE contents.id = $1 AND contents.content_type = 'comment'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         "#,
         id,
+        viewer_communities,
     )
     .fetch_optional(pool)
     .await?
@@ -580,7 +599,11 @@ pub async fn get_comment(pool: &PgPool, id: i64) -> Result<Content> {
 ///
 /// # Errors
 /// Veritabanı hatası [`Error::Database`].
-pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
+pub async fn ancestors_of(
+    pool: &PgPool,
+    id: i64,
+    viewer_communities: &[i64],
+) -> Result<Vec<Content>> {
     struct AncestorRow {
         id: i64,
         content_type: ContentType,
@@ -637,9 +660,11 @@ pub async fn ancestors_of(pool: &PgPool, id: i64) -> Result<Vec<Content>> {
         JOIN actors ON actors.id = ata.actor_id
         LEFT JOIN communities ON communities.id = ata.community_id
         WHERE ata.path @> hedef.path AND ata.id <> hedef.id
+          AND content_visible_to(ata.community_id, $2::bigint[])
         ORDER BY ata.depth
         "#,
         id,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;
@@ -711,6 +736,7 @@ struct TreeRoot {
 /// `parent` bu post'un ağacına ait değilse [`Error::NotFound`]; cursor
 /// listenin sıralamasına ait değilse [`Error::InvalidCursor`]; veritabanı
 /// hatası [`Error::Database`].
+#[allow(clippy::too_many_arguments)]
 pub async fn list_comment_tree(
     pool: &PgPool,
     post_id: i64,
@@ -719,14 +745,17 @@ pub async fn list_comment_tree(
     depth: i32,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<CommentNode>> {
-    let root = resolve_tree_root(pool, post_id, parent).await?;
+    let root = resolve_tree_root(pool, post_id, parent, viewer_communities).await?;
     let max_depth = root.depth + 1 + depth.clamp(0, MAX_TREE_DEPTH);
 
-    let children = fetch_children_page(pool, root.id, sort, cursor, limit).await?;
+    let children =
+        fetch_children_page(pool, root.id, sort, cursor, limit, viewer_communities).await?;
 
     let child_ids: Vec<i64> = children.items.iter().map(|row| row.id).collect();
-    let descendants = fetch_descendants(pool, &child_ids, sort, max_depth).await?;
+    let descendants =
+        fetch_descendants(pool, &child_ids, sort, max_depth, viewer_communities).await?;
 
     let items = build_forest(children.items, descendants);
 
@@ -742,14 +771,21 @@ pub async fn list_comment_tree(
 /// Silinmiş bir `parent` kabul ediliyor: yorum silinse de çocukları
 /// yaşıyor, "daha fazla yanıt yükle" o alt ağaçta da çalışmalı. Silinmiş
 /// **post** ise reddediliyor — orada gösterilecek bir thread yok.
-async fn resolve_tree_root(pool: &PgPool, post_id: i64, parent: Option<i64>) -> Result<TreeRoot> {
+async fn resolve_tree_root(
+    pool: &PgPool,
+    post_id: i64,
+    parent: Option<i64>,
+    viewer_communities: &[i64],
+) -> Result<TreeRoot> {
     let post = sqlx::query!(
         r#"
         SELECT id, depth, deleted_at
         FROM contents
         WHERE id = $1 AND content_type = 'post'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         "#,
         post_id,
+        viewer_communities,
     )
     .fetch_optional(pool)
     .await?
@@ -778,8 +814,10 @@ async fn resolve_tree_root(pool: &PgPool, post_id: i64, parent: Option<i64>) -> 
         SELECT id, depth, root_post_id
         FROM contents
         WHERE id = $1 AND content_type = 'comment'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         "#,
         parent_id,
+        viewer_communities,
     )
     .fetch_optional(pool)
     .await?
@@ -808,6 +846,7 @@ async fn fetch_children_page(
     sort: CommentSort,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<CommentRow>> {
     let rows = match sort {
         CommentSort::New => {
@@ -842,6 +881,7 @@ async fn fetch_children_page(
                 LEFT JOIN communities ON communities.id = contents.community_id
                 WHERE contents.parent_content_id = $1
                   AND contents.content_type = 'comment'::content_type
+                  AND content_visible_to(contents.community_id, $5::bigint[])
                   AND (
                       $2::timestamptz IS NULL
                       OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
@@ -853,6 +893,7 @@ async fn fetch_children_page(
                 cursor_created_at,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -889,6 +930,7 @@ async fn fetch_children_page(
                 LEFT JOIN communities ON communities.id = contents.community_id
                 WHERE contents.parent_content_id = $1
                   AND contents.content_type = 'comment'::content_type
+                  AND content_visible_to(contents.community_id, $5::bigint[])
                   AND (
                       $2::int IS NULL
                       OR (contents.score, contents.id) < ($2::int, $3::bigint)
@@ -900,6 +942,7 @@ async fn fetch_children_page(
                 cursor_score,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -926,6 +969,7 @@ async fn fetch_descendants(
     child_ids: &[i64],
     sort: CommentSort,
     max_depth: i32,
+    viewer_communities: &[i64],
 ) -> Result<Vec<CommentRow>> {
     if child_ids.is_empty() {
         return Ok(Vec::new());
@@ -966,10 +1010,12 @@ async fn fetch_descendants(
                       )
                   AND contents.id <> ALL($1::bigint[])
                   AND contents.depth <= $2
+                  AND content_visible_to(contents.community_id, $3::bigint[])
                 ORDER BY contents.created_at DESC, contents.id DESC
                 "#,
                 child_ids,
                 max_depth,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -1008,10 +1054,12 @@ async fn fetch_descendants(
                       )
                   AND contents.id <> ALL($1::bigint[])
                   AND contents.depth <= $2
+                  AND content_visible_to(contents.community_id, $3::bigint[])
                 ORDER BY contents.score DESC, contents.id DESC
                 "#,
                 child_ids,
                 max_depth,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -1071,7 +1119,13 @@ fn build_forest(roots: Vec<CommentRow>, descendants: Vec<CommentRow>) -> Vec<Com
 /// Yorum yoksa [`Error::NotFound`]; silinmişse [`Error::Gone`]; çağıran
 /// sahibi değilse [`Error::Forbidden`]; gövde doğrulamadan geçmezse
 /// [`Error::Validation`]; veritabanı hatası [`Error::Database`].
-pub async fn update_comment(pool: &PgPool, id: i64, actor_id: i64, body: &str) -> Result<Content> {
+pub async fn update_comment(
+    pool: &PgPool,
+    id: i64,
+    actor_id: i64,
+    body: &str,
+    viewer_communities: &[i64],
+) -> Result<Content> {
     let body = text::validate_body(body).map_err(|e| Error::Validation(e.to_string()))?;
     if body.is_empty() {
         return Err(Error::Validation("comment body cannot be empty".to_owned()));
@@ -1084,9 +1138,11 @@ pub async fn update_comment(pool: &PgPool, id: i64, actor_id: i64, body: &str) -
         SELECT actor_id, body, deleted_at
         FROM contents
         WHERE id = $1 AND content_type = 'comment'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         FOR UPDATE
         "#,
         id,
+        viewer_communities,
     )
     .fetch_optional(&mut *tx)
     .await?
@@ -1120,7 +1176,7 @@ pub async fn update_comment(pool: &PgPool, id: i64, actor_id: i64, body: &str) -
 
     tx.commit().await?;
 
-    get_comment(pool, id).await
+    get_comment(pool, id, viewer_communities).await
 }
 
 /// `DELETE /comments/{id}`: sahibi **veya** moderatör/admin. Soft-delete.
@@ -1197,6 +1253,7 @@ pub async fn list_comments_by_actor(
     username: &str,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Content>> {
     let actor_id = resolve_live_actor_id(pool, username).await?;
     let (cursor_created_at, cursor_id) = split_new_cursor_checked(cursor)?;
@@ -1232,6 +1289,7 @@ pub async fn list_comments_by_actor(
         WHERE contents.actor_id = $1
           AND contents.content_type = 'comment'::content_type
           AND contents.deleted_at IS NULL
+          AND content_visible_to(contents.community_id, $5::bigint[])
           AND (
               $2::timestamptz IS NULL
               OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
@@ -1243,6 +1301,7 @@ pub async fn list_comments_by_actor(
         cursor_created_at,
         cursor_id,
         limit + 1,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;

@@ -289,6 +289,7 @@ pub async fn list_inbox(
     unread_only: bool,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Notification>> {
     let (cursor_created_at, cursor_id) = match cursor {
         None => (None, None),
@@ -299,6 +300,11 @@ pub async fn list_inbox(
         Some(_) => return Err(Error::InvalidCursor),
     };
 
+    // Bir bildirim `target_type = 'content'` ise yalnızca **işaret ettiği
+    // içerik görünürse** listelenir (Faz 4A): özel bir topluluktan çıkınca o
+    // topluluktaki bir yoruma gelen bildirim gelen kutusunda kalmamalı.
+    // `actor` hedefli bildirimler (yeni takipçi) ve ileride topluluk hedefli
+    // olanlar bu kapıya takılmaz — hedefleri bir topluluk içeriği değil.
     let rows = sqlx::query_as!(
         NotificationRow,
         r#"
@@ -318,8 +324,12 @@ pub async fn list_inbox(
             n.read_at
         FROM notifications AS n
         LEFT JOIN actors ON actors.id = n.actor_id
+        LEFT JOIN contents AS c
+               ON n.target_type = 'content' AND c.id = n.target_id
         WHERE n.recipient_actor_id = $1
           AND (NOT $2::boolean OR n.read_at IS NULL)
+          AND (n.target_type <> 'content'
+               OR content_visible_to(c.community_id, $6::bigint[]))
           AND (
               $3::timestamptz IS NULL
               OR (n.created_at, n.id) < ($3::timestamptz, $4::bigint)
@@ -332,6 +342,7 @@ pub async fn list_inbox(
         cursor_created_at,
         cursor_id,
         limit + 1,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;
@@ -363,16 +374,26 @@ pub async fn list_inbox(
 /// sayım, tabloyu değil yalnızca okunmamış satırları tarar (bkz. migration
 /// yorumu).
 ///
+/// **Aynı görünürlük filtresi** ([`list_inbox`] ile birebir): sayaç,
+/// listeden düşürülen bir bildirimi saymaya devam ederse `unread_count`
+/// gizli içeriğin varlığını sızdırırdı (Faz 4A).
+///
 /// # Errors
 /// Veritabanı hatası [`Error::Database`].
-pub async fn count_unread(pool: &PgPool, actor_id: i64) -> Result<i64> {
+pub async fn count_unread(pool: &PgPool, actor_id: i64, viewer_communities: &[i64]) -> Result<i64> {
     let count = sqlx::query_scalar!(
         r#"
         SELECT COUNT(*) AS "count!"
-        FROM notifications
-        WHERE recipient_actor_id = $1 AND read_at IS NULL
+        FROM notifications AS n
+        LEFT JOIN contents AS c
+               ON n.target_type = 'content' AND c.id = n.target_id
+        WHERE n.recipient_actor_id = $1
+          AND n.read_at IS NULL
+          AND (n.target_type <> 'content'
+               OR content_visible_to(c.community_id, $2::bigint[]))
         "#,
         actor_id,
+        viewer_communities,
     )
     .fetch_one(pool)
     .await?;

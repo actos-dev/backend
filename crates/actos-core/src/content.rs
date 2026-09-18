@@ -427,11 +427,18 @@ pub async fn create_post(
 /// dönüyoruz, HTTP katmanının maskelemeyi unutmasına bağlı bir savunma
 /// değil, veri hiç oraya ulaşmıyor.
 ///
+/// **Görünürlük sırası (Faz 4A):** varlık → görünürlük → silinmişlik.
+/// Görünmeyen bir özel post [`Error::NotFound`] döner, `410` değil:
+/// "silinmiş" demek postun var olduğunu söylerdi, oysa okuyucu onu hiç
+/// görmemeli (COMMUNITY_PLAN.md §9). `content_visible_to` filtresi bu yüzden
+/// silinmişlik kontrolünden **önce**, sorgunun kendisinde.
+///
 /// # Errors
 /// Post yoksa (ya da `id` bir yoruma aitse — `content_type = 'post'`
-/// filtresi bunu da `NotFound` sayar) [`Error::NotFound`]; silinmişse
-/// [`Error::Gone`]; veritabanı hatası [`Error::Database`].
-pub async fn get_post(pool: &PgPool, id: i64) -> Result<Content> {
+/// filtresi bunu da `NotFound` sayar) ya da okuyucuya görünmüyorsa
+/// [`Error::NotFound`]; silinmişse [`Error::Gone`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn get_post(pool: &PgPool, id: i64, viewer_communities: &[i64]) -> Result<Content> {
     let row = sqlx::query_as!(
         ContentRow,
         r#"
@@ -468,9 +475,11 @@ pub async fn get_post(pool: &PgPool, id: i64) -> Result<Content> {
         LEFT JOIN content_tags ON content_tags.content_id = contents.id
         LEFT JOIN tags ON tags.id = content_tags.tag_id
         WHERE contents.id = $1 AND contents.content_type = 'post'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         GROUP BY contents.id, actors.id, communities.id
         "#,
         id,
+        viewer_communities,
     )
     .fetch_optional(pool)
     .await?;
@@ -517,6 +526,7 @@ pub async fn update_post(
     actor_id: i64,
     title: Option<String>,
     body: Option<String>,
+    viewer_communities: &[i64],
 ) -> Result<Content> {
     if title.is_none() && body.is_none() {
         return Err(Error::Validation(
@@ -543,9 +553,11 @@ pub async fn update_post(
         SELECT actor_id, title, body, deleted_at
         FROM contents
         WHERE id = $1 AND content_type = 'post'::content_type
+          AND content_visible_to(contents.community_id, $2::bigint[])
         FOR UPDATE
         "#,
         id,
+        viewer_communities,
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -586,7 +598,7 @@ pub async fn update_post(
 
     tx.commit().await?;
 
-    get_post(pool, id).await
+    get_post(pool, id, viewer_communities).await
 }
 
 // --- Post silme --------------------------------------------------------
@@ -680,6 +692,7 @@ pub async fn list_posts_by_actor(
     username: &str,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Content>> {
     let actor_id = resolve_live_actor_id(pool, username).await?;
     let (cursor_created_at, cursor_id) = split_new_cursor(cursor);
@@ -705,6 +718,7 @@ pub async fn list_posts_by_actor(
             WHERE contents.actor_id = $1
               AND contents.content_type = 'post'::content_type
               AND contents.deleted_at IS NULL
+              AND content_visible_to(contents.community_id, $5::bigint[])
               AND (
                   $2::timestamptz IS NULL
                   OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
@@ -752,6 +766,7 @@ pub async fn list_posts_by_actor(
         cursor_created_at,
         cursor_id,
         limit + 1,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;
@@ -900,6 +915,7 @@ pub async fn list_posts_by_tag(
     sort: PostSort,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Content>> {
     let name = text::validate_tag_name(tag_name).map_err(|_| Error::NotFound("tag"))?;
 
@@ -928,6 +944,7 @@ pub async fn list_posts_by_tag(
                     WHERE filtre.tag_id = $1
                       AND contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $5::bigint[])
                       AND (
                           $2::timestamptz IS NULL
                           OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
@@ -975,6 +992,7 @@ pub async fn list_posts_by_tag(
                 cursor_created_at,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -990,6 +1008,7 @@ pub async fn list_posts_by_tag(
                     WHERE filtre.tag_id = $1
                       AND contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $5::bigint[])
                       AND (
                           $2::int IS NULL
                           OR (contents.score, contents.id) < ($2::int, $3::bigint)
@@ -1037,6 +1056,7 @@ pub async fn list_posts_by_tag(
                 cursor_score,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -1052,6 +1072,7 @@ pub async fn list_posts_by_tag(
                     WHERE filtre.tag_id = $1
                       AND contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $5::bigint[])
                       AND (
                           $2::double precision IS NULL
                           OR (contents.hot_score, contents.id) < ($2::double precision, $3::bigint)
@@ -1099,6 +1120,7 @@ pub async fn list_posts_by_tag(
                 cursor_hot,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?

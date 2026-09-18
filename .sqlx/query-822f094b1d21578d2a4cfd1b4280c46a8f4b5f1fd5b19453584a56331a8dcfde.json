@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS (\n            SELECT 1 FROM permissions\n            WHERE actor_id = $1\n              AND scope = 'global'\n              AND permission IN ('content.delete', 'report.view', 'report.resolve')\n        ) AS \"exists!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "822f094b1d21578d2a4cfd1b4280c46a8f4b5f1fd5b19453584a56331a8dcfde"
+}

@@ -33,7 +33,7 @@ use serde_json::Value;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-    auth::CurrentActor,
+    auth::{CurrentActor, OptionalActor},
     error::ApiError,
     fields,
     openapi::{Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
@@ -229,6 +229,11 @@ async fn create_comment(
         .transpose()
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
     let content = core_comment::create_comment(
         state.db(),
         state.storage(),
@@ -240,6 +245,7 @@ async fn create_comment(
         &files,
         state.config().server.max_upload_bytes,
         state.config().storage_quota.bytes,
+        &viewer_communities,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
@@ -326,6 +332,7 @@ async fn create_comment(
     )
 )]
 async fn list_comments(
+    current: OptionalActor,
     State(state): State<AppState>,
     Path(post_id): Path<String>,
     Query(query): Query<CommentTreeQuery>,
@@ -361,10 +368,23 @@ async fn list_comments(
         &headers,
     )?;
 
-    let page =
-        core_comment::list_comment_tree(state.db(), post_id, parent, sort, depth, cursor, limit)
-            .await
-            .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    let viewer_communities = state
+        .viewer_communities(current.0.as_ref().map(|actor| actor.actor.id))
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let page = core_comment::list_comment_tree(
+        state.db(),
+        post_id,
+        parent,
+        sort,
+        depth,
+        cursor,
+        limit,
+        &viewer_communities,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let comments = page
         .items
@@ -405,6 +425,7 @@ async fn list_comments(
     )
 )]
 async fn get_comment(
+    current: OptionalActor,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -412,11 +433,18 @@ async fn get_comment(
     let comment_id = decode_content_id(&id, state.id_codec(), "comment")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let comment = core_comment::get_comment(state.db(), comment_id)
+    // Tekil okuma "üye yüzeyi"dir (COMMUNITY_PLAN.md §9); küme bir kez
+    // hesaplanıp hem yorum hem ata zinciri için kullanılıyor.
+    let viewer_communities = state
+        .viewer_communities(current.0.as_ref().map(|actor| actor.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let ancestors = core_comment::ancestors_of(state.db(), comment_id)
+    let comment = core_comment::get_comment(state.db(), comment_id, &viewer_communities)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let ancestors = core_comment::ancestors_of(state.db(), comment_id, &viewer_communities)
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
@@ -471,9 +499,20 @@ async fn update_comment(
     let comment_id = decode_content_id(&id, state.id_codec(), "comment")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let content = core_comment::update_comment(state.db(), comment_id, current.actor.id, &req.body)
+    let viewer_communities = state
+        .viewer_communities(Some(current.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let content = core_comment::update_comment(
+        state.db(),
+        comment_id,
+        current.actor.id,
+        &req.body,
+        &viewer_communities,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     let summary = content_summary(&content, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
@@ -558,7 +597,7 @@ async fn list_actor_comments(
     let limit = parse_limit(query.limit, &headers)?;
     let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
 
-    let page = core_comment::list_comments_by_actor(state.db(), &username, cursor, limit)
+    let page = core_comment::list_comments_by_actor(state.db(), &username, cursor, limit, &[])
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 

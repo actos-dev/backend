@@ -90,6 +90,10 @@ async fn feed_response(
         actor_type,
         cursor,
         limit,
+        // Her iki feed de "başkasının etkinliğini listeleyen public yüzey"dir
+        // (COMMUNITY_PLAN.md §9): izleyici üye olsa bile özel içerik
+        // gösterilmez. Bu yüzden okuyucunun toplulukları hiç sorgulanmıyor.
+        &[],
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(headers))?;

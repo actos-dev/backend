@@ -81,6 +81,7 @@ async fn seed_comment(pool: &PgPool, author: &auth::ActorRecord, post_id: i64, b
         &[],
         8 * 1024 * 1024,
         i64::MAX,
+        &[],
     )
     .await
     .expect("yorum oluşturulabilmeli")
@@ -100,7 +101,7 @@ async fn turkce_aksan_duyarsizligi_iki_yonde(pool: PgPool) {
     let aksansiz = seed_post(&pool, &author, "Yeni surucu haberi", "govde iki").await;
 
     // Aksansız sorgu ("surucu") aksanlı başlığı ("sürücü") bulmalı.
-    let sayfa = search::search_content(&pool, "surucu", ContentType::Post, None, 10)
+    let sayfa = search::search_content(&pool, "surucu", ContentType::Post, None, 10, &[])
         .await
         .expect("arama çalışmalı");
     let ids: Vec<i64> = sayfa.items.iter().map(|c| c.id).collect();
@@ -110,7 +111,7 @@ async fn turkce_aksan_duyarsizligi_iki_yonde(pool: PgPool) {
     );
 
     // Aksanlı sorgu ("sürücü") aksansız başlığı ("surucu") bulmalı.
-    let sayfa = search::search_content(&pool, "sürücü", ContentType::Post, None, 10)
+    let sayfa = search::search_content(&pool, "sürücü", ContentType::Post, None, 10, &[])
         .await
         .expect("arama çalışmalı");
     let ids: Vec<i64> = sayfa.items.iter().map(|c| c.id).collect();
@@ -131,7 +132,7 @@ async fn title_eslesmesi_body_eslesmesinden_yuksek_siralaniyor(pool: PgPool) {
     let baslikta = seed_post(&pool, &author, "widget haberleri", "alakasız gövde").await;
     let govdede = seed_post(&pool, &author, "alakasız başlık", "burada widget geçiyor").await;
 
-    let sayfa = search::search_content(&pool, "widget", ContentType::Post, None, 10)
+    let sayfa = search::search_content(&pool, "widget", ContentType::Post, None, 10, &[])
         .await
         .expect("arama çalışmalı");
 
@@ -189,7 +190,7 @@ async fn skor_farki_yakin_alakada_siralamayi_degistiriyor(pool: PgPool) {
         .await
         .expect("skor güncellenebilmeli");
 
-    let sayfa = search::search_content(&pool, "karışım", ContentType::Post, None, 10)
+    let sayfa = search::search_content(&pool, "karışım", ContentType::Post, None, 10, &[])
         .await
         .expect("arama çalışmalı");
 
@@ -223,7 +224,7 @@ async fn tazelik_farki_yakin_alakada_siralamayi_degistiriyor(pool: PgPool) {
     .await
     .expect("created_at güncellenebilmeli");
 
-    let sayfa = search::search_content(&pool, "tazelik", ContentType::Post, None, 10)
+    let sayfa = search::search_content(&pool, "tazelik", ContentType::Post, None, 10, &[])
         .await
         .expect("arama çalışmalı");
 
@@ -251,15 +252,16 @@ async fn type_filtresi_dogru_calisiyor(pool: PgPool) {
     let comment_id = seed_comment(&pool, &author, baglantili_post, "filtretest yorumu").await;
     let _actor = seed_actor(&pool, "filtretest_kisi").await;
 
-    let post_sonuc = search::search_content(&pool, "filtretest", ContentType::Post, None, 10)
+    let post_sonuc = search::search_content(&pool, "filtretest", ContentType::Post, None, 10, &[])
         .await
         .expect("post araması çalışmalı");
     let post_ids: Vec<i64> = post_sonuc.items.iter().map(|c| c.id).collect();
     assert_eq!(post_ids, vec![post_id], "{post_ids:?}");
 
-    let comment_sonuc = search::search_content(&pool, "filtretest", ContentType::Comment, None, 10)
-        .await
-        .expect("yorum araması çalışmalı");
+    let comment_sonuc =
+        search::search_content(&pool, "filtretest", ContentType::Comment, None, 10, &[])
+            .await
+            .expect("yorum araması çalışmalı");
     let comment_ids: Vec<i64> = comment_sonuc.items.iter().map(|c| c.id).collect();
     assert_eq!(comment_ids, vec![comment_id], "{comment_ids:?}");
 
@@ -282,7 +284,7 @@ async fn silinmis_icerik_aramada_cikmiyor(pool: PgPool) {
         .await
         .expect("post silinebilmeli");
 
-    let sayfa = search::search_content(&pool, "silinecek", ContentType::Post, None, 10)
+    let sayfa = search::search_content(&pool, "silinecek", ContentType::Post, None, 10, &[])
         .await
         .expect("arama çalışmalı");
     assert!(
@@ -327,7 +329,7 @@ async fn cursorlu_sayfalama_tekrar_atlama_yok(pool: PgPool) {
     let mut gorulen: Vec<i64> = Vec::new();
     let mut cursor: Option<Cursor> = None;
     loop {
-        let sayfa = search::search_content(&pool, "sayfalama", ContentType::Post, cursor, 1)
+        let sayfa = search::search_content(&pool, "sayfalama", ContentType::Post, cursor, 1, &[])
             .await
             .expect("arama çalışmalı");
         assert_eq!(sayfa.items.len(), 1, "her sayfa tam olarak 1 öğe taşımalı");
@@ -356,12 +358,12 @@ async fn bos_ve_anlamsiz_q_bos_liste_donuyor(pool: PgPool) {
     let author = seed_actor(&pool, "bosaramatest").await;
     seed_post(&pool, &author, "herhangi bir başlık", "herhangi bir gövde").await;
 
-    let bos = search::search_content(&pool, "", ContentType::Post, None, 10)
+    let bos = search::search_content(&pool, "", ContentType::Post, None, 10, &[])
         .await
         .expect("boş sorgu hata değil boş liste dönmeli");
     assert!(bos.items.is_empty(), "{:?}", bos.items);
 
-    let sadece_bosluk = search::search_content(&pool, "   ", ContentType::Post, None, 10)
+    let sadece_bosluk = search::search_content(&pool, "   ", ContentType::Post, None, 10, &[])
         .await
         .expect("yalnızca boşluktan oluşan sorgu hata değil boş liste dönmeli");
     assert!(sadece_bosluk.items.is_empty(), "{:?}", sadece_bosluk.items);

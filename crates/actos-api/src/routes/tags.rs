@@ -102,7 +102,7 @@ async fn list_tags(
         &headers,
     )?;
 
-    let page = core_tag::list_popular(state.db(), cursor, limit)
+    let page = core_tag::list_popular(state.db(), cursor, limit, &[])
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
@@ -149,7 +149,7 @@ async fn search_tags(
         return Ok(Json(TagSearchResponse { tags: Vec::new() }));
     };
 
-    let matches = core_tag::search(state.db(), &q)
+    let matches = core_tag::search(state.db(), &q, &[])
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
@@ -208,7 +208,7 @@ async fn list_tag_posts(
         &headers,
     )?;
 
-    let page = core_content::list_posts_by_tag(state.db(), &name, sort, cursor, limit)
+    let page = core_content::list_posts_by_tag(state.db(), &name, sort, cursor, limit, &[])
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 

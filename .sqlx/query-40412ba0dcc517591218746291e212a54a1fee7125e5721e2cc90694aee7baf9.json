@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT contents.content_type::text AS \"content_type!\",\n               contents.deleted_at,\n               contents.community_id,\n               communities.name::text AS \"community_name?\"\n        FROM contents\n        LEFT JOIN communities ON communities.id = contents.community_id\n        WHERE contents.id = $1\n          AND content_visible_to(contents.community_id, $2::bigint[])\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content_type!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "deleted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "deleted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "community_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "contents",
+            "name": "community_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "community_name?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "40412ba0dcc517591218746291e212a54a1fee7125e5721e2cc90694aee7baf9"
+}

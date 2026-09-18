@@ -106,7 +106,7 @@ async fn oy_verme_sayaclari_guncelliyor(pool: PgPool) {
     let oylayan = seed_actor(&pool, "oy_veren").await;
     let post = seed_post(&pool, &yazar).await;
 
-    let sonuc = interaction::set_vote(&pool, oylayan.id, post, 1)
+    let sonuc = interaction::set_vote(&pool, oylayan.id, post, 1, &[])
         .await
         .expect("oy verilebilmeli");
 
@@ -123,7 +123,7 @@ async fn ayni_oy_tekrar_gonderilince_sayac_degismiyor(pool: PgPool) {
     let post = seed_post(&pool, &yazar).await;
 
     for _ in 0..3 {
-        interaction::set_vote(&pool, oylayan.id, post, 1)
+        interaction::set_vote(&pool, oylayan.id, post, 1, &[])
             .await
             .expect("oy verilebilmeli");
     }
@@ -139,12 +139,12 @@ async fn oy_yonu_degistirilince_iki_sayac_da_duzeliyor(pool: PgPool) {
     let oylayan = seed_actor(&pool, "yon_oylayan").await;
     let post = seed_post(&pool, &yazar).await;
 
-    interaction::set_vote(&pool, oylayan.id, post, 1)
+    interaction::set_vote(&pool, oylayan.id, post, 1, &[])
         .await
         .expect("yukarı oy");
     assert_eq!(sayaclar(&pool, post).await, (1, 1, 0));
 
-    interaction::set_vote(&pool, oylayan.id, post, -1)
+    interaction::set_vote(&pool, oylayan.id, post, -1, &[])
         .await
         .expect("aşağı oy");
     assert_eq!(sayaclar(&pool, post).await, (-1, 0, 1));
@@ -156,10 +156,10 @@ async fn oy_geri_cekilince_satir_siliniyor(pool: PgPool) {
     let oylayan = seed_actor(&pool, "geri_oylayan").await;
     let post = seed_post(&pool, &yazar).await;
 
-    interaction::set_vote(&pool, oylayan.id, post, 1)
+    interaction::set_vote(&pool, oylayan.id, post, 1, &[])
         .await
         .expect("oy");
-    interaction::set_vote(&pool, oylayan.id, post, 0)
+    interaction::set_vote(&pool, oylayan.id, post, 0, &[])
         .await
         .expect("geri çekme");
 
@@ -175,7 +175,7 @@ async fn oy_geri_cekilince_satir_siliniyor(pool: PgPool) {
     assert_eq!(kalan, 0, "geri çekilen oyun satırı silinmeli");
 
     // Zaten oy yokken geri çekmek de hatasız geçmeli (idempotent).
-    interaction::set_vote(&pool, oylayan.id, post, 0)
+    interaction::set_vote(&pool, oylayan.id, post, 0, &[])
         .await
         .expect("oysuz geri çekme de başarılı olmalı");
 }
@@ -185,7 +185,7 @@ async fn kendi_icerigine_oy_vermek_engelleniyor(pool: PgPool) {
     let yazar = seed_actor(&pool, "kendi_oy").await;
     let post = seed_post(&pool, &yazar).await;
 
-    let hata = interaction::set_vote(&pool, yazar.id, post, 1)
+    let hata = interaction::set_vote(&pool, yazar.id, post, 1, &[])
         .await
         .expect_err("kendi içeriğine oy engellenmeli");
 
@@ -201,7 +201,7 @@ async fn gecersiz_oy_degeri_reddediliyor(pool: PgPool) {
     let oylayan = seed_actor(&pool, "gecersiz_oylayan").await;
     let post = seed_post(&pool, &yazar).await;
 
-    let hata = interaction::set_vote(&pool, oylayan.id, post, 5)
+    let hata = interaction::set_vote(&pool, oylayan.id, post, 5, &[])
         .await
         .expect_err("5 geçerli bir oy değeri değil");
 
@@ -225,7 +225,7 @@ async fn silinmis_icerige_oy_410(pool: PgPool) {
     .await
     .expect("silinebilmeli");
 
-    let hata = interaction::set_vote(&pool, oylayan.id, post, 1)
+    let hata = interaction::set_vote(&pool, oylayan.id, post, 1, &[])
         .await
         .expect_err("silinmiş içeriğe oy verilememeli");
 
@@ -252,7 +252,7 @@ async fn eszamanli_yuz_oy_sayaci_bozmuyor(pool: PgPool) {
     for actor_id in oylayanlar {
         let pool = pool.clone();
         gorevler.push(tokio::spawn(async move {
-            interaction::set_vote(&pool, actor_id, post, 1).await
+            interaction::set_vote(&pool, actor_id, post, 1, &[]).await
         }));
     }
 
@@ -287,14 +287,14 @@ async fn toplu_oy_sorgusu_yalnizca_oy_verilenleri_donuyor(pool: PgPool) {
     let b = seed_post(&pool, &yazar).await;
     let c = seed_post(&pool, &yazar).await;
 
-    interaction::set_vote(&pool, oylayan.id, a, 1)
+    interaction::set_vote(&pool, oylayan.id, a, 1, &[])
         .await
         .expect("oy");
-    interaction::set_vote(&pool, oylayan.id, b, -1)
+    interaction::set_vote(&pool, oylayan.id, b, -1, &[])
         .await
         .expect("oy");
 
-    let mut oylar = interaction::votes_for(&pool, oylayan.id, &[a, b, c])
+    let mut oylar = interaction::votes_for(&pool, oylayan.id, &[a, b, c], &[])
         .await
         .expect("toplu sorgu");
     oylar.sort_unstable();
@@ -325,12 +325,12 @@ async fn oy_degistirip_sonra_geri_cekmek_skoru_tam_sifirliyor(pool: PgPool) {
     let oylayan = seed_actor(&pool, "reversal_oylayan").await;
     let post = seed_post(&pool, &yazar).await;
 
-    let yukari = interaction::set_vote(&pool, oylayan.id, post, 1)
+    let yukari = interaction::set_vote(&pool, oylayan.id, post, 1, &[])
         .await
         .expect("yukarı oy verilebilmeli");
     assert_eq!(yukari.score, 1);
 
-    let asagi = interaction::set_vote(&pool, oylayan.id, post, -1)
+    let asagi = interaction::set_vote(&pool, oylayan.id, post, -1, &[])
         .await
         .expect("yön değiştirilebilmeli");
     assert_eq!(
@@ -338,7 +338,7 @@ async fn oy_degistirip_sonra_geri_cekmek_skoru_tam_sifirliyor(pool: PgPool) {
         "yön değişimi skoru tam iki birim kaydırmalı"
     );
 
-    let geri_cekilen = interaction::set_vote(&pool, oylayan.id, post, 0)
+    let geri_cekilen = interaction::set_vote(&pool, oylayan.id, post, 0, &[])
         .await
         .expect("geri çekilebilmeli");
     assert_eq!(
@@ -443,7 +443,7 @@ async fn kaydetme_idempotent_ve_kendi_icerigi_serbest(pool: PgPool) {
 
     // Kendi içeriğini kaydetmek serbest (oy vermenin aksine).
     for _ in 0..3 {
-        interaction::save(&pool, a.id, post)
+        interaction::save(&pool, a.id, post, &[])
             .await
             .expect("kaydedilebilmeli");
     }
@@ -476,7 +476,7 @@ async fn kayitlar_en_son_kaydedilen_once_donuyor(pool: PgPool) {
     // Sıralama kaydın zamanına göre: önce YENİ post kaydediliyor, sonra
     // ESKİ post. Beklenen sıra "eski post, yeni post" — yani içeriğin
     // yaşına göre değil kaydın yaşına göre.
-    interaction::save(&pool, kaydeden.id, yeni)
+    interaction::save(&pool, kaydeden.id, yeni, &[])
         .await
         .expect("kayıt");
     sqlx::query!(
@@ -487,11 +487,11 @@ async fn kayitlar_en_son_kaydedilen_once_donuyor(pool: PgPool) {
     .await
     .expect("kayıt zamanı geriye alınabilmeli");
 
-    interaction::save(&pool, kaydeden.id, eski)
+    interaction::save(&pool, kaydeden.id, eski, &[])
         .await
         .expect("kayıt");
 
-    let sayfa = interaction::list_saves(&pool, kaydeden.id, None, 10)
+    let sayfa = interaction::list_saves(&pool, kaydeden.id, None, 10, &[])
         .await
         .expect("kayıtlar listelenebilmeli");
 
@@ -511,10 +511,10 @@ async fn silinmis_icerik_kayit_listesinde_gorunmuyor(pool: PgPool) {
     let kalan = seed_post(&pool, &yazar).await;
     let silinen = seed_post(&pool, &yazar).await;
 
-    interaction::save(&pool, kaydeden.id, kalan)
+    interaction::save(&pool, kaydeden.id, kalan, &[])
         .await
         .expect("kayıt");
-    interaction::save(&pool, kaydeden.id, silinen)
+    interaction::save(&pool, kaydeden.id, silinen, &[])
         .await
         .expect("kayıt");
 
@@ -526,7 +526,7 @@ async fn silinmis_icerik_kayit_listesinde_gorunmuyor(pool: PgPool) {
     .await
     .expect("silinebilmeli");
 
-    let sayfa = interaction::list_saves(&pool, kaydeden.id, None, 10)
+    let sayfa = interaction::list_saves(&pool, kaydeden.id, None, 10, &[])
         .await
         .expect("liste");
 
@@ -565,7 +565,7 @@ async fn oy_hot_scoreu_aninda_guncelliyor(pool: PgPool) {
         "yeni post şema varsayılanıyla başlar: {ilk}"
     );
 
-    interaction::set_vote(&pool, oylayan.id, post, 1)
+    interaction::set_vote(&pool, oylayan.id, post, 1, &[])
         .await
         .expect("oy");
 

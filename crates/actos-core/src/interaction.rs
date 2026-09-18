@@ -96,6 +96,7 @@ pub async fn set_vote(
     actor_id: i64,
     content_id: i64,
     value: VoteValue,
+    viewer_communities: &[i64],
 ) -> Result<VoteOutcome> {
     if !matches!(value, -1..=1) {
         return Err(Error::Validation(
@@ -107,14 +108,19 @@ pub async fn set_vote(
 
     // İçerik satırı burada kilitleniyor: bundan sonraki okuma-hesaplama-yazma
     // dizisi aynı içerik için serileşiyor (bkz. modül dokümantasyonu).
+    //
+    // Görünmeyen özel içerik `404` (Faz 4A): okuyucunun göremediği bir
+    // topluluktaki posta oy vermek onun var olduğunu doğrulamaz.
     let content = sqlx::query!(
         r#"
         SELECT actor_id, deleted_at
         FROM contents
         WHERE id = $1
+          AND content_visible_to(contents.community_id, $2::bigint[])
         FOR UPDATE
         "#,
         content_id,
+        viewer_communities,
     )
     .fetch_optional(&mut *tx)
     .await?
@@ -217,19 +223,27 @@ pub async fn votes_for(
     pool: &PgPool,
     actor_id: i64,
     content_ids: &[i64],
+    viewer_communities: &[i64],
 ) -> Result<Vec<(i64, VoteValue)>> {
     if content_ids.is_empty() {
         return Ok(Vec::new());
     }
 
+    // İçerikle JOIN şart (Faz 4A): görünmeyen özel içerik için oy **değeri**
+    // dönmez. Aksi hâlde bu uç, artık göremediği bir içerikte kendi oyunu
+    // hatırlatarak o içeriğin var olduğunu doğrulardı.
     let rows = sqlx::query!(
         r#"
-        SELECT content_id, value
+        SELECT votes.content_id, votes.value
         FROM votes
-        WHERE actor_id = $1 AND content_id = ANY($2::bigint[])
+        JOIN contents ON contents.id = votes.content_id
+        WHERE votes.actor_id = $1
+          AND votes.content_id = ANY($2::bigint[])
+          AND content_visible_to(contents.community_id, $3::bigint[])
         "#,
         actor_id,
         content_ids,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;
@@ -345,10 +359,18 @@ pub async fn unfollow(pool: &PgPool, follower_id: i64, username: &str) -> Result
 /// # Errors
 /// İçerik yoksa [`Error::NotFound`]; silinmişse [`Error::Gone`];
 /// veritabanı hatası [`Error::Database`].
-pub async fn save(pool: &PgPool, actor_id: i64, content_id: i64) -> Result<()> {
+pub async fn save(
+    pool: &PgPool,
+    actor_id: i64,
+    content_id: i64,
+    viewer_communities: &[i64],
+) -> Result<()> {
     let deleted_at: Option<DateTime<Utc>> = sqlx::query_scalar!(
-        r#"SELECT deleted_at FROM contents WHERE id = $1"#,
-        content_id
+        r#"SELECT deleted_at FROM contents
+           WHERE id = $1
+             AND content_visible_to(contents.community_id, $2::bigint[])"#,
+        content_id,
+        viewer_communities,
     )
     .fetch_optional(pool)
     .await?
@@ -418,6 +440,7 @@ pub async fn list_saves(
     actor_id: i64,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Content>> {
     // Cursor'daki zaman `saves.created_at`; tür olarak yine `New`.
     let (cursor_saved_at, cursor_id) = match cursor {
@@ -498,6 +521,7 @@ pub async fn list_saves(
         LEFT JOIN tags ON tags.id = content_tags.tag_id
         WHERE saves.actor_id = $1
           AND contents.deleted_at IS NULL
+          AND content_visible_to(contents.community_id, $5::bigint[])
           AND (
               $2::timestamptz IS NULL
               OR (saves.created_at, contents.id) < ($2::timestamptz, $3::bigint)
@@ -510,6 +534,7 @@ pub async fn list_saves(
         cursor_saved_at,
         cursor_id,
         limit + 1,
+        viewer_communities,
     )
     .fetch_all(pool)
     .await?;

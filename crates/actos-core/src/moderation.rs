@@ -205,19 +205,23 @@ pub async fn log_action(
 /// sıralamayı etkileyen bir sinyal yok.
 ///
 /// # Errors
-/// Hedef yoksa [`Error::NotFound`]; silinmişse [`Error::Gone`]; hedef türü
-/// içerikle uyuşmuyorsa ya da gerekçe geçersizse [`Error::Validation`];
-/// aynı şikayet tekrarlanırsa [`Error::Conflict`]; veritabanı hatası
-/// [`Error::Database`].
+/// Hedef yoksa ya da okuyucuya görünmüyorsa [`Error::NotFound`]; silinmişse
+/// [`Error::Gone`]; hedef türü içerikle uyuşmuyorsa ya da gerekçe geçersizse
+/// [`Error::Validation`]; aynı şikayet tekrarlanırsa [`Error::Conflict`];
+/// veritabanı hatası [`Error::Database`].
 pub async fn create_report(
     pool: &PgPool,
     reporter_actor_id: i64,
     target_type: ReportTargetType,
     target_id: i64,
     reason: &str,
+    viewer_communities: &[i64],
 ) -> Result<Report> {
     let reason = dogrula_gerekce(reason, "reason")?;
 
+    // Görünmeyen hedef `404` (Faz 4A): okuyucunun göremediği özel bir
+    // topluluktaki içeriği şikayet etmek, ona "burada böyle bir içerik var"
+    // bilgisini verirdi.
     let hedef = sqlx::query!(
         r#"
         SELECT contents.content_type::text AS "content_type!",
@@ -227,8 +231,10 @@ pub async fn create_report(
         FROM contents
         LEFT JOIN communities ON communities.id = contents.community_id
         WHERE contents.id = $1
+          AND content_visible_to(contents.community_id, $2::bigint[])
         "#,
         target_id,
+        viewer_communities,
     )
     .fetch_optional(pool)
     .await?

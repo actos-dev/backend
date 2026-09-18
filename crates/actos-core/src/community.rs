@@ -813,14 +813,27 @@ impl From<MemberRow> for MemberEntry {
 /// DEĞİL, artan hâli kullanılıyor — bkz. modül dokümanı "Sayfalama".
 ///
 /// # Errors
-/// Topluluk yoksa [`Error::NotFound`]; veritabanı hatası [`Error::Database`].
+/// Topluluk yoksa [`Error::NotFound`]; topluluk private ve okuyucu
+/// göremiyorsa [`Error::Forbidden`]; veritabanı hatası [`Error::Database`].
 pub async fn list_members(
     pool: &PgPool,
     name: &str,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<MemberEntry>> {
-    let community_id = resolve_community_id_in(pool, name).await?;
+    let community = lookup_community(pool, name).await?;
+
+    // Özel topluluğun üye listesi de public yüzey değil (Faz 4A): kapak
+    // sayfası üye listesi göstermez (§2), dolayısıyla göremeyen okuyucuya
+    // burada da `403`. Görebilen üye/moderatör listeyi alır.
+    if community.visibility == CommunityVisibility::Private
+        && !viewer_communities.contains(&community.id)
+    {
+        return Err(Error::Forbidden);
+    }
+
+    let community_id = community.id;
     let (cursor_joined_at, cursor_id) = split_new_cursor(cursor);
 
     let rows = sqlx::query_as!(
@@ -997,8 +1010,14 @@ impl From<CommunityPostRow> for Content {
 /// Topluluk yoksa `404`; var olup hiç canlı post'u yoksa boş liste döner
 /// (etiket ucundaki aynı ayrım).
 ///
+/// **Özel topluluk public bir yüzey değildir** (Faz 4A): okuyucu o
+/// topluluğu göremiyorsa (üye değil ve topluluk kapsamlı izni yok)
+/// [`Error::Forbidden`] döner. Kapak sayfası Faz 4B'nin işi. Public
+/// topluluklar için kapı yok — içerik zaten herkese açık.
+///
 /// # Errors
-/// Topluluk yoksa [`Error::NotFound`]; cursor sıralamaya ait değilse
+/// Topluluk yoksa [`Error::NotFound`]; topluluk private ve okuyucu
+/// göremiyorsa [`Error::Forbidden`]; cursor sıralamaya ait değilse
 /// [`Error::InvalidCursor`]; veritabanı hatası [`Error::Database`].
 pub async fn list_posts_in_community(
     pool: &PgPool,
@@ -1006,8 +1025,17 @@ pub async fn list_posts_in_community(
     sort: PostSort,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Content>> {
-    let community_id = resolve_community_id_in(pool, name).await?;
+    let community = lookup_community(pool, name).await?;
+
+    if community.visibility == CommunityVisibility::Private
+        && !viewer_communities.contains(&community.id)
+    {
+        return Err(Error::Forbidden);
+    }
+
+    let community_id = community.id;
     let (cursor_created_at, cursor_score, cursor_hot, cursor_id) =
         split_community_post_cursor(sort, cursor)?;
 
@@ -1022,6 +1050,7 @@ pub async fn list_posts_in_community(
                     WHERE contents.community_id = $1
                       AND contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $5::bigint[])
                       AND (
                           $2::timestamptz IS NULL
                           OR (contents.created_at, contents.id) < ($2::timestamptz, $3::bigint)
@@ -1069,6 +1098,7 @@ pub async fn list_posts_in_community(
                 cursor_created_at,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -1083,6 +1113,7 @@ pub async fn list_posts_in_community(
                     WHERE contents.community_id = $1
                       AND contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $5::bigint[])
                       AND (
                           $2::int IS NULL
                           OR (contents.score, contents.id) < ($2::int, $3::bigint)
@@ -1130,6 +1161,7 @@ pub async fn list_posts_in_community(
                 cursor_score,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -1144,6 +1176,7 @@ pub async fn list_posts_in_community(
                     WHERE contents.community_id = $1
                       AND contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $5::bigint[])
                       AND (
                           $2::double precision IS NULL
                           OR (contents.hot_score, contents.id) < ($2::double precision, $3::bigint)
@@ -1191,6 +1224,7 @@ pub async fn list_posts_in_community(
                 cursor_hot,
                 cursor_id,
                 limit + 1,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?

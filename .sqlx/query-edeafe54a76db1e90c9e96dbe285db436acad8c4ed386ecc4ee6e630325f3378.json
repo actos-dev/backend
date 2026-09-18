@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            tags.id,\n            tags.name::text AS \"name!\"\n        FROM tags\n        WHERE (\n                tags.name::text LIKE $1 || '%'\n                OR similarity(tags.name::text, $1) >= $2\n              )\n          AND EXISTS (\n              SELECT 1\n              FROM content_tags\n              JOIN contents ON contents.id = content_tags.content_id\n              WHERE content_tags.tag_id = tags.id\n                AND contents.deleted_at IS NULL\n                AND content_visible_to(contents.community_id, $4::bigint[])\n          )\n        ORDER BY\n            (tags.name::text LIKE $1 || '%') DESC,\n            similarity(tags.name::text, $1) DESC,\n            tags.name::text\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "tags",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float4",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "edeafe54a76db1e90c9e96dbe285db436acad8c4ed386ecc4ee6e630325f3378"
+}

@@ -190,6 +190,7 @@ impl FeedWindow {
 /// # Errors
 /// Cursor bu listenin sıralamasına ait değilse [`Error::InvalidCursor`];
 /// veritabanı hatası [`Error::Database`].
+#[allow(clippy::too_many_arguments)]
 pub async fn list_feed(
     pool: &PgPool,
     follower: Option<i64>,
@@ -198,6 +199,7 @@ pub async fn list_feed(
     actor_type: Option<ActorType>,
     cursor: Option<Cursor>,
     limit: i64,
+    viewer_communities: &[i64],
 ) -> Result<Page<Content>> {
     let cutoff = window.cutoff(Utc::now());
 
@@ -248,6 +250,7 @@ pub async fn list_feed(
                     FROM contents
                     WHERE contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $7::bigint[])
                       AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
                       AND (
                           $2::bigint IS NULL
@@ -311,6 +314,7 @@ pub async fn list_feed(
                 cursor_id,
                 limit + 1,
                 actor_type as Option<ActorType>,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -324,6 +328,7 @@ pub async fn list_feed(
                     FROM contents
                     WHERE contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $7::bigint[])
                       AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
                       AND (
                           $2::bigint IS NULL
@@ -387,6 +392,7 @@ pub async fn list_feed(
                 cursor_id,
                 limit + 1,
                 actor_type as Option<ActorType>,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?
@@ -400,6 +406,7 @@ pub async fn list_feed(
                     FROM contents
                     WHERE contents.content_type = 'post'::content_type
                       AND contents.deleted_at IS NULL
+                      AND content_visible_to(contents.community_id, $7::bigint[])
                       AND ($1::timestamptz IS NULL OR contents.created_at >= $1::timestamptz)
                       AND (
                           $2::bigint IS NULL
@@ -463,6 +470,7 @@ pub async fn list_feed(
                 cursor_id,
                 limit + 1,
                 actor_type as Option<ActorType>,
+                viewer_communities,
             )
             .fetch_all(pool)
             .await?

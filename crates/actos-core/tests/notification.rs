@@ -121,6 +121,7 @@ async fn seed_comment(
         &[],
         8 * 1024 * 1024,
         i64::MAX,
+        &[],
     )
     .await
     .expect("yorum oluşturulabilmeli")
@@ -132,7 +133,7 @@ async fn seed_comment(
 /// yapması için ham `Notification`'dan daha kolay bir şekil.
 #[allow(clippy::expect_used)]
 async fn inbox_kinds(pool: &PgPool, actor_id: i64) -> Vec<(&'static str, Option<i64>)> {
-    let page = notification::list_inbox(pool, actor_id, false, None, 100)
+    let page = notification::list_inbox(pool, actor_id, false, None, 100, &[])
         .await
         .expect("inbox okunabilmeli");
     page.items
@@ -366,7 +367,7 @@ async fn tekil_okundu_isaretleme_idempotent(pool: PgPool) {
         .await
         .expect("takip edilebilmeli");
 
-    let page = notification::list_inbox(&pool, alici.id, false, None, 10)
+    let page = notification::list_inbox(&pool, alici.id, false, None, 10, &[])
         .await
         .expect("inbox okunabilmeli");
     let notif_id = page.items[0].id;
@@ -375,7 +376,7 @@ async fn tekil_okundu_isaretleme_idempotent(pool: PgPool) {
     notification::mark_read(&pool, alici.id, notif_id)
         .await
         .expect("okundu işaretlenebilmeli");
-    let once_read_at = notification::list_inbox(&pool, alici.id, false, None, 10)
+    let once_read_at = notification::list_inbox(&pool, alici.id, false, None, 10, &[])
         .await
         .expect("inbox okunabilmeli")
         .items[0]
@@ -386,7 +387,7 @@ async fn tekil_okundu_isaretleme_idempotent(pool: PgPool) {
     notification::mark_read(&pool, alici.id, notif_id)
         .await
         .expect("ikinci çağrı da başarılı olmalı (idempotent)");
-    let twice_read_at = notification::list_inbox(&pool, alici.id, false, None, 10)
+    let twice_read_at = notification::list_inbox(&pool, alici.id, false, None, 10, &[])
         .await
         .expect("inbox okunabilmeli")
         .items[0]
@@ -410,7 +411,7 @@ async fn baskasinin_bildirimini_isaretlemek_notfound_doner(pool: PgPool) {
         .await
         .expect("takip edilebilmeli");
 
-    let notif_id = notification::list_inbox(&pool, alici.id, false, None, 10)
+    let notif_id = notification::list_inbox(&pool, alici.id, false, None, 10, &[])
         .await
         .expect("inbox okunabilmeli")
         .items[0]
@@ -440,13 +441,15 @@ async fn toplu_okundu_isaretleme_cursor_ve_idempotentlik(pool: PgPool) {
     seed_comment(&pool, &c, post, None, "c").await;
 
     assert_eq!(
-        notification::count_unread(&pool, alici.id).await.unwrap(),
+        notification::count_unread(&pool, alici.id, &[])
+            .await
+            .unwrap(),
         3
     );
 
     // İlk sayfayı `limit=2` ile çek: en yeni iki bildirim (c, b) + bir
     // sonraki sayfaya işaret eden cursor (b'nin konumu).
-    let ilk_sayfa = notification::list_inbox(&pool, alici.id, false, None, 2)
+    let ilk_sayfa = notification::list_inbox(&pool, alici.id, false, None, 2, &[])
         .await
         .expect("inbox okunabilmeli");
     assert_eq!(ilk_sayfa.items.len(), 2);
@@ -464,7 +467,9 @@ async fn toplu_okundu_isaretleme_cursor_ve_idempotentlik(pool: PgPool) {
         "yalnızca cursor'a kadar olan iki bildirim işaretlenmeli"
     );
     assert_eq!(
-        notification::count_unread(&pool, alici.id).await.unwrap(),
+        notification::count_unread(&pool, alici.id, &[])
+            .await
+            .unwrap(),
         1
     );
 
@@ -480,7 +485,9 @@ async fn toplu_okundu_isaretleme_cursor_ve_idempotentlik(pool: PgPool) {
         .expect("kalanı işaretleme başarılı olmalı");
     assert_eq!(marked_rest, 1);
     assert_eq!(
-        notification::count_unread(&pool, alici.id).await.unwrap(),
+        notification::count_unread(&pool, alici.id, &[])
+            .await
+            .unwrap(),
         0
     );
 }
@@ -498,12 +505,14 @@ async fn unread_filtresi_ve_sayaci_dogru(pool: PgPool) {
     seed_comment(&pool, &b, post, None, "b").await;
 
     assert_eq!(
-        notification::count_unread(&pool, alici.id).await.unwrap(),
+        notification::count_unread(&pool, alici.id, &[])
+            .await
+            .unwrap(),
         2
     );
 
     // Birini okundu işaretle.
-    let ilk = notification::list_inbox(&pool, alici.id, false, None, 1)
+    let ilk = notification::list_inbox(&pool, alici.id, false, None, 1, &[])
         .await
         .expect("inbox okunabilmeli");
     notification::mark_read(&pool, alici.id, ilk.items[0].id)
@@ -511,19 +520,21 @@ async fn unread_filtresi_ve_sayaci_dogru(pool: PgPool) {
         .expect("okundu işaretlenebilmeli");
 
     assert_eq!(
-        notification::count_unread(&pool, alici.id).await.unwrap(),
+        notification::count_unread(&pool, alici.id, &[])
+            .await
+            .unwrap(),
         1
     );
 
     // `unread_only=true` yalnızca kalan okunmamışı döner.
-    let unread_sayfa = notification::list_inbox(&pool, alici.id, true, None, 10)
+    let unread_sayfa = notification::list_inbox(&pool, alici.id, true, None, 10, &[])
         .await
         .expect("inbox okunabilmeli");
     assert_eq!(unread_sayfa.items.len(), 1);
     assert!(unread_sayfa.items[0].read_at.is_none());
 
     // Filtresiz liste hâlâ ikisini de döner.
-    let hepsi = notification::list_inbox(&pool, alici.id, false, None, 10)
+    let hepsi = notification::list_inbox(&pool, alici.id, false, None, 10, &[])
         .await
         .expect("inbox okunabilmeli");
     assert_eq!(hepsi.items.len(), 2);
@@ -543,7 +554,8 @@ async fn yanlis_siralamali_cursor_reddedilir(pool: PgPool) {
         id: 1,
     };
 
-    let sonuc = notification::list_inbox(&pool, alici.id, false, Some(yanlis_cursor), 10).await;
+    let sonuc =
+        notification::list_inbox(&pool, alici.id, false, Some(yanlis_cursor), 10, &[]).await;
     assert!(matches!(sonuc, Err(actos_core::Error::InvalidCursor)));
 
     let sonuc2 = notification::mark_all_read(&pool, alici.id, Some(yanlis_cursor)).await;

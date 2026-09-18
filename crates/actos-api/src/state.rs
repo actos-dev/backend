@@ -118,4 +118,19 @@ impl AppState {
     pub fn idempotency(&self) -> &IdempotencyStore {
         &self.inner.idempotency
     }
+
+    /// İstek başına bir kez hesaplanan "bu izleyicinin görebildiği
+    /// topluluklar" kümesi (Faz 4A) — `actos_core::visibility::
+    /// viewer_communities`'in `AppState` kolaylığı.
+    ///
+    /// Her okuma yolu aynı sorguyu kendi gövdesinde tekrar yazmasın ve bir
+    /// handler içinde birden fazla `actos_core` çağrısı varsa (ör. `GET
+    /// /comments/{id}` → `get_comment` + `ancestors_of`) küme bir kez
+    /// hesaplanıp paylaşılsın diye. Anonim izleyici (`None`) boş küme alır.
+    ///
+    /// # Errors
+    /// Veritabanı hatası [`actos_core::Error::Database`].
+    pub async fn viewer_communities(&self, viewer: Option<i64>) -> actos_core::Result<Vec<i64>> {
+        actos_core::visibility::viewer_communities(&self.inner.db, viewer).await
+    }
 }
