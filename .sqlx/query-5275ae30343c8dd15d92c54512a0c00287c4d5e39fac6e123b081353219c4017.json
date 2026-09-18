@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM permissions WHERE actor_id = $1 AND community_id IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5275ae30343c8dd15d92c54512a0c00287c4d5e39fac6e123b081353219c4017"
+}

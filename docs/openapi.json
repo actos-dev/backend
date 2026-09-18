@@ -494,7 +494,7 @@
             "type": "string"
           },
           "visibility": {
-            "description": "`\"public\"` or `\"private\"`. Phase 2 always returns `\"public\"`.",
+            "description": "`\"public\"` or `\"private\"`. A `private` community a viewer may not\nsee inside returns a cover: the same name and description, but\n`is_member = false` and both counts zero.",
             "type": "string"
           }
         },
@@ -704,7 +704,7 @@
         "type": "object"
       },
       "CreateCommunityRequest": {
-        "description": "Request body of `POST /communities`.\n\nThere is deliberately **no `visibility` field**: phase 2 creates public\ncommunities only (COMMUNITY_PLAN.md §13), and the server rejects\n`private` at the core level. A field that can only ever hold one value\nwould be a lie in the contract; phase 4 adds it together with the gate\nthat makes the second value real.",
+        "description": "Request body of `POST /communities`.\n\n`visibility` is optional (`\"public\"` by default). `\"private\"` creates an\nunlisted community (COMMUNITY_PLAN.md §2): it is absent from the\ndirectory and only its members and moderators can see inside.",
         "properties": {
           "description": {
             "description": "Markdown; stored as text and length-validated (1-10000 characters).",
@@ -712,6 +712,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "visibility": {
+            "description": "`\"public\"` (default) or `\"private\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1297,6 +1304,18 @@
         ],
         "type": "object"
       },
+      "SuccessorRequest": {
+        "description": "Request body of `PUT /communities/{name}/successor`.\n\nThe owner designates who inherits the community when they leave or\ndelete their account (COMMUNITY_PLAN.md §4). Any live actor is accepted,\nincluding the owner themselves.",
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "type": "object"
+      },
       "TagListResponse": {
         "description": "Response of `GET /tags`: ordered by popularity, cursor-paginated.",
         "properties": {
@@ -1382,15 +1401,23 @@
         "type": "object"
       },
       "UpdateCommunityRequest": {
-        "description": "Request body of `PATCH /communities/{name}`.\n\nOnly the description is editable — the name is the community's address\nand the owner cannot change it in phase 2.",
+        "description": "Request body of `PATCH /communities/{name}`.\n\nThe name is the community's address and is not editable.\n\n`visibility` is optional. The move is **one-way** (§2): a public\ncommunity may become private, never the reverse — going public would\nexpose conversations held under an expectation of privacy.",
         "properties": {
           "description": {
-            "type": "string"
+            "description": "New description. Absent means \"leave it unchanged\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "description": "`\"public\"` or `\"private\"`. Absent means \"leave visibility alone\".",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
-        "required": [
-          "description"
-        ],
         "type": "object"
       },
       "UpdatePostRequest": {
@@ -4825,7 +4852,7 @@
         ]
       },
       "post": {
-        "description": "The creator becomes the owner and the first member. An actor may own at most 3 communities. Only public communities can be created; private ones land in a later phase.",
+        "description": "The creator becomes the owner and the first member. An actor may own at most 3 communities. `visibility` may be `public` (default) or `private`; a private community is unlisted and only its members can see inside.",
         "operationId": "create_community",
         "requestBody": {
           "content": {
@@ -4940,7 +4967,7 @@
     },
     "/communities/{name}": {
       "get": {
-        "description": "If an `Authorization` header is present, `is_member` reflects the requesting actor; anonymous requests get `false`.",
+        "description": "If an `Authorization` header is present, `is_member` reflects the requesting actor; anonymous requests get `false`. A private community a viewer may not see inside returns a cover: the same name and description, with `member_count = 0`, `post_count = 0` and `is_member = false`.",
         "operationId": "get_community",
         "parameters": [
           {
@@ -4962,7 +4989,7 @@
                 }
               }
             },
-            "description": "Community summary"
+            "description": "Community summary (or cover)"
           },
           "404": {
             "content": {
@@ -5021,7 +5048,7 @@
         ]
       },
       "patch": {
-        "description": "Callable by the owner or a holder of the global `community.edit` permission.",
+        "description": "Callable by the owner or a holder of `community.edit` for this community. `visibility` is optional and one-way: a public community may become private, never the reverse.",
         "operationId": "update_community",
         "parameters": [
           {
@@ -5141,7 +5168,108 @@
             "api_key": []
           }
         ],
-        "summary": "Edit a community's description",
+        "summary": "Edit a community",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
+    "/communities/{name}/close": {
+      "post": {
+        "description": "Requires `community.close` scoped to this community. A public community's posts become independent; a private community's posts are deleted. Closing an already closed community returns `404`.",
+        "operationId": "close_community",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Community closed"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated, but not authorized for this action"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Close a community",
         "tags": [
           "communities"
         ]
@@ -5149,7 +5277,7 @@
     },
     "/communities/{name}/join": {
       "delete": {
-        "description": "Idempotent. The owner cannot leave their own community (`400`).",
+        "description": "Idempotent. If the owner leaves, ownership passes to the designated successor, else to the longest-serving moderator; a community with neither is closed.",
         "operationId": "leave_community",
         "parameters": [
           {
@@ -5692,6 +5820,117 @@
           }
         },
         "summary": "List a community's posts",
+        "tags": [
+          "communities"
+        ]
+      }
+    },
+    "/communities/{name}/successor": {
+      "put": {
+        "description": "Owner only. The named actor inherits the community when the owner leaves or deletes their account; without one, ownership falls to the longest-serving moderator. The target must exist and not be deleted.",
+        "operationId": "set_successor",
+        "parameters": [
+          {
+            "description": "Community name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuccessorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successor designated"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated, but not authorized for this action"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Designate a community successor",
         "tags": [
           "communities"
         ]
@@ -8289,7 +8528,7 @@
       "name": "comments"
     },
     {
-      "description": "Public communities: creation, the directory, membership, and the community feed",
+      "description": "Communities: creation, the directory, membership, the community feed, and the private lifecycle (visibility, closure, succession)",
       "name": "communities"
     },
     {

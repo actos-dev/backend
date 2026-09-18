@@ -1,12 +1,9 @@
 //! Görünürlük kapısı (COMMUNITY_PLAN.md Faz 4A) uçtan uca testleri.
 //!
-//! **Özel topluluk nasıl kuruluyor:** API, Faz 4A boyunca `private`
-//! oluşturmayı reddediyor (`community::create_community`). Bu dosyadaki
-//! [`create_private_community`] önce public bir topluluk açıp ardından
-//! `visibility`'yi doğrudan bir `UPDATE` ile `private`'a çeviriyor. 4B
-//! anahtarı çevirdiğinde bu yardımcı, API çağrısının kendisini kullanacak
-//! şekilde sadeleşecek; o zamana kadar kapının doğruluğunu test etmenin tek
-//! yolu bu.
+//! **Özel topluluk nasıl kuruluyor:** Faz 4B-1'den beri API `private`
+//! oluşturmayı kabul ediyor, dolayısıyla [`create_private_community`] bunu
+//! doğrudan API çağrısıyla yapıyor. 4A'da bu yardımcı ancak `visibility`'yi
+//! SQL ile çevirerek mümkündü; kapı artık anahtarın arkasında.
 //!
 //! Kurulum yardımcıları `tests/communities_api.rs` ile aynı desen — Rust her
 //! `tests/*.rs` dosyasını bağımsız derlediği için paylaşılan bir modül
@@ -165,36 +162,24 @@ async fn seed_actor(pool: &PgPool, username: &str) -> (i64, String) {
     (reg.actor.id, reg.api_key)
 }
 
-/// Public bir topluluk açar (API `private`'ı reddettiği için tek yol).
+/// Açar ve `visibility: "private"` ile oluşturur; iç kimliğini döner.
 #[allow(clippy::expect_used)]
-async fn create_community(router: &Router, token: &str, name: &str) {
+async fn create_private_community(router: &Router, pool: &PgPool, token: &str, name: &str) -> i64 {
     let (status, body, _) = send(
         router,
         auth_json_req(
             "POST",
             "/communities",
             token,
-            json!({ "name": name, "description": "açıklama" }),
+            json!({ "name": name, "description": "açıklama", "visibility": "private" }),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "topluluk açılamadı: {body}");
-}
-
-/// Açar ve `visibility`'yi doğrudan SQL ile `private`'a çevirir — gerekçe
-/// dosya başındaki modül dokümanı.
-#[allow(clippy::expect_used)]
-async fn create_private_community(router: &Router, pool: &PgPool, token: &str, name: &str) -> i64 {
-    create_community(router, token, name).await;
-    sqlx::query!(
-        r#"UPDATE communities
-           SET visibility = 'private'::community_visibility
-           WHERE name = $1"#,
-        name,
-    )
-    .execute(pool)
-    .await
-    .expect("topluluk private'a çevrilebilmeli");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "özel topluluk açılamadı: {body}"
+    );
     community_id(pool, name).await
 }
 

@@ -14,27 +14,47 @@ use crate::auth::ActorSummary;
 
 /// Request body of `POST /communities`.
 ///
-/// There is deliberately **no `visibility` field**: phase 2 creates public
-/// communities only (COMMUNITY_PLAN.md §13), and the server rejects
-/// `private` at the core level. A field that can only ever hold one value
-/// would be a lie in the contract; phase 4 adds it together with the gate
-/// that makes the second value real.
+/// `visibility` is optional (`"public"` by default). `"private"` creates an
+/// unlisted community (COMMUNITY_PLAN.md §2): it is absent from the
+/// directory and only its members and moderators can see inside.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateCommunityRequest {
     pub name: String,
     /// Markdown; stored as text and length-validated (1-10000 characters).
     pub description: String,
+    /// `"public"` (default) or `"private"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
 }
 
 /// Request body of `PATCH /communities/{name}`.
 ///
-/// Only the description is editable — the name is the community's address
-/// and the owner cannot change it in phase 2.
+/// The name is the community's address and is not editable.
+///
+/// `visibility` is optional. The move is **one-way** (§2): a public
+/// community may become private, never the reverse — going public would
+/// expose conversations held under an expectation of privacy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct UpdateCommunityRequest {
-    pub description: String,
+    /// New description. Absent means "leave it unchanged".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// `"public"` or `"private"`. Absent means "leave visibility alone".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+}
+
+/// Request body of `PUT /communities/{name}/successor`.
+///
+/// The owner designates who inherits the community when they leave or
+/// delete their account (COMMUNITY_PLAN.md §4). Any live actor is accepted,
+/// including the owner themselves.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SuccessorRequest {
+    pub username: String,
 }
 
 /// The outward-facing summary of a community.
@@ -47,7 +67,9 @@ pub struct CommunitySummary {
     /// Markdown. The server does not render it; clients decide how to show
     /// it (COMMUNITY_PLAN.md §11).
     pub description: String,
-    /// `"public"` or `"private"`. Phase 2 always returns `"public"`.
+    /// `"public"` or `"private"`. A `private` community a viewer may not
+    /// see inside returns a cover: the same name and description, but
+    /// `is_member = false` and both counts zero.
     pub visibility: String,
     /// The community's single owner.
     pub owner: ActorSummary,

@@ -167,6 +167,57 @@ async fn seed_actor(pool: &PgPool, username: &str) -> (i64, String) {
     (reg.actor.id, reg.api_key)
 }
 
+/// [`seed_actor`] + hesap silme için ilk kurtarma kodunu da döner.
+#[allow(clippy::expect_used)]
+async fn seed_actor_with_recovery(pool: &PgPool, username: &str) -> (i64, String, String) {
+    let reg = core_auth::register(pool, username, ActorType::Human, None)
+        .await
+        .expect("fixture actor oluşturulabilmeli");
+    let recovery_code = reg
+        .recovery_codes
+        .first()
+        .expect("kurtarma kodu olmalı")
+        .clone();
+    (reg.actor.id, reg.api_key, recovery_code)
+}
+
+/// `visibility` verilerek topluluk açar.
+#[allow(clippy::expect_used)]
+async fn create_community_with_visibility(
+    router: &Router,
+    token: &str,
+    name: &str,
+    description: &str,
+    visibility: &str,
+) -> (StatusCode, Value, HeaderMap) {
+    send(
+        router,
+        auth_json_req(
+            "POST",
+            "/communities",
+            token,
+            json!({ "name": name, "description": description, "visibility": visibility }),
+        ),
+    )
+    .await
+}
+
+/// Bir topluluğa doğrudan SQL ile üye ekler — private topluluğa `join`
+/// reddedildiği için (davet/başvuru ayrı iş) testte tek yol.
+#[allow(clippy::expect_used)]
+async fn add_member(pool: &PgPool, community_id: i64, actor_id: i64) {
+    sqlx::query!(
+        r#"INSERT INTO community_members (community_id, actor_id)
+           VALUES ($1, $2)
+           ON CONFLICT DO NOTHING"#,
+        community_id,
+        actor_id,
+    )
+    .execute(pool)
+    .await
+    .expect("üyelik eklenebilmeli");
+}
+
 /// Bir topluluk oluşturur, `(status, body, headers)` döner.
 #[allow(clippy::expect_used)]
 async fn create_community(
@@ -426,20 +477,23 @@ async fn katilma_ve_ayrilma_idempotent(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn sahip_ayrilamaz(pool: PgPool) {
+async fn sahip_ayrilinca_devralicisiz_topluluk_kapanir(pool: PgPool) {
     let raw_pool = pool.clone();
     let router = build_router(pool);
     let (_, owner_key) = seed_actor(&raw_pool, "leave_owner").await;
 
     create_community(&router, &owner_key, "sahip_kulubu", "açıklama").await;
 
+    // Devralıcı ve ikinci bir moderatör yok: ayrılma topluluğu kapatır (§4).
     let (status, body, _) = send(
         &router,
         auth_req("DELETE", "/communities/sahip_kulubu/join", &owner_key),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["code"], "VALIDATION_FAILED");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(&router, empty_req("GET", "/communities/sahip_kulubu")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "kapalı topluluk 404: {body}");
 }
 
 // --- Gönderi: üyelik şartı ---------------------------------------------
@@ -1278,4 +1332,597 @@ async fn kick_kendi_toplulugunda_calisir_sinirlari_dogru(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+}
+
+// --- Faz 4B-1: private görünürlük ve kapak ------------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn private_topluluk_olusturulur_dizinde_yok_kapak_doner(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "priv_owner").await;
+    let (member_id, member_key) = seed_actor(&raw_pool, "priv_member").await;
+
+    let (status, body, _) = create_community_with_visibility(
+        &router,
+        &owner_key,
+        "gizli_kulup",
+        "özel açıklama",
+        "private",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["visibility"], "private", "{body}");
+
+    // Dizin yalnızca public listeler.
+    let (status, body, _) = send(&router, empty_req("GET", "/communities")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<&str> = body["communities"]
+        .as_array()
+        .expect("communities dizi olmalı")
+        .iter()
+        .map(|c| c["name"].as_str().expect("isim string"))
+        .collect();
+    assert!(
+        !names.contains(&"gizli_kulup"),
+        "private dizinde görünmemeli: {body}"
+    );
+
+    // Üye olmayan: kapak — ad/açıklama var, sayaçlar sıfır.
+    let (status, cover, _) = send(
+        &router,
+        auth_req("GET", "/communities/gizli_kulup", &member_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cover}");
+    assert_eq!(cover["name"], "gizli_kulup", "{cover}");
+    assert_eq!(cover["description"], "özel açıklama", "{cover}");
+    assert_eq!(cover["visibility"], "private", "{cover}");
+    assert_eq!(cover["is_member"], false, "{cover}");
+    assert_eq!(cover["member_count"], 0, "{cover}");
+    assert_eq!(cover["post_count"], 0, "{cover}");
+
+    // Anonim de kapak alır.
+    let (status, cover, _) = send(&router, empty_req("GET", "/communities/gizli_kulup")).await;
+    assert_eq!(status, StatusCode::OK, "{cover}");
+    assert_eq!(cover["member_count"], 0, "{cover}");
+
+    // Üye olunca tam özet.
+    let cid = community_id(&raw_pool, "gizli_kulup").await;
+    add_member(&raw_pool, cid, member_id).await;
+    let (status, full, _) = send(
+        &router,
+        auth_req("GET", "/communities/gizli_kulup", &member_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{full}");
+    assert_eq!(full["is_member"], true, "{full}");
+    assert_eq!(full["member_count"], 2, "{full}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn gorunurluk_sahipleri_ozel_toplulugu_tam_gorur(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "cap_owner").await;
+    let (scoped_mod_id, scoped_mod_key) = seed_actor(&raw_pool, "cap_scoped").await;
+    let (global_mod_id, global_mod_key) = seed_actor(&raw_pool, "cap_global").await;
+
+    create_community_with_visibility(
+        &router,
+        &owner_key,
+        "kapak_gorunurluk",
+        "açıklama",
+        "private",
+    )
+    .await;
+    let cid = community_id(&raw_pool, "kapak_gorunurluk").await;
+
+    grant_scoped(&raw_pool, scoped_mod_id, Permission::CommunityEdit, cid).await;
+    core_auth::grant_permission(
+        &raw_pool,
+        global_mod_id,
+        Permission::ContentDelete,
+        PermissionScope::Global,
+        None,
+        None,
+    )
+    .await
+    .expect("global izin verilebilmeli");
+
+    // Topluluk kapsamlı izin sahibi üye değildir ama içeriyi görür.
+    let (status, body, _) = send(
+        &router,
+        auth_req("GET", "/communities/kapak_gorunurluk", &scoped_mod_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["is_member"], false, "{body}");
+    assert_eq!(body["member_count"], 1, "kapak değil tam özet: {body}");
+
+    // Global moderatör (Faz 4A istisnası) de tam görür.
+    let (status, body, _) = send(
+        &router,
+        auth_req("GET", "/communities/kapak_gorunurluk", &global_mod_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["member_count"], 1,
+        "global moderatör tam görür: {body}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn public_private_tek_yonlu(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "viz_owner").await;
+
+    create_community(&router, &owner_key, "yon_kulubu", "açıklama").await;
+
+    // public → private serbest.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/yon_kulubu",
+            &owner_key,
+            json!({ "description": "açıklama", "visibility": "private" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["visibility"], "private", "{body}");
+
+    // private → public yasak (§2).
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/yon_kulubu",
+            &owner_key,
+            json!({ "description": "açıklama", "visibility": "public" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+
+    // Aynı değeri tekrar göndermek etkisizdir, hata değil.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/yon_kulubu",
+            &owner_key,
+            json!({ "description": "güncel", "visibility": "private" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["visibility"], "private", "{body}");
+
+    // Geçersiz değer 400.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/yon_kulubu",
+            &owner_key,
+            json!({ "description": "açıklama", "visibility": "gizli" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn private_topluluga_dogrudan_katilma_400(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "privjoin_owner").await;
+    let (_, other_key) = seed_actor(&raw_pool, "privjoin_other").await;
+
+    create_community_with_visibility(&router, &owner_key, "kapali_kulup", "açıklama", "private")
+        .await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/kapali_kulup/join", &other_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+}
+
+// --- Faz 4B-1: kapanış --------------------------------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn public_kapaninca_postlar_bagimsiz_kalir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "kapanan_owner").await;
+
+    create_community(&router, &owner_key, "kapanan_kulup", "açıklama").await;
+    let post = post_in_community(&router, &owner_key, "kapanan_kulup", "kalacak").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/kapanan_kulup/close", &owner_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Dizinden düştü, uçlar 404.
+    let (status, body, _) = send(&router, empty_req("GET", "/communities")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<&str> = body["communities"]
+        .as_array()
+        .expect("communities dizi olmalı")
+        .iter()
+        .map(|c| c["name"].as_str().expect("isim string"))
+        .collect();
+    assert!(!names.contains(&"kapanan_kulup"), "{body}");
+
+    let (status, body, _) = send(&router, empty_req("GET", "/communities/kapanan_kulup")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body, _) = send(
+        &router,
+        empty_req("GET", "/communities/kapanan_kulup/posts"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // Post bağımsız oldu: hâlâ okunur, community alanı null.
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{post}"))).await;
+    assert_eq!(status, StatusCode::OK, "post bağımsız kalmalı: {body}");
+    assert!(body["community"].is_null(), "{body}");
+
+    // Kapanan topluluğa katılma 404.
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/kapanan_kulup/join", &owner_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn private_kapaninca_postlar_gizlenir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "pclose_owner").await;
+    let (member_id, member_key) = seed_actor(&raw_pool, "pclose_member").await;
+
+    create_community_with_visibility(&router, &owner_key, "pclose_kulup", "açıklama", "private")
+        .await;
+    let cid = community_id(&raw_pool, "pclose_kulup").await;
+    add_member(&raw_pool, cid, member_id).await;
+    let post = post_in_community(&router, &member_key, "pclose_kulup", "gizli post").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/pclose_kulup/close", &owner_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Topluluk ucu kapandı.
+    let (status, body, _) = send(&router, empty_req("GET", "/communities/pclose_kulup")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // Üye olmayan göremez: görünmezlik silinmişlikten önce gelir (404).
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{post}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "yabancıya 404: {body}");
+
+    // Eski üye hâlâ görür ama içerik silinmiş: 410.
+    let (status, body, _) = send(
+        &router,
+        auth_req("GET", &format!("/posts/{post}"), &member_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "üyeye 410: {body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn yetkisiz_kapatma_403(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "noclose_owner").await;
+    let (_, other_key) = seed_actor(&raw_pool, "noclose_other").await;
+
+    create_community(&router, &owner_key, "noclose_kulubu", "açıklama").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/noclose_kulubu/close", &other_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Hâlâ açık.
+    let (status, body, _) = send(&router, empty_req("GET", "/communities/noclose_kulubu")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn kapali_topluluk_her_ucta_404(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "closed_owner").await;
+
+    create_community(&router, &owner_key, "closed_kulup", "açıklama").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/closed_kulup/close", &owner_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Zaten kapalıyı kapatmak 404.
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/closed_kulup/close", &owner_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    for (method, uri, body) in [
+        ("GET", "/communities/closed_kulup", None),
+        ("GET", "/communities/closed_kulup/members", None),
+        ("GET", "/communities/closed_kulup/posts", None),
+        ("POST", "/communities/closed_kulup/join", None),
+        (
+            "PATCH",
+            "/communities/closed_kulup",
+            Some(json!({ "description": "yeni" })),
+        ),
+        (
+            "PUT",
+            "/communities/closed_kulup/successor",
+            Some(json!({ "username": "closed_owner" })),
+        ),
+    ] {
+        let req = match body {
+            Some(value) => auth_json_req(method, uri, &owner_key, value),
+            None => auth_req(method, uri, &owner_key),
+        };
+        let (status, resp, _) = send(&router, req).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}: {resp}");
+    }
+}
+
+// --- Faz 4B-1: devralma -------------------------------------------------
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn devralici_atanir_ve_hesap_silinince_sahip_olur(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key, recovery) = seed_actor_with_recovery(&raw_pool, "devir_owner").await;
+    let (_, heir_key) = seed_actor(&raw_pool, "devir_halef").await;
+
+    create_community(&router, &owner_key, "devir_kulubu", "eski açıklama").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/communities/devir_kulubu/successor",
+            &owner_key,
+            json!({ "username": "devir_halef" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Sahip hesabını siler; devralıcı geçer.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "DELETE",
+            "/actors/me",
+            &owner_key,
+            json!({ "recovery_code": recovery }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(
+        &router,
+        auth_req("GET", "/communities/devir_kulubu", &heir_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["owner"]["username"], "devir_halef",
+        "sahiplik devralıcıya geçmeli: {body}"
+    );
+    assert_eq!(body["is_member"], true, "devralan üye olmalı: {body}");
+
+    // Devralan artık gerçekten düzenleyip kapatabilir.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/devir_kulubu",
+            &heir_key,
+            json!({ "description": "yeni sahip düzenledi" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["description"], "yeni sahip düzenledi", "{body}");
+
+    let (status, body, _) = send(
+        &router,
+        auth_req("POST", "/communities/devir_kulubu/close", &heir_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn sahip_ayrilinca_devralici_sahiplenir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (owner_id, owner_key) = seed_actor(&raw_pool, "leave2_owner").await;
+    let _ = seed_actor(&raw_pool, "leave2_halef").await;
+
+    create_community(&router, &owner_key, "leave2_kulubu", "açıklama").await;
+
+    let (status, _, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/communities/leave2_kulubu/successor",
+            &owner_key,
+            json!({ "username": "leave2_halef" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Sahip ayrılır → devralıcı sahiplenir, sahip üyelikten düşer.
+    let (status, body, _) = send(
+        &router,
+        auth_req("DELETE", "/communities/leave2_kulubu/join", &owner_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(&router, empty_req("GET", "/communities/leave2_kulubu")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["owner"]["username"], "leave2_halef", "{body}");
+
+    let still_member = core_community::is_member(
+        &raw_pool,
+        community_id(&raw_pool, "leave2_kulubu").await,
+        owner_id,
+    )
+    .await
+    .expect("üyelik sorgulanabilmeli");
+    assert!(!still_member, "ayrılan sahip artık üye olmamalı");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn devralicisiz_en_kidemli_moderator_sahiplenir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key, recovery) = seed_actor_with_recovery(&raw_pool, "kidem_owner").await;
+    let (mod1_id, mod1_key) = seed_actor(&raw_pool, "kidem_bir").await;
+    let (mod2_id, _) = seed_actor(&raw_pool, "kidem_iki").await;
+
+    create_community(&router, &owner_key, "kidem_kulubu", "açıklama").await;
+    let cid = community_id(&raw_pool, "kidem_kulubu").await;
+
+    // İki moderatör; birincinin izni daha eski (kıdem = eski granted_at).
+    grant_scoped(&raw_pool, mod1_id, Permission::CommunityEdit, cid).await;
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    grant_scoped(&raw_pool, mod2_id, Permission::CommunityEdit, cid).await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "DELETE",
+            "/actors/me",
+            &owner_key,
+            json!({ "recovery_code": recovery }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(&router, empty_req("GET", "/communities/kidem_kulubu")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["owner"]["username"], "kidem_bir",
+        "en kıdemli moderatör sahiplenmeli: {body}"
+    );
+
+    // Yeni sahip düzenleyebilir.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/kidem_kulubu",
+            &mod1_key,
+            json!({ "description": "kıdemli sahip düzenledi" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn devralicisiz_ve_moderatorsuz_silinme_toplulugu_kapatir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key, recovery) = seed_actor_with_recovery(&raw_pool, "bosaltan_owner").await;
+
+    create_community(&router, &owner_key, "bos_kulup", "açıklama").await;
+    let post = post_in_community(&router, &owner_key, "bos_kulup", "bağımsız olacak").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "DELETE",
+            "/actors/me",
+            &owner_key,
+            json!({ "recovery_code": recovery }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Devralıcısız ve moderatörsüz: topluluk kapandı, public post bağımsız.
+    let (status, body, _) = send(&router, empty_req("GET", "/communities/bos_kulup")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "topluluk kapanmalı: {body}");
+
+    let (status, body, _) = send(&router, empty_req("GET", &format!("/posts/{post}"))).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "public post bağımsız kalmalı: {body}"
+    );
+    assert!(body["community"].is_null(), "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn devralici_yalnizca_sahip_ve_hedef_canli(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "succ_owner").await;
+    let (_, other_key) = seed_actor(&raw_pool, "succ_other").await;
+
+    create_community(&router, &owner_key, "succ_kulubu", "açıklama").await;
+
+    // Sahip olmayan atayamaz.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/communities/succ_kulubu/successor",
+            &other_key,
+            json!({ "username": "succ_owner" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Bilinmeyen hedef 404.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/communities/succ_kulubu/successor",
+            &owner_key,
+            json!({ "username": "hic_olmayan" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }

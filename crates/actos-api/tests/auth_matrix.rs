@@ -556,6 +556,8 @@ const MATRIX_OPERATIONS: &[(&str, &str)] = &[
     ("GET", "/communities/{name}/members"),
     ("DELETE", "/communities/{name}/members/{username}"),
     ("GET", "/communities/{name}/posts"),
+    ("POST", "/communities/{name}/close"),
+    ("PUT", "/communities/{name}/successor"),
     // --- interaction_uclarinin_yetki_matrisi ---
     ("PUT", "/contents/{id}/vote"),
     ("GET", "/me/votes"),
@@ -2884,7 +2886,9 @@ async fn topluluk_uclarinin_yetki_matrisi(pool: PgPool) {
     )
     .await;
 
-    // --- DELETE /communities/{name}/join — sahip ayrılamaz (400). ---
+    // --- DELETE /communities/{name}/join — üyeler ve sahip ayrılabilir;
+    // devralıcı yoksa sahip ayrılınca topluluk kapanır (§4). Banlı extractor
+    // düzeyinde engellenir. ---
     assert_code(
         &router,
         maybe_auth_json_req("DELETE", "/communities/am_top_kulup/join", None, json!({})),
@@ -2908,18 +2912,152 @@ async fn topluluk_uclarinin_yetki_matrisi(pool: PgPool) {
     }
     assert_code(
         &router,
-        auth_req("DELETE", "/communities/am_top_kulup/join", &owner_key),
-        StatusCode::BAD_REQUEST,
-        "VALIDATION_FAILED",
-        "DELETE /communities/{name}/join [sahip ayrılamaz]",
-    )
-    .await;
-    assert_code(
-        &router,
         auth_req("DELETE", "/communities/am_top_kulup/join", &banned_key),
         StatusCode::FORBIDDEN,
         "BANNED",
         "DELETE /communities/{name}/join [banli]",
+    )
+    .await;
+    // Sahip ayrılır: topluluk kapsamlı başka izin sahibi ve atanmış devralıcı
+    // yok, bu yüzden topluluk kapanır.
+    assert_status(
+        &router,
+        auth_req("DELETE", "/communities/am_top_kulup/join", &owner_key),
+        StatusCode::NO_CONTENT,
+        "DELETE /communities/{name}/join [sahip]",
+    )
+    .await;
+    assert_status(
+        &router,
+        empty_req("GET", "/communities/am_top_kulup"),
+        StatusCode::NOT_FOUND,
+        "GET kapanmış topluluk [sahip ayrıldı]",
+    )
+    .await;
+
+    // --- PUT /communities/{name}/successor — yalnızca sahip (§4). ---
+    assert_status(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities",
+            &owner_key,
+            json!({ "name": "am_top_devir", "description": "devir" }),
+        ),
+        StatusCode::CREATED,
+        "POST /communities [devir kurulumu]",
+    )
+    .await;
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "PUT",
+            "/communities/am_top_devir/successor",
+            None,
+            json!({ "username": "am_top_normal" }),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "PUT /communities/{name}/successor [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
+        assert_code(
+            &router,
+            auth_json_req(
+                "PUT",
+                "/communities/am_top_devir/successor",
+                token,
+                json!({ "username": "am_top_normal" }),
+            ),
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            &format!("PUT /communities/{{name}}/successor [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/communities/am_top_devir/successor",
+            &banned_key,
+            json!({ "username": "am_top_normal" }),
+        ),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "PUT /communities/{name}/successor [banli]",
+    )
+    .await;
+    assert_status(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/communities/am_top_devir/successor",
+            &owner_key,
+            json!({ "username": "am_top_normal" }),
+        ),
+        StatusCode::NO_CONTENT,
+        "PUT /communities/{name}/successor [sahip]",
+    )
+    .await;
+
+    // --- POST /communities/{name}/close — sahip ya da global
+    // `community.close` (admin); moderatör bu izni tutmuyor. ---
+    assert_status(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities",
+            &owner_key,
+            json!({ "name": "am_top_kapat", "description": "kapat" }),
+        ),
+        StatusCode::CREATED,
+        "POST /communities [kapatma kurulumu]",
+    )
+    .await;
+    assert_code(
+        &router,
+        maybe_auth_json_req("POST", "/communities/am_top_kapat/close", None, json!({})),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /communities/{name}/close [anon]",
+    )
+    .await;
+    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key)] {
+        assert_code(
+            &router,
+            auth_req("POST", "/communities/am_top_kapat/close", token),
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            &format!("POST /communities/{{name}}/close [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_req("POST", "/communities/am_top_kapat/close", &banned_key),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /communities/{name}/close [banli]",
+    )
+    .await;
+    assert_status(
+        &router,
+        auth_req("POST", "/communities/am_top_kapat/close", &admin_key),
+        StatusCode::NO_CONTENT,
+        "POST /communities/{name}/close [admin]",
+    )
+    .await;
+    assert_status(
+        &router,
+        empty_req("GET", "/communities/am_top_kapat"),
+        StatusCode::NOT_FOUND,
+        "GET kapanmış topluluk [admin kapattı]",
     )
     .await;
 }

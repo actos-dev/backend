@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contents SET community_id = NULL WHERE community_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "acd646b9ffd8b4aa8d83e01aaa962a9e48baaa5bf7afe292ad0ca54a9ae29bda"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.actor_id\n        FROM permissions p\n        JOIN actors a ON a.id = p.actor_id\n        WHERE p.community_id = $1\n          AND p.scope = 'community'::permission_scope\n          AND p.actor_id <> $2\n          AND a.deleted_at IS NULL\n        ORDER BY p.granted_at ASC, p.actor_id ASC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "permissions",
+            "name": "actor_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c6af1e4c3c060152f86ada8feb39a53c89b5d2e0c60b4c5133df6f4a996a8b23"
+}

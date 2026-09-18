@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, owner_actor_id, visibility AS \"visibility: CommunityVisibility\"\n        FROM communities\n        WHERE name = $1\n        ",
+  "query": "\n        SELECT id,\n               visibility AS \"visibility: CommunityVisibility\",\n               successor_actor_id\n        FROM communities\n        WHERE owner_actor_id = $1 AND closed_at IS NULL\n        ORDER BY id\n        ",
   "describe": {
     "columns": [
       {
@@ -16,17 +16,6 @@
       },
       {
         "ordinal": 1,
-        "name": "owner_actor_id",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "communities",
-            "name": "owner_actor_id"
-          }
-        }
-      },
-      {
-        "ordinal": 2,
         "name": "visibility: CommunityVisibility",
         "type_info": {
           "Custom": {
@@ -45,23 +34,29 @@
             "name": "visibility"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "successor_actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "successor_actor_id"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        {
-          "Custom": {
-            "name": "citext",
-            "kind": "Simple"
-          }
-        }
+        "Int8"
       ]
     },
     "nullable": [
       false,
       false,
-      false
+      true
     ]
   },
-  "hash": "9c13a7d17a093ffc6f1e5bfa8aab4db048e832cbecc0ea5ed92958d21730ea82"
+  "hash": "bd6f87f32241520d2c43808e7cf61344d653d68873423882273d7f98d8424743"
 }

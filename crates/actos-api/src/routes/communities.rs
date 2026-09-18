@@ -14,14 +14,14 @@
 
 use actos_core::{
     Error,
-    community::{self as core_community, Community, MemberEntry},
+    community::{self as core_community, Community, CommunityView, MemberEntry},
     content::PostSort,
     id::IdCodec,
 };
 use actos_types::{
     community::{
         CommunityListResponse, CommunityMemberListResponse, CommunityMemberSummary,
-        CommunitySummary, CreateCommunityRequest, UpdateCommunityRequest,
+        CommunitySummary, CreateCommunityRequest, SuccessorRequest, UpdateCommunityRequest,
     },
     content::PostListResponse,
 };
@@ -54,6 +54,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_members))
         .routes(routes!(kick_member))
         .routes(routes!(list_community_posts))
+        .routes(routes!(close_community))
+        .routes(routes!(set_successor))
 }
 
 // --- Query param tipleri -------------------------------------------------
@@ -112,7 +114,7 @@ fn community_summary(
 
 /// `POST /communities` → `201` + `Location: /communities/{name}`.
 ///
-/// Faz 2 yalnızca public topluluk oluşturur; sahiplik sınırı (3) core
+/// `visibility` opsiyoneldir; verilmezse `public`. Sahiplik sınırı (3) core
 /// katmanında uygulanır.
 #[utoipa::path(
     post,
@@ -120,7 +122,8 @@ fn community_summary(
     tag = "communities",
     summary = "Create a community",
     description = "The creator becomes the owner and the first member. An actor may own at most \
-        3 communities. Only public communities can be created; private ones land in a later phase.",
+        3 communities. `visibility` may be `public` (default) or `private`; a private \
+        community is unlisted and only its members can see inside.",
     security(("api_key" = [])),
     request_body = CreateCommunityRequest,
     responses(
@@ -138,12 +141,18 @@ async fn create_community(
     headers: HeaderMap,
     Json(req): Json<CreateCommunityRequest>,
 ) -> Result<Response, ApiError> {
+    let visibility = match req.visibility.as_deref() {
+        Some(raw) => core_community::CommunityVisibility::parse(raw)
+            .map_err(|e| ApiError::new(e).with_request_id(&headers))?,
+        None => core_community::CommunityVisibility::Public,
+    };
+
     let community = core_community::create_community(
         state.db(),
         current.actor.id,
         &req.name,
         &req.description,
-        core_community::CommunityVisibility::Public,
+        visibility,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
@@ -204,18 +213,25 @@ async fn list_communities(
 
 /// `GET /communities/{name}` → `200`, `404`. `is_member` anonim istekte
 /// `false`.
+///
+/// Private topluluğu göremeyen okuyucuya **kapak** döner: ad ve açıklama
+/// aynı, sayaçlar sıfır, `is_member = false` (§2). Görebilen (üye, topluluk
+/// kapsamlı izin sahibi, global moderatör) ve public topluluklarda tam
+/// özet döner.
 #[utoipa::path(
     get,
     path = "/communities/{name}",
     tag = "communities",
     summary = "Read a community",
     description = "If an `Authorization` header is present, `is_member` reflects the requesting \
-        actor; anonymous requests get `false`.",
+        actor; anonymous requests get `false`. A private community a viewer may not see inside \
+        returns a cover: the same name and description, with `member_count = 0`, `post_count = 0` \
+        and `is_member = false`.",
     params(
         ("name" = String, Path, description = "Community name"),
     ),
     responses(
-        (status = 200, description = "Community summary", body = CommunitySummary),
+        (status = 200, description = "Community summary (or cover)", body = CommunitySummary),
         NotFound,
         RateLimited,
     )
@@ -226,31 +242,45 @@ async fn get_community(
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<CommunitySummary>, ApiError> {
-    let community = core_community::get_community(state.db(), &name)
+    let viewer_communities = state
+        .viewer_communities(current.0.as_ref().map(|actor| actor.actor.id))
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let is_member = match &current.0 {
-        Some(actor) => core_community::is_member(state.db(), community.id, actor.actor.id)
-            .await
-            .map_err(|e| ApiError::new(e).with_request_id(&headers))?,
-        None => false,
-    };
-
-    let summary = community_summary(&community, state.id_codec(), is_member)
+    let view = core_community::get_community_for_viewer(state.db(), &name, &viewer_communities)
+        .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let summary = match view {
+        CommunityView::Full(community) => {
+            let is_member = match &current.0 {
+                Some(actor) => core_community::is_member(state.db(), community.id, actor.actor.id)
+                    .await
+                    .map_err(|e| ApiError::new(e).with_request_id(&headers))?,
+                None => false,
+            };
+            community_summary(&community, state.id_codec(), is_member)
+        }
+        // Kapak: göremeyen okuyucuya sayaçlar sıfırlanmış özet; üyelik
+        // sorusunun cevabı zaten "hayır".
+        CommunityView::Cover(community) => community_summary(&community, state.id_codec(), false),
+    }
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(Json(summary))
 }
 
-/// `PATCH /communities/{name}` → `200`. Yalnızca sahibi veya global
-/// `community.edit` sahibi; değilse `403`.
+/// `PATCH /communities/{name}` → `200`. Yalnızca sahibi veya bu toplulukta
+/// `community.edit` sahibi; değilse `403`. `visibility` verilirse tek yönlü
+/// kural uygulanır: public → private serbest, private → public `400`.
 #[utoipa::path(
     patch,
     path = "/communities/{name}",
     tag = "communities",
-    summary = "Edit a community's description",
-    description = "Callable by the owner or a holder of the global `community.edit` permission.",
+    summary = "Edit a community",
+    description = "Callable by the owner or a holder of `community.edit` for this community. \
+        `visibility` is optional and one-way: a public community may become private, never the \
+        reverse.",
     security(("api_key" = [])),
     params(
         ("name" = String, Path, description = "Community name"),
@@ -272,12 +302,27 @@ async fn update_community(
     headers: HeaderMap,
     Json(req): Json<UpdateCommunityRequest>,
 ) -> Result<Json<CommunitySummary>, ApiError> {
+    if req.description.is_none() && req.visibility.is_none() {
+        return Err(ApiError::new(Error::Validation(
+            "provide at least one of description or visibility".to_owned(),
+        ))
+        .with_request_id(&headers));
+    }
+
+    let visibility = req
+        .visibility
+        .as_deref()
+        .map(core_community::CommunityVisibility::parse)
+        .transpose()
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
     let community = core_community::update_community(
         state.db(),
         current.actor.id,
         &current.permissions,
         &name,
-        &req.description,
+        req.description.as_deref(),
+        visibility,
     )
     .await
     .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
@@ -324,14 +369,15 @@ async fn join_community(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /communities/{name}/join` → `204`. İdempotent; sahip ayrılamaz
-/// (`400`).
+/// `DELETE /communities/{name}/join` → `204`. İdempotent; sahip ayrılırsa
+/// devralma (ya da kapsama kapanış) tetiklenir.
 #[utoipa::path(
     delete,
     path = "/communities/{name}/join",
     tag = "communities",
     summary = "Leave a community",
-    description = "Idempotent. The owner cannot leave their own community (`400`).",
+    description = "Idempotent. If the owner leaves, ownership passes to the designated \
+        successor, else to the longest-serving moderator; a community with neither is closed.",
     security(("api_key" = [])),
     params(
         ("name" = String, Path, description = "Community name"),
@@ -548,4 +594,84 @@ async fn list_community_posts(
         "posts": posts,
         "next_cursor": next_cursor,
     })))
+}
+
+// --- Kapanış ve devralma (Faz 4B-1) ------------------------------------
+
+/// `POST /communities/{name}/close` → `204`. `community.close` (o topluluk
+/// kapsamında ya da global) gerekir; zaten kapalıysa `404`.
+#[utoipa::path(
+    post,
+    path = "/communities/{name}/close",
+    tag = "communities",
+    summary = "Close a community",
+    description = "Requires `community.close` scoped to this community. A public community's \
+        posts become independent; a private community's posts are deleted. Closing an already \
+        closed community returns `404`.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+    ),
+    responses(
+        (status = 204, description = "Community closed"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
+async fn close_community(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    core_community::close_community(
+        state.db(),
+        current.actor.id,
+        &current.permissions,
+        &name,
+        None,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PUT /communities/{name}/successor` → `204`. Yalnızca sahip; hedef actor
+/// var olmalı ve silinmemiş olmalı.
+#[utoipa::path(
+    put,
+    path = "/communities/{name}/successor",
+    tag = "communities",
+    summary = "Designate a community successor",
+    description = "Owner only. The named actor inherits the community when the owner leaves or \
+        deletes their account; without one, ownership falls to the longest-serving moderator. The \
+        target must exist and not be deleted.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+    ),
+    request_body = SuccessorRequest,
+    responses(
+        (status = 204, description = "Successor designated"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
+async fn set_successor(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(req): Json<SuccessorRequest>,
+) -> Result<StatusCode, ApiError> {
+    core_community::set_successor(state.db(), current.actor.id, &name, &req.username)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -66,7 +66,7 @@ use crate::error::ProblemDetails;
         (name = "actors", description = "Actor profiles, the discovery directory, follower/following lists"),
         (name = "posts", description = "Post creation, reading, editing, deletion"),
         (name = "comments", description = "Comment tree: creation, listing, editing, deletion"),
-        (name = "communities", description = "Public communities: creation, the directory, membership, and the community feed"),
+        (name = "communities", description = "Communities: creation, the directory, membership, the community feed, and the private lifecycle (visibility, closure, succession)"),
         (name = "tags", description = "Tag popularity listing, autocomplete, post listing by tag"),
         (name = "search", description = "Content and actor search"),
         (name = "feed", description = "Home feed and following feed"),

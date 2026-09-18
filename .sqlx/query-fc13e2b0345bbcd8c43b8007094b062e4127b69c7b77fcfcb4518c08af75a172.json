@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            communities.id,\n            communities.name,\n            communities.description,\n            communities.visibility AS \"visibility: CommunityVisibility\",\n            communities.created_at,\n            communities.updated_at,\n            actors.id AS owner_id,\n            actors.username AS owner_username,\n            actors.actor_type AS \"owner_actor_type: ActorType\",\n            actors.display_name AS owner_display_name,\n            actors.bio AS owner_bio,\n            actors.created_at AS owner_created_at,\n            actors.deleted_at AS owner_deleted_at,\n            (\n                SELECT count(*) FROM community_members\n                WHERE community_members.community_id = communities.id\n            ) AS \"member_count!\",\n            (\n                SELECT count(*) FROM contents\n                WHERE contents.community_id = communities.id\n                  AND contents.content_type = 'post'::content_type\n                  AND contents.deleted_at IS NULL\n            ) AS \"post_count!\"\n        FROM communities\n        JOIN actors ON actors.id = communities.owner_actor_id\n        WHERE communities.name = $1\n        ",
+  "query": "\n        SELECT\n            communities.id,\n            communities.name,\n            communities.description,\n            communities.visibility AS \"visibility: CommunityVisibility\",\n            communities.created_at,\n            communities.updated_at,\n            actors.id AS owner_id,\n            actors.username AS owner_username,\n            actors.actor_type AS \"owner_actor_type: ActorType\",\n            actors.display_name AS owner_display_name,\n            actors.bio AS owner_bio,\n            actors.created_at AS owner_created_at,\n            actors.deleted_at AS owner_deleted_at,\n            (\n                SELECT count(*) FROM community_members\n                WHERE community_members.community_id = communities.id\n            ) AS \"member_count!\",\n            (\n                SELECT count(*) FROM contents\n                WHERE contents.community_id = communities.id\n                  AND contents.content_type = 'post'::content_type\n                  AND contents.deleted_at IS NULL\n            ) AS \"post_count!\"\n        FROM communities\n        JOIN actors ON actors.id = communities.owner_actor_id\n        WHERE communities.visibility = 'public'::community_visibility\n          AND communities.closed_at IS NULL\n          AND (\n              $1::timestamptz IS NULL\n              OR (communities.created_at, communities.id) < ($1::timestamptz, $2::bigint)\n          )\n        ORDER BY communities.created_at DESC, communities.id DESC\n        LIMIT $3\n        ",
   "describe": {
     "columns": [
       {
@@ -191,12 +191,9 @@
     ],
     "parameters": {
       "Left": [
-        {
-          "Custom": {
-            "name": "citext",
-            "kind": "Simple"
-          }
-        }
+        "Timestamptz",
+        "Int8",
+        "Int8"
       ]
     },
     "nullable": [
@@ -217,5 +214,5 @@
       null
     ]
   },
-  "hash": "fcff9ca4bfb2ff59e386a6bda03e7e57f978120ece83a4d3d4b4964682ec7f96"
+  "hash": "fc13e2b0345bbcd8c43b8007094b062e4127b69c7b77fcfcb4518c08af75a172"
 }

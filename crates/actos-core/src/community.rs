@@ -10,13 +10,20 @@
 //! fonksiyonlarını çağırıp HTTP'ye çevirir (bkz. `crate::actor`/
 //! `crate::content` modüllerindeki aynı katman ayrımı).
 //!
-//! ## Faz 2: yalnızca public
+//! ## Faz 4B-1: özel toplulukların yaşam döngüsü
 //!
-//! `visibility` sütunu ve [`CommunityVisibility`] şimdiden var (şema son
-//! şeklini alsın diye), ama [`create_community`] `private` değerini
-//! reddediyor: Faz 4'ün görünürlük kapısı tüm okuma yollarına yayılmadan
-//! özel toplulukların var olması bir sızıntı olurdu. Geri kalan kod bu
-//! yüzden "her topluluk public" varsayabilir.
+//! Faz 4A görünürlük kapısını ([`crate::visibility`]) tüm okuma yollarına
+//! yaydı; 4B-1 anahtarı çeviriyor: [`create_community`] artık `private`
+//! kabul ediyor, [`get_community_for_viewer`] göremeyene **kapak** dönüyor
+//! (§2), [`update_community`] public→private tek yönlü geçişini uyguluyor
+//! ve [`close_community`] / [`handle_owner_departure_in_tx`] kapanış ile
+//! devralmayı (§4) yürütüyor. Davet/başvuru akışı ayrı bir iştir; burada
+//! yok.
+//!
+//! **Kapalı topluluk her uçta `404`** (`closed_at IS NOT NULL`): kapanış
+//! satırı silmez, adı rezerve tutar. Public bir topluluğun postları
+//! bağımsıza bırakılır (`community_id = NULL`), private'ınki soft-delete
+//! edilir — kapalı kapı ardında yazılan içerik yok olur (§4).
 //!
 //! ## Sayfalama
 //!
@@ -29,11 +36,11 @@
 //! açıkça yazılıyor.
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres};
+use sqlx::{PgConnection, PgPool, Postgres};
 
 use crate::{
     actor::{Page, paginate, split_new_cursor},
-    auth::{ActorRecord, ActorType, Grant, Permission},
+    auth::{ActorRecord, ActorType, Grant, Permission, PermissionScope},
     content::{BodyFormat, Content, ContentType, PostSort},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
@@ -93,6 +100,22 @@ impl CommunityVisibility {
         match self {
             Self::Public => "public",
             Self::Private => "private",
+        }
+    }
+
+    /// İstemciden gelen `visibility` dizesini ayrıştırır.
+    ///
+    /// # Errors
+    /// `public`/`private` dışındaki her değer [`Error::Validation`] —
+    /// sessizce varsayılana düşmek, yazım hatası yapan istemciye istediği
+    /// görünürlüğü vermezdi ([`PostSort::parse`]'teki aynı gerekçe).
+    pub fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "public" => Ok(Self::Public),
+            "private" => Ok(Self::Private),
+            other => Err(Error::Validation(format!(
+                "invalid visibility value: \"{other}\" (expected: public, private)"
+            ))),
         }
     }
 }
@@ -179,6 +202,9 @@ pub(crate) struct CommunityLookup {
     pub id: i64,
     pub owner_actor_id: i64,
     pub visibility: CommunityVisibility,
+    /// Sahibin atadığı devralıcı (§4) — [`handle_owner_departure_in_tx`]
+    /// kararında kullanılıyor.
+    pub successor_actor_id: Option<i64>,
 }
 
 // [`Community`] satırlarının ortak `SELECT` gövdesi. `sqlx::query_as!`
@@ -225,6 +251,10 @@ fn validate_description(raw: &str) -> Result<String> {
 
 /// İsimden topluluk kimliğini çözer; yoksa [`Error::NotFound`].
 ///
+/// **Kapalı topluluk da yok sayılır** (§4): `closed_at IS NOT NULL` bir
+/// satır buradan geçmez, dolayısıyla kapalı bir topluluğa post açmak da
+/// [`Error::NotFound`] döner.
+///
 /// `E: Executor` olması bilinçli: [`create_community`] bunu bir `&mut
 /// PgConnection` (transaction) üzerinden çağırırken liste/güncelleme yolları
 /// `&PgPool` geçiriyor — aynı sorgunun iki kopyası olmasın diye.
@@ -238,7 +268,7 @@ where
 {
     let normalized = text::normalize_text(name);
     sqlx::query_scalar!(
-        r#"SELECT id FROM communities WHERE name = $1"#,
+        r#"SELECT id FROM communities WHERE name = $1 AND closed_at IS NULL"#,
         normalized.as_str()
     )
     .fetch_optional(executor)
@@ -246,11 +276,12 @@ where
     .ok_or(Error::NotFound("community"))
 }
 
-/// [`resolve_community_id_in`]'e ek olarak sahibi ve görünürlüğü de getirir.
+/// [`resolve_community_id_in`]'e ek olarak sahibi, görünürlüğü ve atanmış
+/// devralıcıyı da getirir.
 ///
 /// # Errors
-/// Böyle bir topluluk yoksa [`Error::NotFound`]; veritabanı hatası
-/// [`Error::Database`].
+/// Böyle bir topluluk yoksa (ya da kapalıysa) [`Error::NotFound`];
+/// veritabanı hatası [`Error::Database`].
 pub(crate) async fn lookup_community_in<'e, E>(executor: E, name: &str) -> Result<CommunityLookup>
 where
     E: sqlx::Executor<'e, Database = Postgres>,
@@ -258,9 +289,10 @@ where
     let normalized = text::normalize_text(name);
     let row = sqlx::query!(
         r#"
-        SELECT id, owner_actor_id, visibility AS "visibility: CommunityVisibility"
+        SELECT id, owner_actor_id, visibility AS "visibility: CommunityVisibility",
+               successor_actor_id
         FROM communities
-        WHERE name = $1
+        WHERE name = $1 AND closed_at IS NULL
         "#,
         normalized.as_str(),
     )
@@ -272,6 +304,7 @@ where
         id: row.id,
         owner_actor_id: row.owner_actor_id,
         visibility: row.visibility,
+        successor_actor_id: row.successor_actor_id,
     })
 }
 
@@ -369,8 +402,8 @@ pub async fn names_for(
 /// ikisi de "2 topluluğum var" okuyup sınırı aşabilirdi. Sınır aşılırsa
 /// [`Error::Validation`].
 ///
-/// **Faz 2 `visibility = Private` değerini reddeder** — gerekçe modül
-/// dokümantasyonunda.
+/// `visibility` dâhil her iki değeri de kabul eder (Faz 4B-1); `private`
+/// oluşturmak topluluğu dizinden gizler ve kapağını gösterir (§2).
 ///
 /// # Errors
 /// İsim [`text::validate_community_name`]'den, açıklama
@@ -386,12 +419,6 @@ pub async fn create_community(
 ) -> Result<Community> {
     let name = text::validate_community_name(name).map_err(|e| Error::Validation(e.to_string()))?;
     let description = validate_description(description)?;
-
-    if visibility != CommunityVisibility::Public {
-        return Err(Error::Validation(
-            "private communities are not available yet".to_owned(),
-        ));
-    }
 
     let mut tx = pool.begin().await?;
 
@@ -481,18 +508,27 @@ pub async fn create_community(
 }
 
 /// `PATCH /communities/{name}`: yalnızca sahibi **veya** bu toplulukta
-/// `community.edit` sahibi; açıklamayı günceller.
+/// `community.edit` sahibi; açıklamayı ve (isteğe bağlı) görünürlüğü
+/// günceller.
+///
+/// Görünürlük geçişi **tek yönlüdür** (§2): public → private serbest,
+/// private → public [`Error::Validation`]. Gerekçe: private'a geçmek zaten
+/// açık olan içeriği gizler (zararsız), ama public'e dönmek kapalı kapı
+/// ardında tutulan konuşmaları ifşa eder. Aynı değeri tekrar göndermek
+/// hata değil, etkisiz bir güncellemedir.
 ///
 /// # Errors
-/// Topluluk yoksa [`Error::NotFound`]; çağıran ne sahibi ne bu toplulukta
-/// `community.edit` sahibiyse [`Error::Forbidden`]; açıklama doğrulamadan
-/// geçmezse [`Error::Validation`]; veritabanı hatası [`Error::Database`].
+/// Topluluk yoksa (ya da kapalıysa) [`Error::NotFound`]; çağıran ne sahibi
+/// ne bu toplulukta `community.edit` sahibiyse [`Error::Forbidden`];
+/// açıklama doğrulamadan geçmezse ya da private→public istenirse
+/// [`Error::Validation`]; veritabanı hatası [`Error::Database`].
 pub async fn update_community(
     pool: &PgPool,
     actor_id: i64,
     permissions: &[Grant],
     name: &str,
-    new_description: &str,
+    new_description: Option<&str>,
+    new_visibility: Option<CommunityVisibility>,
 ) -> Result<Community> {
     let lookup = lookup_community(pool, name).await?;
 
@@ -503,12 +539,31 @@ pub async fn update_community(
         return Err(Error::Forbidden);
     }
 
-    let description = validate_description(new_description)?;
+    // `None` = alanı değiştirme (kısmi güncelleme): yalnızca görünürlüğü
+    // çevirmek isteyen bir istemci açıklamayı yeniden göndermek zorunda
+    // kalmasın — aksi hâlde araya giren bir düzenleme sessizce ezilirdi.
+    let description = new_description.map(validate_description).transpose()?;
+
+    if new_visibility == Some(CommunityVisibility::Public)
+        && lookup.visibility == CommunityVisibility::Private
+    {
+        return Err(Error::Validation(
+            "a private community cannot become public".to_owned(),
+        ));
+    }
+
+    // `None` = görünürlüğe dokunma; aynı değeri yazmak da etkisiz.
+    let visibility = new_visibility.unwrap_or(lookup.visibility);
 
     sqlx::query!(
-        r#"UPDATE communities SET description = $2, updated_at = now() WHERE id = $1"#,
+        r#"
+        UPDATE communities
+        SET description = COALESCE($2, description), visibility = $3, updated_at = now()
+        WHERE id = $1
+        "#,
         lookup.id,
         description,
+        visibility as CommunityVisibility,
     )
     .execute(pool)
     .await?;
@@ -520,16 +575,21 @@ pub async fn update_community(
 ///
 /// **İdempotent:** zaten üye olmak hata değil (`ON CONFLICT DO NOTHING`).
 ///
+/// Private topluluğa doğrudan katılma **reddedilir** (§3): oraya giriş
+/// davet ya da başvuru iledir (ayrı iş). `Error::Validation`, `403` değil —
+/// istek yanlış biçimde kurulmuş, çağıranın kim olduğu değil.
+///
 /// # Errors
-/// Topluluk yoksa [`Error::NotFound`]; topluluk private ise (Faz 2'de
-/// oluşturulamaz ama şema izin veriyor) [`Error::Validation`]; veritabanı
-/// hatası [`Error::Database`].
+/// Topluluk yoksa (ya da kapalıysa) [`Error::NotFound`]; topluluk private
+/// ise [`Error::Validation`]; çağıran o topluluktan banlıysa
+/// [`Error::Banned`]; veritabanı hatası [`Error::Database`].
 pub async fn join_community(pool: &PgPool, actor_id: i64, name: &str) -> Result<()> {
     let lookup = lookup_community(pool, name).await?;
 
     if lookup.visibility != CommunityVisibility::Public {
         return Err(Error::Validation(
-            "private communities are not available yet".to_owned(),
+            "private communities cannot be joined directly; use an invitation or application"
+                .to_owned(),
         ));
     }
 
@@ -556,31 +616,374 @@ pub async fn join_community(pool: &PgPool, actor_id: i64, name: &str) -> Result<
 
 /// `DELETE /communities/{name}/join`: üyelikten ayrılma.
 ///
-/// **Sahip ayrılamaz** ([`Error::Validation`]): devralma kuralları Faz 4'ün
-/// işi, o gelene kadar sahipsiz topluluk oluşmasın diye kapı burada.
+/// **Sahip ayrılabilir** (Faz 4B-1): ayrılma devralmayı tetikler (§4). Yerine
+/// atanmış ve hâlâ canlı bir devralıcı varsa sahiplik ona geçer; yoksa en
+/// kıdemli topluluk moderatörü sahiplenir; o da yoksa topluluk kapanır
+/// ([`handle_owner_departure_in_tx`]).
+///
 /// **İdempotent:** üye olmayanın ayrılma isteği hata değil.
 ///
 /// # Errors
-/// Topluluk yoksa [`Error::NotFound`]; çağıran sahibiyse
-/// [`Error::Validation`]; veritabanı hatası [`Error::Database`].
+/// Topluluk yoksa (ya da kapalıysa) [`Error::NotFound`]; veritabanı hatası
+/// [`Error::Database`].
 pub async fn leave_community(pool: &PgPool, actor_id: i64, name: &str) -> Result<()> {
     let lookup = lookup_community(pool, name).await?;
 
+    let mut tx = pool.begin().await?;
+
     if lookup.owner_actor_id == actor_id {
-        return Err(Error::Validation(
-            "the owner cannot leave their community".to_owned(),
-        ));
+        transfer_or_close_in_tx(
+            &mut tx,
+            actor_id,
+            lookup.id,
+            lookup.visibility,
+            lookup.successor_actor_id,
+        )
+        .await?;
+    } else {
+        sqlx::query!(
+            r#"DELETE FROM community_members WHERE community_id = $1 AND actor_id = $2"#,
+            lookup.id,
+            actor_id,
+        )
+        .execute(&mut *tx)
+        .await?;
     }
 
-    sqlx::query!(
-        r#"DELETE FROM community_members WHERE community_id = $1 AND actor_id = $2"#,
-        lookup.id,
+    tx.commit().await?;
+
+    Ok(())
+}
+
+// --- Kapanış ve devralma (Faz 4B-1) ------------------------------------
+
+/// `POST /communities/{name}/close`: topluluğu kapatır.
+///
+/// Yetki [`crate::authz::has_for`] ile `community.close` için, **hedef
+/// topluluğun** kapsamında sorulur: sahip bu izni zaten topluluk kapsamlı
+/// bir satır olarak tutar, global `community.close` her topluluğu kapatır.
+///
+/// Kapanış satırı silmez; `closed_at` işaretler (§4). İçeriğin kaderi
+/// görünürlüğe bağlıdır: **public** topluluğun içeriği bağımsıza bırakılır
+/// (`community_id = NULL`; yazar/oy/yorum ağı korunur), **private** topluluğun
+/// içeriği soft-delete edilir — kapalı kapı ardında yazılan metin bağımsız
+/// bir post olarak herkese açılamaz.
+///
+/// Zaten kapalı bir topluluğu kapatmak [`Error::NotFound`]: kapanış kalıcıdır
+/// ve tekrarlanabilir bir eylem değildir.
+///
+/// # Errors
+/// Topluluk yoksa (ya da kapalıysa) [`Error::NotFound`]; çağıranın
+/// `community.close` yetkisi yoksa [`Error::Forbidden`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn close_community(
+    pool: &PgPool,
+    actor_id: i64,
+    permissions: &[Grant],
+    name: &str,
+    reason: Option<&str>,
+) -> Result<()> {
+    let lookup = lookup_community(pool, name).await?;
+
+    if !crate::authz::has_for(permissions, Permission::CommunityClose, Some(lookup.id)) {
+        return Err(Error::Forbidden);
+    }
+
+    let mut tx = pool.begin().await?;
+
+    apply_closure_in_tx(&mut tx, lookup.id, lookup.visibility).await?;
+
+    // Denetim izi hedefi topluluğun kendisi (`target_type = "community"`):
+    // içerik silme/kick kayıtlarından ayırt edilebilsin diye.
+    crate::moderation::log_action(
+        &mut tx,
         actor_id,
+        "community_close",
+        "community",
+        lookup.id,
+        reason,
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// `PUT /communities/{name}/successor`: sahibin devralıcı ataması.
+///
+/// **Yalnızca sahip** ([`Error::Forbidden`]): `community.edit` bu kararı
+/// vermez. Hedef **var olmalı ve silinmemiş olmalı** ([`Error::NotFound`]).
+/// Sahibin kendisini göndermesi atamayı **temizler**: ayrılış anında
+/// [`resolve_successor_in_tx`] sahibi aday saymaz, sıra en kıdemli
+/// moderatöre (yoksa kapanışa) geçer.
+///
+/// # Errors
+/// Topluluk yoksa (ya da kapalıysa) [`Error::NotFound`]; çağıran sahibi
+/// değilse [`Error::Forbidden`]; hedef actor yoksa/silinmişse
+/// [`Error::NotFound`]; veritabanı hatası [`Error::Database`].
+pub async fn set_successor(
+    pool: &PgPool,
+    actor_id: i64,
+    name: &str,
+    successor_username: &str,
+) -> Result<()> {
+    let lookup = lookup_community(pool, name).await?;
+
+    if lookup.owner_actor_id != actor_id {
+        return Err(Error::Forbidden);
+    }
+
+    let normalized = text::normalize_text(successor_username);
+    let target_id = sqlx::query_scalar!(
+        r#"SELECT id FROM actors WHERE username = $1 AND deleted_at IS NULL"#,
+        normalized,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(Error::NotFound("actor"))?;
+
+    sqlx::query!(
+        r#"UPDATE communities SET successor_actor_id = $2, updated_at = now() WHERE id = $1"#,
+        lookup.id,
+        target_id,
     )
     .execute(pool)
     .await?;
 
     Ok(())
+}
+
+/// Sahibi ayrılan **her** topluluk için devralma ya da kapanış uygular.
+///
+/// [`crate::actor::delete_account`] hesabı soft-delete ederken, silinen
+/// aktörün sahibi olduğu bütün topluluklar için çağırır — ayrılma
+/// ([`leave_community`]) ise yalnızca tek bir topluluk için
+/// [`transfer_or_close_in_tx`]'i doğrudan çağırır.
+///
+/// Çağıranın transaction'ında çalışır çünkü hesap silme ile devralma ya
+/// hep birlikte gerçekleşmeli ya da hiç: sahibi silinmiş ama devralınmamış
+/// bir topluluk ara durumu olamaz.
+///
+/// # Errors
+/// Veritabanı hatası [`Error::Database`].
+pub async fn handle_owner_departure_in_tx(tx: &mut PgConnection, owner_id: i64) -> Result<()> {
+    let owned = sqlx::query!(
+        r#"
+        SELECT id,
+               visibility AS "visibility: CommunityVisibility",
+               successor_actor_id
+        FROM communities
+        WHERE owner_actor_id = $1 AND closed_at IS NULL
+        ORDER BY id
+        "#,
+        owner_id,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    for community in owned {
+        transfer_or_close_in_tx(
+            &mut *tx,
+            owner_id,
+            community.id,
+            community.visibility,
+            community.successor_actor_id,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+/// Topluluğu kapatır ve içeriğini görünürlüğe göre tasfiye eder.
+///
+/// `close` ucu ile devralıcısız kapanış aynı davranışı paylaşsın diye tek
+/// yerde; çağıran transaction'ı yönetir.
+async fn apply_closure_in_tx(
+    tx: &mut PgConnection,
+    community_id: i64,
+    visibility: CommunityVisibility,
+) -> Result<()> {
+    sqlx::query!(
+        r#"UPDATE communities SET closed_at = now(), updated_at = now() WHERE id = $1"#,
+        community_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    match visibility {
+        // Public: post ve yorumlar bağımsız kalır. Yazar, oy ve yorum
+        // ağı korunur; yalnızca topluluk bağı kopar (§4).
+        CommunityVisibility::Public => {
+            sqlx::query!(
+                r#"UPDATE contents SET community_id = NULL WHERE community_id = $1"#,
+                community_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        // Private: kapalı kapı ardındaki içerik bağımsız olamaz, yok olur.
+        CommunityVisibility::Private => {
+            sqlx::query!(
+                r#"UPDATE contents SET deleted_at = now()
+                   WHERE community_id = $1 AND deleted_at IS NULL"#,
+                community_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Tek bir toplulukta sahip ayrılışını işler: devral ya da kapat.
+///
+/// Devralma sırası (§4): atanmış ve hâlâ canlı devralıcı; yoksa en kıdemli
+/// topluluk kapsamlı izin sahibi. Devralan kişi üye yapılır ve
+/// [`OWNER_PERMISSIONS`] satırları ona gerçek kayıtlar olarak verilir;
+/// ayrılan sahibin o topluluktaki izinleri geri alınır. Devralan yoksa
+/// topluluk kapanır ([`apply_closure_in_tx`]).
+async fn transfer_or_close_in_tx(
+    tx: &mut PgConnection,
+    owner_id: i64,
+    community_id: i64,
+    visibility: CommunityVisibility,
+    designated_successor: Option<i64>,
+) -> Result<()> {
+    let successor =
+        resolve_successor_in_tx(tx, owner_id, community_id, designated_successor).await?;
+
+    match successor {
+        Some(new_owner) => {
+            sqlx::query!(
+                r#"
+                UPDATE communities
+                SET owner_actor_id = $2, successor_actor_id = NULL, updated_at = now()
+                WHERE id = $1
+                "#,
+                community_id,
+                new_owner,
+            )
+            .execute(&mut *tx)
+            .await?;
+
+            // Sahip her zaman üyedir; devralan üye değilse (yalnızca izin
+            // sahibi olabilirdi) önce üye yapıyoruz.
+            sqlx::query!(
+                r#"
+                INSERT INTO community_members (community_id, actor_id)
+                VALUES ($1, $2)
+                ON CONFLICT DO NOTHING
+                "#,
+                community_id,
+                new_owner,
+            )
+            .execute(&mut *tx)
+            .await?;
+
+            for permission in OWNER_PERMISSIONS {
+                crate::auth::grant_permission_in_tx(
+                    &mut *tx,
+                    new_owner,
+                    *permission,
+                    PermissionScope::Community,
+                    Some(community_id),
+                    None,
+                )
+                .await?;
+            }
+
+            // Ayrılan sahibin bu topluluktaki tüm topluluk kapsamlı
+            // izinleri düşer; sahiplik artık onda değil.
+            sqlx::query!(
+                r#"DELETE FROM permissions WHERE actor_id = $1 AND community_id = $2"#,
+                owner_id,
+                community_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        None => {
+            apply_closure_in_tx(tx, community_id, visibility).await?;
+
+            crate::moderation::log_action(
+                &mut *tx,
+                owner_id,
+                "community_close",
+                "community",
+                community_id,
+                Some("owner departed with no successor"),
+            )
+            .await?;
+        }
+    }
+
+    // Ayrılan sahip artık bu topluluğun üyesi de değil. Kapanış dalında da
+    // geçerli: kapalı topluluğun üye listesi anlamsız.
+    sqlx::query!(
+        r#"DELETE FROM community_members WHERE community_id = $1 AND actor_id = $2"#,
+        community_id,
+        owner_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    Ok(())
+}
+
+/// Devralıcıyı seçer: atanmış ve canlı aday, yoksa en kıdemli moderatör.
+///
+/// "En kıdemli" [(§4)] ölçütü `permissions.granted_at ASC, actor_id ASC`:
+/// bu toplulukta en eski topluluk kapsamlı izni almış, silinmemiş aktör.
+/// Sahibin kendisi hariç tutulur — ada bağlı olmasa bile "sahibini devral"
+/// saçma olurdu. Kıdem, başka yerde kazanılmış bir itibarın aksine burada
+/// geriye dönük edinilemez ve herkes için öngörülebilir.
+///
+/// Atanmış aday sahibin kendisiyse de yok sayılır: `set_successor`'ın
+/// kendini göndermeyi kabul etmesi "atanmış devralıcıyı temizle" demenin
+/// yoludur (bkz. `SuccessorRequest` dokümanı), aksi hâlde sahip ayrılırken
+/// kendi kendini devralıp izinsiz/üyesiz kalırdı.
+async fn resolve_successor_in_tx(
+    tx: &mut PgConnection,
+    owner_id: i64,
+    community_id: i64,
+    designated: Option<i64>,
+) -> Result<Option<i64>> {
+    if let Some(candidate) = designated.filter(|candidate| *candidate != owner_id) {
+        let live = sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                   SELECT 1 FROM actors WHERE id = $1 AND deleted_at IS NULL
+               ) AS "exists!""#,
+            candidate,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if live {
+            return Ok(Some(candidate));
+        }
+    }
+
+    let longest_serving = sqlx::query_scalar!(
+        r#"
+        SELECT p.actor_id
+        FROM permissions p
+        JOIN actors a ON a.id = p.actor_id
+        WHERE p.community_id = $1
+          AND p.scope = 'community'::permission_scope
+          AND p.actor_id <> $2
+          AND a.deleted_at IS NULL
+        ORDER BY p.granted_at ASC, p.actor_id ASC
+        LIMIT 1
+        "#,
+        community_id,
+        owner_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    Ok(longest_serving)
 }
 
 /// `DELETE /communities/{name}/members/{username}`: bir üyeyi topluluktan
@@ -660,8 +1063,12 @@ pub async fn kick_member(
 
 /// `GET /communities/{name}`: tek topluluk + sahibi + sayaçlar.
 ///
+/// Kapanmış topluluk [`Error::NotFound`] (§4): satır dursa da artık bir
+/// topluluk ucu değildir.
+///
 /// # Errors
-/// Topluluk yoksa [`Error::NotFound`]; veritabanı hatası [`Error::Database`].
+/// Topluluk yoksa ya da kapalıysa [`Error::NotFound`]; veritabanı hatası
+/// [`Error::Database`].
 pub async fn get_community(pool: &PgPool, name: &str) -> Result<Community> {
     let normalized = text::normalize_text(name);
 
@@ -694,7 +1101,7 @@ pub async fn get_community(pool: &PgPool, name: &str) -> Result<Community> {
             ) AS "post_count!"
         FROM communities
         JOIN actors ON actors.id = communities.owner_actor_id
-        WHERE communities.name = $1
+        WHERE communities.name = $1 AND communities.closed_at IS NULL
         "#,
         normalized.as_str(),
     )
@@ -703,6 +1110,51 @@ pub async fn get_community(pool: &PgPool, name: &str) -> Result<Community> {
     .ok_or(Error::NotFound("community"))?;
 
     Ok(row.into())
+}
+
+/// [`get_community`]'ın **izleyiciye göre** karar veren hâli (COMMUNITY_PLAN.md §2).
+///
+/// Public topluluk herkese tam döner. Private topluluk yalnızca görebilene
+/// (üye, topluluk kapsamlı izin sahibi, global moderatör) tam döner;
+/// göremeyen `viewer_communities`'te yoksa **kapak** alır: aynı ad ve
+/// açıklama, ama `member_count = 0`, `post_count = 0` — içeriden hiçbir şey
+/// sızmaz. "Görebilir mi" kararı [`crate::visibility::visible_community_ids`]'in
+/// ürettiği kümeye bırakılıyor; burada ikinci bir yetki mantığı yok.
+///
+/// Dönen [`Community`]'in sayaçları kapak dalında sıfırlanır; çağıran
+/// `is_member`'ı kapak için `false` kabul etmeli.
+///
+/// # Errors
+/// Topluluk yoksa ya da kapalıysa [`Error::NotFound`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn get_community_for_viewer(
+    pool: &PgPool,
+    name: &str,
+    viewer_communities: &[i64],
+) -> Result<CommunityView> {
+    let mut community = get_community(pool, name).await?;
+
+    if community.visibility == CommunityVisibility::Private
+        && !viewer_communities.contains(&community.id)
+    {
+        community.member_count = 0;
+        community.post_count = 0;
+        return Ok(CommunityView::Cover(community));
+    }
+
+    Ok(CommunityView::Full(community))
+}
+
+/// [`get_community_for_viewer`]'ın iki dalı.
+///
+/// [`Community`]'i ayrı bir kapak tipine kopyalamak yerine taşıyoruz: kapak
+/// yalnızca sayaçları sıfırlanmış bir topluluktur, DTO aynı kalır. Enum,
+/// handler'ın "özel mi, kapak mı" ayrımını açıkça yazmasını sağlıyor.
+pub enum CommunityView {
+    /// İzleyici içeriyi görebiliyor (ya da topluluk public).
+    Full(Community),
+    /// Private topluluk, izleyici göremiyor: sayaçlar sıfır.
+    Cover(Community),
 }
 
 /// `GET /communities?cursor=&limit=`: keşif dizini — yalnızca public
@@ -747,6 +1199,7 @@ pub async fn list_directory(
         FROM communities
         JOIN actors ON actors.id = communities.owner_actor_id
         WHERE communities.visibility = 'public'::community_visibility
+          AND communities.closed_at IS NULL
           AND (
               $1::timestamptz IS NULL
               OR (communities.created_at, communities.id) < ($1::timestamptz, $2::bigint)

@@ -174,6 +174,8 @@ const EXPECTED_PATHS: &[&str] = &[
     "/communities/{name}/members",
     "/communities/{name}/members/{username}",
     "/communities/{name}/posts",
+    "/communities/{name}/close",
+    "/communities/{name}/successor",
     // tags
     "/tags/search",
     "/tags",

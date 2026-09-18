@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE contents SET deleted_at = now()\n                   WHERE community_id = $1 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c3a0d0d4a3735ed1152c4b6b2faff7eedbd4ef6b6091fad06ef29dc284f8dd72"
+}

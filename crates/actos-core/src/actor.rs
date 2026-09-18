@@ -302,12 +302,14 @@ where
 
 /// `DELETE /actors/me`: hesabı soft-delete eder.
 ///
-/// Üç adım **tek transaction'da**: (1) sunulan kurtarma kodu tüketilir —
+/// Adımlar **tek transaction'da**: (1) sunulan kurtarma kodu tüketilir —
 /// yanlış kod hiçbir yan etki bırakmadan [`Error::InvalidKey`] döner; (2)
 /// `actors.deleted_at` işaretlenir; (3) actor'ün **tüm** aktif API
-/// key'leri iptal edilir. Üçü birlikte commit olmazsa hiçbiri kalıcı
-/// olmaz — "hesap silindi ama key hâlâ çalışıyor" gibi bir ara durum
-/// oluşamaz.
+/// key'leri iptal edilir; (4) aktörün sahibi olduğu her topluluk devralınır
+/// ya da kapanır ([`crate::community::handle_owner_departure_in_tx`], §4) ve
+/// kalan topluluk kapsamlı izinleri düşer. Hepsi birlikte commit olmazsa
+/// hiçbiri kalıcı olmaz — "hesap silindi ama key hâlâ çalışıyor" ya da
+/// "sahibi silinmiş ama devralınmamış topluluk" gibi ara durum oluşamaz.
 ///
 /// Kod doğrulaması (Argon2, pahalı) bilerek transaction **dışında**
 /// yapılıyor — bkz. `crate::auth::verify_recovery_code_for_actor` üzerindeki
@@ -337,6 +339,22 @@ pub async fn delete_account(pool: &PgPool, actor_id: i64, recovery_code: &str) -
 
     sqlx::query!(
         r#"UPDATE api_keys SET revoked_at = now() WHERE actor_id = $1 AND revoked_at IS NULL"#,
+        actor_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Devralma (COMMUNITY_PLAN.md §4): silinen aktörün sahibi olduğu her
+    // topluluk ya atanmış/kıdemli bir devralıcıya geçer ya da kapanır.
+    // Hesap silme ile **aynı transaction'da**: "sahibi silinmiş ama
+    // devralınmamış topluluk" diye bir ara durum olamaz.
+    crate::community::handle_owner_departure_in_tx(&mut tx, actor_id).await?;
+
+    // Silinen aktörün sahibi olmadığı topluluklardaki moderatörlükleri de
+    // düşer. Sahibi olduğu toplulukların izinleri yukarıdaki devralma
+    // adımında zaten geri alındı; bu, kalan her şeyi süpürüyor.
+    sqlx::query!(
+        r#"DELETE FROM permissions WHERE actor_id = $1 AND community_id IS NOT NULL"#,
         actor_id,
     )
     .execute(&mut *tx)
