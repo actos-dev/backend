@@ -1,6 +1,6 @@
 # Veritabanı Şeması
 
-> Bu doküman 17 migration'dan (`migrations/0001_extensions.up.sql` — `migrations/0017_triggers.up.sql`)
+> Bu doküman 34 migration'dan (`migrations/0001_extensions.up.sql` — `migrations/0034_cross_posts.up.sql`)
 > çıkarılmıştır. İsimlendirme ve tasarım kararlarının genel gerekçesi için
 > `docs/db-conventions.md`'ye bakın; burada asıl konu şemanın kendisidir.
 
@@ -19,7 +19,7 @@ tabloları olmasını sağlar.
 
 ## 2. ER diyagramı
 
-Diyagram 17 migration'daki tüm tabloları kapsar. Okunurluk için her tabloda
+Diyagram 34 migration'daki tüm tabloları kapsar. Okunurluk için her tabloda
 sadece PK/FK ve birkaç ayırt edici kolon gösterilmiştir; tam kolon listesi
 için §3'teki tablo referanslarına bakın.
 
@@ -33,14 +33,31 @@ erDiagram
     actors ||--o{ saves : "saves"
     actors ||--o{ follows : "follows (follower)"
     actors ||--o{ follows : "is followed by"
-    actors ||--o| admin_roles : "may hold"
-    actors ||--o{ admin_roles : "grants (granted_by)"
-    actors ||--o| bans : "may be banned"
+    actors ||--o{ permissions : "may hold"
+    actors ||--o{ permissions : "grants (granted_by)"
+    actors ||--o{ communities : "owns"
+    actors ||--o{ community_members : "belongs to"
+    actors ||--o{ community_invitations : "is invited (invited_actor_id)"
+    actors ||--o{ community_invitations : "invites (invited_by)"
+    actors ||--o{ community_applications : "applies (applicant_actor_id)"
+    actors ||--o{ community_applications : "resolves (resolved_by)"
+    actors ||--o{ moderation_jobs : "targets (actor_id)"
+    actors ||--o{ moderation_jobs : "requests (requested_by)"
+    actors ||--o{ bans : "may be banned"
     actors ||--o{ bans : "issues (banned_by)"
     actors ||--o{ reports : "files (reporter)"
     actors ||--o{ reports : "resolves"
     actors ||--o{ admin_actions_log : "performs"
+    communities ||--o{ permissions : "scopes (community_id)"
+    communities ||--o{ community_members : "has"
+    communities ||--o{ community_invitations : "receives"
+    communities ||--o{ community_applications : "receives"
+    communities ||--o{ moderation_jobs : "scopes"
+    communities ||--o{ contents : "contains (community_id)"
+    communities ||--o{ bans : "scopes (community_id)"
+    communities ||--o{ reports : "scopes (community_id)"
     contents ||--o{ contents : "replies to (parent_content_id)"
+    contents ||--o{ contents : "cross-posts (cross_post_source_id)"
     contents ||--o{ content_tags : "tagged with"
     tags ||--o{ content_tags : "applied to"
     contents ||--o{ attachments : "has"
@@ -76,6 +93,8 @@ erDiagram
         bigint actor_id FK
         bigint root_post_id FK
         bigint parent_content_id FK
+        bigint community_id FK
+        bigint cross_post_source_id FK
         ltree path
         int depth
         content_type content_type
@@ -118,14 +137,60 @@ erDiagram
         bigint content_id PK, FK
     }
 
-    admin_roles {
-        bigint actor_id PK, FK
-        admin_role role
+    permissions {
+        bigint actor_id FK
+        permission permission
+        permission_scope scope
+        bigint community_id FK
         bigint granted_by FK
+        timestamptz granted_at
+    }
+
+    communities {
+        bigint id PK
+        citext name UK
+        community_visibility visibility
+        bigint owner_actor_id FK
+        bigint successor_actor_id FK
+        timestamptz closed_at
+    }
+
+    community_members {
+        bigint community_id PK, FK
+        bigint actor_id PK, FK
+        timestamptz joined_at
+    }
+
+    community_invitations {
+        bigint id PK
+        bigint community_id FK
+        bigint invited_actor_id FK
+        bigint invited_by FK
+        invitation_status status
+        timestamptz resolved_at
+    }
+
+    community_applications {
+        bigint id PK
+        bigint community_id FK
+        bigint applicant_actor_id FK
+        bigint resolved_by FK
+        application_status status
+        timestamptz resolved_at
+    }
+
+    moderation_jobs {
+        bigint id PK
+        moderation_job_kind kind
+        bigint community_id FK
+        bigint actor_id FK
+        bigint requested_by FK
+        timestamptz processed_at
     }
 
     bans {
-        bigint actor_id PK, FK
+        bigint actor_id FK
+        bigint community_id FK
         bigint banned_by FK
         timestamptz expires_at
     }
@@ -136,6 +201,7 @@ erDiagram
         report_target_type target_type
         bigint target_id FK
         report_status status
+        bigint community_id FK
         bigint resolved_by FK
     }
 
@@ -160,6 +226,12 @@ sadece post/yorum ayrımını taşır — bkz. §3.4). `admin_actions_log.target
 bilerek FK **değildir**: hedef bazen bir actor, bazen bir content olabildiği için
 tek bir FK ikisini birden karşılayamaz; bu yüzden diyagramda `admin_actions_log`'dan
 çıkan bir ilişki oku yoktur, kolon sadece metinde belgelenir.
+
+`permissions` ve `bans` tablolarında diyagramda `PK` işareti görünmez çünkü ikisi
+de tek kolonlu bir birincil anahtar taşımaz: `permissions`'ın tekilliği iki kısmi
+unique index'le, `bans`'ınki de `community_id`'nin NULL olup olmamasına göre iki
+kısmi unique index'le sağlanır (bkz. §3.4). `community_members` ise gerçek bir
+bileşik PK'ye (`community_id`, `actor_id`) sahiptir.
 
 ## 3. Tablo tablo referans
 
@@ -233,19 +305,30 @@ Post'lar ve yorumlar tek tabloda (Reddit/HN tarzı ağaç). Ağaç yapısının 
 | `actor_id` | `bigint` FK → `actors`, `ON DELETE RESTRICT` | Yazar. |
 | `root_post_id` | `bigint` FK → `contents`, `ON DELETE RESTRICT` | En üstteki post'un id'si; post satırında kendine eşit. Bir yorum ağacının tamamını tek koşulla çekebilmek için denormalize. |
 | `parent_content_id` | `bigint` FK → `contents`, `ON DELETE RESTRICT`, null olabilir | NULL = post. Dolu = doğrudan cevap verdiği içerik. |
+| `community_id` | `bigint` FK → `communities`, `ON DELETE SET NULL`, null olabilir | İçeriğin ait olduğu topluluk; NULL = bağımsız içerik (bkz. §3.5). Yorumlar kök post'un topluluğunu devralır (0030). |
+| `cross_post_source_id` | `bigint` FK → `contents`, `ON DELETE RESTRICT`, null olabilir | Dolu ise satır bir cross-post: kaynağa referans, kopya değil (bkz. §3.5). |
 | `path` | `ltree` | §4'e bakın. |
 | `depth` | `int` | `nlevel(path) - 1`. Post için 0. |
 | `content_type` | `content_type` enum | `post`, `comment`. |
-| `title` | `text`, null olabilir | Sadece post'ta dolu (`ck_contents_shape`), en fazla 300 karakter. |
+| `title` | `text`, null olabilir | Sadece post'ta dolu (`ck_contents_shape`), en fazla 300 karakter. Bir cross-post'ta NULL olabilir; başlık okuma anında kaynaktan çözülür. |
 | `body` | `text` | En fazla 100.000 karakter. |
 | `body_format` | `body_format` enum, varsayılan `markdown` | `markdown`, `plain`. |
 | `score` / `upvotes` / `downvotes` / `comment_count` | `int`, varsayılan 0 | Denormalize sayaçlar; **uygulama katmanı** tarafından oyu yazan işlemle aynı transaction'da güncellenir, trigger yok (bkz. §5). |
 | `hot_score` | `double precision`, varsayılan 0 | Zaman ağırlıklı sıralama skoru; periyodik job ile yeniden hesaplanır. |
 | `created_at` / `edited_at` / `deleted_at` | `timestamptz` | `edited_at` NULL = hiç düzenlenmedi. `deleted_at` dolu = soft-delete; `path` korunur ki alt yorumlar yetim kalmasın. |
 
-Kısıtlar: `ck_contents_shape` (post ⇒ title dolu + parent NULL; comment ⇒
-title NULL + parent dolu), `ck_contents_depth` (0–32), `ck_contents_post_depth_zero`,
+Kısıtlar: `ck_contents_shape` (post ⇒ parent NULL ve title dolu — cross-post
+istisnasıyla; comment ⇒ title NULL + parent dolu), `ck_contents_cross_post_is_post`
+(sadece bir post cross-post olabilir), `ck_contents_cross_post_not_self` (satır
+kendine referans veremez), `ck_contents_depth` (0–32), `ck_contents_post_depth_zero`,
 uzunluk kısıtları, `upvotes/downvotes/comment_count >= 0`.
+
+Cross-post'un kendi başlığı yoktur; `ck_contents_shape` bu yüzden post'ta
+`title`'ı yalnızca `cross_post_source_id` doluyken NULL'a izin verir. "Kaynak da
+cross-post olamaz" (derinlik tek seviyeyle sınırlı) kuralı ise kaynak satırı
+okumayı gerektirdiği için şemada değil, `content::create_post` içinde yaşar; aynı
+şekilde "private topluluktan dışarı cross-post yok" da kaynak topluluğun
+görünürlüğünü göremediğinden CHECK ile ifade edilemez.
 
 Index'ler (hepsi belirli bir sorgu kalıbı için):
 
@@ -258,6 +341,8 @@ Index'ler (hepsi belirli bir sorgu kalıbı için):
 | `idx_contents_new (created_at DESC, id DESC) WHERE ...` | Feed — "new" sıralama. |
 | `idx_contents_top (score DESC, id DESC) WHERE ...` | Feed — "top" sıralama. |
 | `idx_contents_parent (parent_content_id)` | Bir içeriğin doğrudan çocuklarını bulmak. |
+| `idx_contents_community_new/top/hot (community_id, ...) WHERE content_type='post' AND deleted_at IS NULL AND community_id IS NOT NULL` | Topluluk feed'i — aynı üç sıralamanın `community_id` öncüllü hâli (0029). |
+| `idx_contents_cross_post_source (cross_post_source_id) WHERE cross_post_source_id IS NOT NULL` | Bir kaynağın cross-post'larını bulmak ve bir sayfanın kaynaklarını toplu yüklemek (0034). |
 
 Üç feed index'i de bilerek sadece `content_type='post'` satırlarını kapsar —
 yorumlar feed'de görünmez.
@@ -362,54 +447,79 @@ yeniden eskiye" sayfalaması için (PK bu sıralamayı desteklemiyor).
 
 ### 3.4 Moderasyon
 
-`admin_roles` ve `bans`, actor'a bağlı olmalarına rağmen `ON DELETE CASCADE`
-kullanır — çoğu actor-bağlı tablonun tersine (bkz. §3.1–3.3, hepsi `RESTRICT`).
-Gerekçe: bunlar actor'ın *ürettiği içerik* değil, actor'ın *durumu*dur; bir
-actor hard-delete edilseydi (pratikte olmuyor, aşağıya bakın) rol/ban kaydının
-yazarsız kalarak ortada kalmasının bir anlamı yok, oysa yazdığı içerik başka
-kullanıcılar için anlamlı kalmaya devam eder. Bu ayrım migration'larda ayrıca
-yorumlanmamış; burada netlik için belirtiliyor. Pratikte fark etmiyor çünkü
-platformda hard delete yok (`docs/db-conventions.md`), actor'lar sadece
-soft-delete edilir — bu FK davranışı hiç tetiklenmeyecek bir güvenlik ağıdır.
+`permissions` ve `bans`, actor'a bağlı olmalarına rağmen `ON DELETE RESTRICT`
+kullanır — çoğu actor-bağlı tablonun yanında doğru olan budur (bkz. §3.1–3.3).
+Gerekçe: bunlar actor'ın *ürettiği içerik* değil, actor'ın *yetkisi/durumu*dur;
+bir actor hard-delete edilseydi (pratikte olmuyor, aşağıya bakın) yetki veya ban
+kaydının ortada kalmasının bir anlamı yoktur, oysa yazdığı içerik başka
+kullanıcılar için anlamlı kalmaya devam eder. `RESTRICT`, silmeyi başarısız
+kılarak önce bu kayıtların bilinçli olarak kaldırılmasını zorunlu tutar.
+`admin_roles` (0012) bu kuraldan sapmıştı; 0018 FK'leri `RESTRICT`'e çevirdi ve
+0028 tabloyu tamamen kaldırıp yerine `permissions`'ı getirdi. Topluluk kapsamlı
+`permissions.community_id` FK'si ise CASCADE'tir: topluluk gidince ona özel
+yetki de anlamsız kalır. Pratikte fark etmiyor çünkü platformda hard delete yok
+(`docs/db-conventions.md`), actor'lar sadece soft-delete edilir — bu FK
+davranışları hiç tetiklenmeyecek bir güvenlik ağıdır.
 
-#### `admin_roles`
+#### `permissions`
 
-Admin/moderatör rol ataması. Bilerek `actors`'a bir "role" kolonu eklemek
-yerine ayrı, seyrek dolu bir tabloda tutulur: (a) `actors`'ın her satırı çoğu
-zaman kullanılmayan bir rol kolonu taşımaz, (b) atamanın kendi denetim bilgisi
-(`granted_by`/`granted_at`) rolle birlikte ayrı bir satırda yaşar, (c) "bu
-actor admin mi?" sorgusu `actors`'ın tamamını tarayan bir kolon filtresi
-yerine küçük bir tabloda ucuz bir `EXISTS` ile yanıtlanır.
+Yerelleşmiş (scoped) yetki atamaları; 0028 `admin_roles`'u kaldırıp yerine bunu
+getirdi. Tek bir rol yerine tek bir `permission` sözlüğü vardır ve her grant bir
+`scope` taşır: `global` (platform geneli) veya `community` (tek topluluk).
 
 ```
-admin_roles(actor_id PK FK → actors ON DELETE CASCADE,
-            role admin_role ('admin'|'moderator'),
+permissions(actor_id FK → actors ON DELETE RESTRICT,
+            permission permission,
+            scope permission_scope ('global'|'community'),
+            community_id FK → communities ON DELETE CASCADE (null olabilir),
             granted_by FK → actors ON DELETE RESTRICT (null olabilir),
             granted_at)
 ```
 
-`actor_id` aynı zamanda PK: bir actor'ın en fazla bir rolü olabilir. `granted_by`
-NULL olabilir — platformun ilk admin'i veritabanına doğrudan INSERT edilerek
-atanır, o anda rolü veren başka bir admin yoktur.
+`permission` enum'u: `content.delete`, `community.edit`, `community.close`,
+`member.invite`, `member.approve`, `member.kick`, `member.ban`, `role.grant`,
+`report.view`, `report.resolve`, `audit.view`. `scope='global'` iken
+`community_id` NULL, `scope='community'` iken dolu olmak zorundadır
+(`ck_permissions_scope_community`). `member.invite`/`approve`/`kick` yalnızca
+topluluk kapsamında, `audit.view` yalnızca global kapsamda geçerlidir
+(`ck_permissions_community_only`, `ck_permissions_global_only`).
+
+Tabloda tek bir PK yoktur; tekilliği iki kısmi unique index sağlar:
+`uq_permissions_global (actor_id, permission) WHERE community_id IS NULL` ve
+`uq_permissions_community (actor_id, permission, community_id) WHERE community_id IS NOT NULL`.
+Tek bir `UNIQUE (actor_id, permission, community_id)` yetersizdi çünkü NULL
+kendine eşit olmadığından global grant'ler yinelenebilirdi. `idx_permissions_actor
+(actor_id)` her okumanın actor'la başlaması içindir. `granted_by` NULL olabilir
+— platformun ilk admin'i seed binary'siyle veritabanına doğrudan INSERT edilir,
+o anda yetkiyi veren başka bir actor yoktur.
 
 #### `bans`
 
-Actor ban'leri, süresiz ya da süreli.
+Actor ban'leri; platform geneli (`community_id IS NULL`) ya da tek topluluk
+kapsamında, süresiz ya da süreli (0030).
 
 ```
-bans(actor_id PK FK → actors ON DELETE CASCADE,
+bans(community_id FK → communities ON DELETE CASCADE (null olabilir),
+     actor_id FK → actors ON DELETE RESTRICT,
      banned_by FK → actors ON DELETE RESTRICT,
      reason text (1–1000 karakter),
      banned_at, expires_at (null olabilir))
 ck_bans_expires_after_banned: expires_at IS NULL OR expires_at > banned_at
+uq_bans_global   UNIQUE (actor_id) WHERE community_id IS NULL
+uq_bans_community UNIQUE (community_id, actor_id) WHERE community_id IS NOT NULL
 ```
 
-PK `actor_id`: bir actor'ın aynı anda en fazla bir aktif ban kaydı olabilir.
-`expires_at` NULL = kalıcı ban. Ban süresi dolduğunda erişimin geri açılması
-şemada değil, okuma yolunda yorumlanır (bkz. §5).
+`community_id` NULL = platform geneli ban, dolu = o topluluktan ban. 0030 tek
+kolonlu `actor_id` PK'sini düşürüp yerine iki kısmi unique index koydu: bir
+actor'ın en fazla bir global ban'ı ve topluluk başına en fazla bir ban'ı
+olabilir. Düz bir `UNIQUE (community_id, actor_id)` işe yaramazdı çünkü NULL
+kendine eşit olmadığından sınırsız global ban'a izin verirdi. `expires_at` NULL
+= kalıcı ban. Ban süresi dolduğunda erişimin geri açılması şemada değil, okuma
+yolunda yorumlanır (bkz. §5).
 `idx_bans_expires_at (expires_at) WHERE expires_at IS NOT NULL` — süresi
 dolmuş ban'leri temizleyen/görmezden gelen job için (kalıcı ban'ler index
-dışında bırakılıyor).
+dışında bırakılıyor); `idx_bans_community (community_id) WHERE community_id IS NOT NULL`
+— bir topluluğun ban listesi için.
 
 #### `reports`
 
@@ -421,6 +531,7 @@ Post/yorum şikayetleri; moderasyon kuyruğunu besler.
 | `reporter_actor_id` | `bigint` FK → `actors`, `ON DELETE RESTRICT` | |
 | `target_type` | `report_target_type` enum (`post`, `comment`) | Sadece anlam ayrımı; `target_id` her iki durumda da `contents.id`. |
 | `target_id` | `bigint` FK → `contents`, `ON DELETE RESTRICT` | Hedef silinemez ama soft-delete edilebilir. |
+| `community_id` | `bigint` FK → `communities`, `ON DELETE SET NULL`, null olabilir | Raporlanan içeriğin topluluğu; NULL = bağımsız içerik. Topluluk silinirse rapor bağımsız içerik raporuna dönüşür, silinmez (0030). |
 | `reason` | `text` (1–1000 karakter) | |
 | `status` | `report_status` enum, varsayılan `pending` | `pending`, `resolved`, `dismissed`. |
 | `notes` | `text`, null olabilir (≤1000 karakter) | Moderatörün notu. |
@@ -431,7 +542,27 @@ Post/yorum şikayetleri; moderasyon kuyruğunu besler.
 — aynı actor'ın aynı hedefi tekrar tekrar raporlayarak kuyruğu şişirmesini
 engeller. `ck_reports_resolution_shape`: `pending` iken `resolved_by`/`resolved_at`
 ikisi de NULL, değilse ikisi de dolu olmalı. `idx_reports_pending_queue (status, created_at) WHERE status = 'pending'`
-— moderasyon kuyruğu.
+— genel/platform moderasyon kuyruğu; `idx_reports_community_pending (community_id, created_at) WHERE status = 'pending'`
+— topluluğa özel moderasyon kuyruğu (0030).
+
+#### `moderation_jobs`
+
+Moderasyon eylemlerinin kuyruğa attığı arka plan işleri (0030). `kind` enum'u
+şu an tek değerlidir: `delete_actor_content_in_community`. "Banla ve içeriğini
+sil" işlemi, satır sayısı sınırsız olabilecek silmeleri isteği açık tutmadan
+yapmak için buraya yazılır; banın kendisi bu işlerin bitmesine bağlı değildir.
+
+| Kolon | Tip | Açıklama |
+|---|---|---|
+| `id` | `bigint` (PK, IDENTITY) | |
+| `kind` | `moderation_job_kind` enum | `delete_actor_content_in_community`. |
+| `community_id` | `bigint` FK → `communities`, `ON DELETE CASCADE` | İşin kapsamı. |
+| `actor_id` | `bigint` FK → `actors`, `ON DELETE CASCADE` | İçeriği silinecek actor. |
+| `requested_by` | `bigint` FK → `actors`, `ON DELETE RESTRICT` | İşi kuyruğa atan moderatör (denetim taşıyan FK'ler gibi RESTRICT). |
+| `created_at` / `processed_at` | `timestamptz` | `processed_at` NULL = işlenmeyi bekliyor. |
+
+`idx_moderation_jobs_pending (created_at) WHERE processed_at IS NULL` — bekleyen
+işleri en eskiden yeniye çeken tüketici için.
 
 #### `admin_actions_log`
 
@@ -481,6 +612,144 @@ yine de şema seviyesinde tutarlılık için tanımlanmıştır.
 `idx_edit_history_content_edited (content_id, edited_at DESC)` — "bu içeriğin
 düzenleme geçmişi" sorgusu.
 
+### 3.5 Topluluklar
+
+Topluluk; bir sahibi, üyeleri ve açıklaması olan bir kapsayıcıdır, bir etiket
+değildir (COMMUNITY_PLAN.md §1). Etiketler serbest ve sahipsiz kalır; ikisi
+birbirine karışmaz. Bir post'un topluluğu olması zorunlu değildir:
+`contents.community_id` NULL ise post bağımsızdır ve bu "daha düşük" bir post
+türü değildir.
+
+#### `communities`
+
+```
+communities(id PK, name citext UNIQUE, description text (1–10000),
+            visibility community_visibility ('public'|'private'),
+            owner_actor_id FK → actors ON DELETE RESTRICT,
+            successor_actor_id FK → actors ON DELETE SET NULL (null olabilir),
+            closed_at (null olabilir), created_at, updated_at)
+ck_communities_name_format / ck_communities_name_reserved / ck_communities_description_length
+```
+
+`name`, `actors.username` ile aynı `citext` + `^[a-z0-9_]{3,32}$` deseni ve
+aynı rezerve liste ile korunur; `/communities/{name}` altında erişildiği için
+bir kullanıcı adıyla çakışması belirsizlik yaratmaz. `visibility` `public`
+(listede görünür, herkes katılabilir) veya `private` (listelenmez; içeriği
+yalnızca üyeler ve topluluk kapsamlı yetki sahipleri görebilir). Geçiş tek
+yönlüdür: `public → private` olabilir, tersi olmaz, çünkü public'e dönmek
+gizlilik beklentisiyle tutulmuş konuşmaları açığa çıkarırdı.
+
+`owner_actor_id` tek sahibi tutar; bir actor en fazla 3 topluluğa sahip
+olabilir (uygulama katmanı, oluşturma transaction'ı içinde). Sahiplik oluşturma
+anında `community_members`'a da yazılır ve topluluk kapsamlı yetkilerin
+tamamı birer gerçek `permissions` satırı olarak sahibe verilir; gizli bir
+"owner superuser" yoktur (0030). `successor_actor_id`, sahibin ayrılırken
+bıraktığı varis koltuğudur: actor canlıysa devredilir, değilse en uzun süre
+üye olan topluluk kapsamlı yetki sahibine düşer. `closed_at` NULL = açık;
+dolu = kapanmış: her topluluk ucu `404` döner, public topluluk post'larını
+bağımsız bırakır, private topluluk onları soft-delete eder; satır tombstone
+olarak kalır ve isim rezerve kalır. `idx_communities_visibility_created
+(visibility, created_at DESC, id DESC)` dizin listesi için;
+`idx_communities_open_visibility_created` aynı taramayı `WHERE closed_at IS NULL`
+ile açar.
+
+#### `community_members`
+
+```
+community_members(community_id FK → communities ON DELETE CASCADE,
+                  actor_id FK → actors ON DELETE CASCADE,
+                  joined_at, PK (community_id, actor_id))
+```
+
+Sahiplik oluşturma anında buraya bir satır yazar; sahip her zaman üyedir.
+Public topluluğa katılma anındadır; private topluluğa katılma davet veya
+başvuru kabulüyle olur. Üyelik yazmak için gereklidir, okumak için değil.
+`idx_community_members_actor (actor_id, joined_at DESC)` — "bu actor hangi
+topluluklarda" sorgusu için (PK zaten "bu toplulukta kim var"ı kapsar);
+`joined_at` artan sıralı üye listesi için kullanılır ve devir kuralı en uzun
+süre üyeyi seçer.
+
+#### `community_invitations`
+
+Private topluluğa moderatör yönlendirmesi (0033). `member.invite` yetkisi olan
+bir actor, kullanıcı adıyla birini davet eder; davetli kabul edene kadar üye
+değildir.
+
+```
+community_invitations(id PK, community_id FK → communities ON DELETE CASCADE,
+                      invited_actor_id FK → actors ON DELETE CASCADE,
+                      invited_by FK → actors ON DELETE RESTRICT,
+                      status invitation_status ('pending'|'accepted'|'declined'),
+                      created_at, resolved_at (null olabilir))
+ck_community_invitations_resolution_shape
+uq_community_invitations_pending (community_id, invited_actor_id) WHERE status='pending'
+idx_community_invitations_invitee (invited_actor_id, created_at DESC, id DESC)
+```
+
+`status='pending'` iken `resolved_at` NULL, çözülmüşken dolu olmak zorundadır
+(`ck_community_invitations_resolution_shape`). Kısmi unique index aynı anda en
+fazla bir bekleyen daveti garanti eder; ikinci deneme uygulama katmanında
+`409`'a çevrilir, böylece yeniden davet satır yığmaz ve ikinci bir bildirim
+gitmez. Çözülmüş satır index dışına düşer, yani aynı actor ileride yeniden
+davet edilebilir. `invited_by` RESTRICT: satırın denetim anlamı davet edenden
+uzun yaşar.
+
+#### `community_applications`
+
+Private topluluğa kişi yönlendirmesi (0033). Topluluğun adını bilen biri
+gerekçe yazıp başvurur; `member.approve` yetkilisi kabul veya reddeder.
+
+```
+community_applications(id PK, community_id FK → communities ON DELETE CASCADE,
+                       applicant_actor_id FK → actors ON DELETE CASCADE,
+                       reason text (1–2000),
+                       status application_status ('pending'|'accepted'|'rejected'),
+                       created_at, resolved_by FK → actors ON DELETE RESTRICT (null olabilir),
+                       resolved_at (null olabilir))
+ck_community_applications_reason_length / ck_community_applications_resolution_shape
+uq_community_applications_pending (community_id, applicant_actor_id) WHERE status='pending'
+idx_community_applications_queue (community_id, created_at) WHERE status='pending'
+```
+
+`reason`, moderatörün karar vereceği tek şey olduğu için tam olarak saklanır.
+Çözülmüş satırda `resolved_by` ve `resolved_at` ikisi de dolu olmak zorundadır.
+Kuyruk index'i en eskiden yeniye çalışır (rapor kuyruğu gibi bir iş kuyruğu).
+Diğer davranışlar davetlerle aynıdır: public topluluk `400`, ikinci bekleyen
+başvuru `409`, çözülmüş satır asla silinmez ve `pending`'e dönmez.
+
+#### `content_visible_to` (görünürlük kapısı)
+
+Okuma yollarının tek görünürlük yüklemi (0031, COMMUNITY_PLAN.md §9). Her
+sorgunun kendi kontrolünü büyütmesi yerine tek bir SQL fonksiyonu vardır:
+
+```
+content_visible_to(community_id bigint, viewer_communities bigint[]) RETURNS boolean
+  -- community_id IS NULL            → TRUE (bağımsız içerik)
+  -- topluluk 'public'               → TRUE
+  -- community_id = ANY(viewer_communities) → TRUE
+  -- aksi hâlde                      → FALSE
+```
+
+Boş bir `viewer_communities` (`'{}'`) "koşulsuz yalnızca public" demektir: ana
+feed, takip feed'i, arama, etiket sayfaları ve bir profilin listeleri/sayıları
+her zaman `'{}'` geçer, böylece gösterilen sayı her izleyici için aynı olur.
+Kişinin kendi listeleri (`/me/saves`, gelen kutusu, `/me/votes`) ve tek öğe
+okumaları izleyicinin gerçek üyeliklerini/yetkilerini geçirir. Fonksiyon
+`STABLE`'dır; planlayıcı onu inline edip topluluk index'lerini kullanabilir.
+Bir okuma yolunun bu fonksiyonu çağırmaması yanlış cevap değil **sızıntıdır**,
+bu yüzden tek bir yerde doğru olması yeterlidir.
+
+#### Bu bölümdeki enum'lar
+
+| Enum | Değerler | Nerede |
+|---|---|---|
+| `community_visibility` | `public`, `private` | `communities.visibility` |
+| `invitation_status` | `pending`, `accepted`, `declined` | `community_invitations.status` |
+| `application_status` | `pending`, `accepted`, `rejected` | `community_applications.status` |
+| `moderation_job_kind` | `delete_actor_content_in_community` | `moderation_jobs.kind` (bkz. §3.4) |
+| `permission_scope` | `global`, `community` | `permissions.scope` (bkz. §3.4) |
+| `permission` | `content.delete`, `community.edit`, `community.close`, `member.invite`, `member.approve`, `member.kick`, `member.ban`, `role.grant`, `report.view`, `report.resolve`, `audit.view` | `permissions.permission` (bkz. §3.4) |
+
 ## 4. İçerik ağacı nasıl çalışır
 
 ### `path` biçimi
@@ -529,7 +798,7 @@ Aynı trigger üç durumda `RAISE EXCEPTION` ile insert'i reddeder:
 
 ### Örnek sorgular
 
-Aşağıdaki üç sorgu `actos_verify` veritabanında (17 migration uygulanmış,
+Aşağıdaki üç sorgu `actos_verify` veritabanında (34 migration uygulanmış,
 tablo şu an boş) çalıştırılıp doğrulanmıştır; `EXPLAIN` çıktısı her birinin
 beklenen index'i kullandığını gösteriyor.
 
@@ -575,15 +844,24 @@ ORDER BY created_at;
 
 `idx_contents_parent (parent_content_id)` kullanır.
 
+Cross-post ayrı bir referanstır, ağacın parçası değildir: `cross_post_source_id`
+dolu olsa da satır kendi `path`/`depth`/`root_post_id`'sini normal bir post gibi
+alır ve yorum ağacı ona normal bir kök post gibi asılır. Kaynağın başlığı ve
+görünürlüğü okuma anında çözülür; kaynak silinmiş veya okuyucuya kapalıysa
+boş bir tombstone kartı döner.
+
 ## 5. Bilerek şemada olmayanlar
 
 `docs/db-conventions.md`, "Bilerek uygulama katmanına bırakılan kurallar"
-başlığı altında dört kuralı ve şemada neden yer almadıklarını listeliyor:
+başlığı altında bu kuralları ve şemada neden yer almadıklarını listeliyor:
 sayaç güncellemeleri (`score`/`upvotes`/`downvotes`/`comment_count` — oyla aynı
 transaction'da uygulama tarafından yazılır), kendi içeriğine oy vermeyi
 engelleme (basit bir CHECK'le ifade edilemiyor, oy veren kod yolu zaten içerik
 satırını okuyor), post başına etiket üst sınırı (ürün kuralı, veri bütünlüğü
-kuralı değil) ve ban süresi dolduğunda erişimin geri açılması (`bans.expires_at`
-sadece veri, yorumu okuma yolunda yapılır). Tekrarlamak yerine oraya
-yönlendiriyoruz — bu doküman şemanın *ne* tuttuğunu, o doküman uygulama ile
-şema arasındaki sınırın *neden* orada çizildiğini anlatıyor.
+kuralı değil), ban süresi dolduğunda erişimin geri açılması (`bans.expires_at`
+sadece veri, yorumu okuma yolunda yapılır), bir actor'ün en fazla 3 topluluğa
+sahip olabilmesi (ürün kuralı), cross-post derinliğinin tek seviyeyle
+sınırlanması ve private topluluktan dışarı cross-post yasağı (ikisi de kaynak
+satırın görünürlüğünü/türünü okumayı gerektirdiğinden CHECK ile ifade edilemez).
+Tekrarlamak yerine oraya yönlendiriyoruz — bu doküman şemanın *ne* tuttuğunu, o
+doküman uygulama ile şema arasındaki sınırın *neden* orada çizildiğini anlatıyor.

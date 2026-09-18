@@ -1024,6 +1024,70 @@ spec'e gitmiyor.
 
 ---
 
+## Faz 21 — Topluluklar (Communities)
+
+> 0.2.0'dan sonraki ilk büyük özellik seti; `feat/communities` dalında
+> uygulandı ve backend 0.3.0'a yükseltildi. Tasarımın tamamı
+> `COMMUNITY_PLAN.md`'de; beş fazın her biri tek migration. Deploy ve SDK
+> yayını **yapılmadı** (bkz. CONTEXT.md'deki açık maddeler).
+
+Temel karar: **yeni bir yetki sistemi icat etmek yerine var olan rol modelini
+kapsamlı (scoped) izinlere dönüştürmek.** `admin_roles` tablosu ve `admin_role`
+enum'u kaldırıldı (0028); yerine tek bir `permission` sözlüğü geldi ve her
+grant `global` ya da `community` kapsamı taşıyor. `whoami` artık `roles` değil
+`permissions` döndürüyor; `POST /admin/roles` yerine `PUT`/`DELETE
+/admin/permissions`. Topluluk sahibinin yetkisi de gizli bir superuser değil,
+oluşturma anında yazılan gerçek `permissions` satırlarıdır (0030). Böylece
+moderasyon, ban ve denetim tek sözlüğün kapsamlarına indi; client'lar tek bir
+modele uydu.
+
+- [x] **Faz 1 — İzinlerin yeniden düzenlenmesi** (`0028_permissions`)
+      — `permissions(actor_id, permission, scope, community_id, granted_by,
+      granted_at)`, `permission_scope` ve `permission` enum'ları, iki kısmi
+      unique index; `admin_roles` → `permissions` veri göçü (moderatör: rapor
+      kuyruğu + içerik silme + platform banı + denetim; admin ek olarak rol
+      yönetimi).
+- [x] **Faz 2 — Genel topluluklar** (`0029_communities`)
+      — `communities`, `community_members`, `contents.community_id`;
+      oluşturma (sahiplik üst sınırı 3), anında üyelik, dizin ve üç sıralı
+      topluluk feed'i. `visibility` kolonu/enum'u bu fazda eklendi ama
+      `private` oluşturma 4B'ye kadar uygulamada reddedildi, böylece sonradan
+      kolon migration'ı gerekmedi.
+- [x] **Faz 3 — Topluluk moderasyonu** (`0030_community_moderation`)
+      — `bans.community_id` ve `reports.community_id`; `bans` tek kolonlu
+      PK'si düşürülüp iki kısmi unique index'e geçildi; topluluğa özel
+      ban/kick ve rapor yönlendirme; `moderation_jobs` kuyruğu
+      (ban-and-delete); yorumların kök post'un topluluğunu devralması;
+      sahiplere topluluk kapsamlı izinlerin geri doldurulması.
+- [x] **Faz 4A — Görünürlük kapısı** (`0031_visibility`)
+      — tek `content_visible_to(community_id, viewer_communities)` fonksiyonu;
+      tüm içerik okuma yolları ondan geçiyor. Eksik bir çağrı yanlış cevap
+      değil **sızıntı** olduğu için kontrol bilinçli olarak tek yerde tutuldu.
+- [x] **Faz 4B1 — Private yaşam döngüsü** (`0032_community_lifecycle`)
+      — `closed_at`, `successor_actor_id`, açık topluluklar için dizin
+      index'i; private oluşturma, `public → private` tek yönlü geçişi, kapak
+      sayfası, kapanış ve devir.
+- [x] **Faz 4B2 — Davetler ve başvurular** (`0033_invitations_applications`)
+      — `community_invitations`, `community_applications`, iki admission yolu,
+      gelen kutusu öğeleri, `member.approve` kuyruğu ve üç yeni
+      `notification_kind` değeri (`community_invitation`,
+      `community_application`, `community_application_result`).
+- [x] **Faz 5 — Cross-post** (`0034_cross_posts`)
+      — `contents.cross_post_source_id`; kopya değil referans, okuma anında
+      çözüm, ulaşılamayan kaynak için tombstone, tek seviye derinlik sınırı ve
+      private topluluk kaynağı yasağı; `ck_contents_shape` cross-post için
+      gevşetildi.
+- [x] **Sürüm 0.3.0** — `feat/communities` dalında sürüm yükseltildi
+      (`chore: bump to 0.3.0`).
+- [x] **İstemci senkronu** — `node`, `python`, `kotlin`, `dotnet` SDK'ları
+      kendi `feat/communities` dallarında 0.3.0'a getirildi; `rust` ve `cli`
+      bilinçli olarak dışarıda bırakıldı, `frontend`'e dokunulmadı
+      (COMMUNITY_PLAN.md, "Implementation status").
+- [ ] **Deploy ve yayın** — `api.actos.com.tr` hâlâ 0.2.0 servis ediyor;
+      0.3.0 paketleri backend canlıya çıkmadan yayınlanmayacak (CONTEXT.md).
+
+---
+
 ## Backend Sonrası (bu repo dışı, sadece hatırlatma)
 
 > **Düzeltildi.** Bu bölüm önce CLI/TUI/SDK'yı bu workspace'e crate olarak

@@ -102,8 +102,7 @@ pub struct SetPermissionRequest {
     /// Dotted permission name, e.g. `"content.delete"`.
     pub permission: String,
     /// Community name for a community-scoped grant. Omitted or `null` means
-    /// a global grant. Rejected with 400 until communities exist
-    /// (COMMUNITY_PLAN.md phase 2).
+    /// a global grant.
     #[serde(default)]
     pub community: Option<String>,
 }

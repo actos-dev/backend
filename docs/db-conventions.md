@@ -1,7 +1,7 @@
 # Veritabanı Sözleşmesi
 
 > Bu dosya migration yazan herkes (insan ya da ajan) için bağlayıcıdır.
-> Amaç: 17 ayrı dosya tek elden çıkmış gibi görünsün.
+> Amaç: 34 ayrı dosya tek elden çıkmış gibi görünsün.
 
 ## Dosya düzeni
 
@@ -35,13 +35,27 @@
    - Actor'a bağlı içerik: `ON DELETE CASCADE` **kullanma** — actor soft-delete
      ediliyor, satırlar kalmalı. `ON DELETE RESTRICT` kullan.
    - Saf ilişki tabloları — **tam liste**: `votes`, `follows`, `saves`,
-     `content_tags`. Bunlar `ON DELETE CASCADE` kullanır; iki tarafı da
-     silinmişse satırın taşıdığı bilgi zaten kalmaz.
-   - Actor'ın *durumunu* tutan tablolar (`bans`, `admin_roles`) ilişki tablosu
-     GİBİ görünür ama değildir: `RESTRICT` kullanırlar. Bir ban kaydının actor
-     silinince sessizce yok olması moderasyon geçmişinin kaybıdır. RESTRICT,
-     silmeyi başarısız kılarak önce banın bilinçli olarak kaldırılmasını
-     zorunlu tutar. (0012/0013 bu kuraldan sapmıştı, 0018 ile düzeltildi.)
+     `content_tags`, `community_members`. Bunlar `ON DELETE CASCADE` kullanır;
+     iki tarafı da silinmişse satırın taşıdığı bilgi zaten kalmaz.
+   - Actor'ın *durumunu/yetkisini* tutan tablolar (`bans`, `permissions`)
+     ilişki tablosu GİBİ görünür ama değildir: actor'a bakan FK'leri `RESTRICT`
+     kullanır. Bir ban veya yetki kaydının actor silinince sessizce yok olması
+     moderasyon geçmişinin/yetkinin kaybıdır. RESTRICT, silmeyi başarısız
+     kılarak önce banın/yetkinin bilinçli olarak kaldırılmasını zorunlu tutar.
+     (0012/0013 bu kuraldan sapmıştı, 0018 ile düzeltildi; 0028 `admin_roles`'u
+     kaldırıp yerine `permissions`'ı getirdi.)
+   - **Topluluk kapsamlı FK'ler:** bir topluluğa bağlılık ifade eden kolonlar
+     `ON DELETE CASCADE` kullanır — topluluk gidince ona ait üyelik, davet,
+     başvuru, iş ve yetki anlamsız kalır. İstisnalar bilinçli:
+     `contents.community_id` ve `reports.community_id` `ON DELETE SET NULL`
+     kullanır (topluluk boşalınca post bağımsız kalır, rapor bağımsız içerik
+     raporuna döner; ikisi de silinmez); `bans.community_id` CASCADE'tir (bir
+     topluluk banı topluluk olmadan anlamsızdır).
+   - **Denetim taşıyan FK'ler** (`permissions.granted_by`,
+     `community_invitations.invited_by`, `community_applications.resolved_by`,
+     `moderation_jobs.requested_by`) `RESTRICT` kullanır: satırın "bunu kim
+     yaptı" anlamı, o kişiden uzun yaşamalıdır. Actor'lar pratikte soft-delete
+     edildiği için bu yol yalnızca bilinçli bir hard delete'te işler.
 5. **Enum'lar:** PostgreSQL native `CREATE TYPE ... AS ENUM`. Değer listesi
    plandakiyle birebir aynı.
 6. **Kısmi index:** canlı satırlar sorgulanacaksa `WHERE deleted_at IS NULL`
@@ -86,11 +100,16 @@ Bunlar unutulmuş değil, **kasıtlı**. Şemada bir kısıt aramayın:
 | Kendi içeriğine oy vermeyi engelleme | `votes` satırı `contents.actor_id`'yi görmediği için basit bir CHECK'le ifade edilemez, trigger gerekirdi. Oy veren kod yolu sayaçları güncellemek için içerik satırını zaten okuyor — kontrol orada bedava. |
 | Etiket sayısı üst sınırı (post başına 10) | Ürün kuralı, veri bütünlüğü kuralı değil; zamanla değişmesi beklenir. |
 | Ban süresi dolduğunda erişimin geri açılması | `bans.expires_at` sadece veri; yorumlaması okuma yolunda yapılır. |
+| Bir actor'ün en fazla 3 topluluğa sahip olması | Ürün kuralı; sahiplik sayısı oluşturma transaction'ı içinde sayılıp kontrol edilir. |
+| Cross-post derinliğinin tek seviyeyle sınırlanması (cross-post'un cross-post'u yok) | Kaynağın kendisi cross-post mu, bunu görmek için kaynak satırı okumak gerekir; tek satırlık CHECK bunu ifade edemez. |
+| Private topluluktan dışarı cross-post yasağı | İçerik satırı kaynak topluluğun `visibility`'sini göremez; kontrol `content::create_post` içinde yapılır ve `403` döner. |
 
 Buna karşılık **şemada tutulan** kurallar, her kod yolundan (seed script'i, elle
 SQL, ileride yazılacak servisler) geçmesi gerektiği için oradadır: ağaç
 tutarlılığı (`path`/`depth`/`root_post_id`), derinlik sınırı, silinmiş içeriğe
-yanıt yasağı, `admin_actions_log`'un değiştirilemezliği.
+yanıt yasağı, `admin_actions_log`'un değiştirilemezliği, topluluk adı formatı
+ve rezerve listesi, davet/başvuru çözüm şekli (`pending`/resolved) ve
+`content_visible_to`'nun tek görünürlük yüklemi olması.
 
 ## Uygulanmış migration'lar değiştirilemez
 

@@ -191,7 +191,7 @@ async fn create_report(
     path = "/admin/reports",
     tag = "admin",
     summary = "List the moderation queue",
-    description = "Requires moderator or admin.",
+    description = "Requires `report.view`, globally or scoped to the report's community. A community moderator sees only their own community's reports.",
     security(("api_key" = [])),
     params(
         ("status" = Option<String>, Query, description = "`pending`, `resolved`, or `dismissed`"),
@@ -245,7 +245,7 @@ async fn list_reports(
     path = "/admin/reports/{id}",
     tag = "admin",
     summary = "Resolve or dismiss a report",
-    description = "Requires moderator or admin.",
+    description = "Requires `report.resolve`, globally or scoped to the report's community.",
     security(("api_key" = [])),
     params(
         ("id" = String, Path, description = "The report's external id"),
@@ -303,7 +303,7 @@ async fn update_report(
     path = "/admin/contents/{id}",
     tag = "admin",
     summary = "Delete content as a moderator",
-    description = "Requires moderator or admin. A reason is required in the body (written to the audit trail).",
+    description = "Requires `content.delete`, globally or scoped to the content's community. A reason is required in the body (written to the audit trail).",
     security(("api_key" = [])),
     params(
         ("id" = String, Path, description = "The content's external id (`c_...`)"),
@@ -352,7 +352,7 @@ async fn moderate_delete_content(
     path = "/admin/bans",
     tag = "admin",
     summary = "Ban an actor",
-    description = "Requires moderator or admin. If `expires_at` is omitted, the ban is permanent.",
+    description = "Requires `member.ban`, globally or scoped to a community. If `expires_at` is omitted, the ban is permanent.",
     security(("api_key" = [])),
     request_body = CreateBanRequest,
     responses(
@@ -606,7 +606,7 @@ async fn parse_permission_request(
     path = "/admin/actions",
     tag = "admin",
     summary = "List the audit trail",
-    description = "Requires moderator or admin. `target_id` is returned as a raw `bigint` (polymorphic target).",
+    description = "Requires `audit.view` (global). `target_id` is returned as a raw `bigint` (polymorphic target).",
     security(("api_key" = [])),
     params(
         ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),

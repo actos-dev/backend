@@ -1135,7 +1135,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "One of `\"comment_on_post\"`, `\"reply_to_comment\"`, `\"new_follower\"` or\n`\"moderation_action\"`.",
+            "description": "One of `\"comment_on_post\"`, `\"reply_to_comment\"`, `\"new_follower\"`,\n`\"moderation_action\"`, `\"community_invitation\"`,\n`\"community_application\"` or `\"community_application_result\"`.",
             "type": "string"
           },
           "payload": {
@@ -1479,7 +1479,7 @@
         "description": "Request body of `PUT /admin/permissions` (grant) and\n`DELETE /admin/permissions` (revoke).",
         "properties": {
           "community": {
-            "description": "Community name for a community-scoped grant. Omitted or `null` means\na global grant. Rejected with 400 until communities exist\n(COMMUNITY_PLAN.md phase 2).",
+            "description": "Community name for a community-scoped grant. Omitted or `null` means\na global grant.",
             "type": [
               "string",
               "null"
@@ -3106,7 +3106,7 @@
     },
     "/admin/actions": {
       "get": {
-        "description": "Requires moderator or admin. `target_id` is returned as a raw `bigint` (polymorphic target).",
+        "description": "Requires `audit.view` (global). `target_id` is returned as a raw `bigint` (polymorphic target).",
         "operationId": "list_actions",
         "parameters": [
           {
@@ -3223,7 +3223,7 @@
     },
     "/admin/bans": {
       "post": {
-        "description": "Requires moderator or admin. If `expires_at` is omitted, the ban is permanent.",
+        "description": "Requires `member.ban`, globally or scoped to a community. If `expires_at` is omitted, the ban is permanent.",
         "operationId": "create_ban",
         "requestBody": {
           "content": {
@@ -3450,7 +3450,7 @@
     },
     "/admin/contents/{id}": {
       "delete": {
-        "description": "Requires moderator or admin. A reason is required in the body (written to the audit trail).",
+        "description": "Requires `content.delete`, globally or scoped to the content's community. A reason is required in the body (written to the audit trail).",
         "operationId": "moderate_delete_content",
         "parameters": [
           {
@@ -3799,7 +3799,7 @@
     },
     "/admin/reports": {
       "get": {
-        "description": "Requires moderator or admin.",
+        "description": "Requires `report.view`, globally or scoped to the report's community. A community moderator sees only their own community's reports.",
         "operationId": "list_reports",
         "parameters": [
           {
@@ -3925,7 +3925,7 @@
     },
     "/admin/reports/{id}": {
       "patch": {
-        "description": "Requires moderator or admin.",
+        "description": "Requires `report.resolve`, globally or scoped to the report's community.",
         "operationId": "update_report",
         "parameters": [
           {

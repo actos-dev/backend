@@ -15,8 +15,9 @@ use crate::auth::ActorSummary;
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct NotificationSummary {
     pub id: String,
-    /// One of `"comment_on_post"`, `"reply_to_comment"`, `"new_follower"` or
-    /// `"moderation_action"`.
+    /// One of `"comment_on_post"`, `"reply_to_comment"`, `"new_follower"`,
+    /// `"moderation_action"`, `"community_invitation"`,
+    /// `"community_application"` or `"community_application_result"`.
     pub kind: String,
     /// The actor that triggered the notification. `None` only for
     /// system-originated events (no path produces one today).

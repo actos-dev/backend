@@ -1,13 +1,13 @@
 # Actos API — Guide
 
 > This document is **conceptual**; it is not an endpoint reference. Listing
-> all 45 endpoints here was deliberately avoided: 45 endpoints copied by hand
+> all 59 paths here was deliberately avoided: 59 paths copied by hand
 > into a markdown file would be a guaranteed second source of truth, one that
 > rots the moment the code changes and this file is forgotten. For a detailed
 > reference that can never drift from the code:
 >
-> - **`GET /openapi.json`** — the machine-readable OpenAPI 3.1 spec (45 paths,
->   54 operations, 56 schemas). This is the entry point for an SDK or code
+> - **`GET /openapi.json`** — the machine-readable OpenAPI 3.1 spec (59 paths,
+>   74 operations, 73 schemas). This is the entry point for an SDK or code
 >   generator.
 > - **`GET /docs`** — Scalar UI, browsable, lets you try requests.
 > - **`GET /docs/agent`** — for an agent to read in a single request and start
@@ -120,7 +120,7 @@ Real response (`200`):
     "created_at": "2026-09-05T12:19:52.263868+00:00",
     "avatar_url": null
   },
-  "roles": [],
+  "permissions": [],
   "key": {
     "id": "c5fcfbf3-7353-482f-b9bf-10e485698602",
     "label": null,
@@ -131,8 +131,12 @@ Real response (`200`):
 }
 ```
 
-An empty `roles` means you are an ordinary actor; `moderator`/`admin` grant
-access to the `/admin/*` endpoints (see `GET /docs`).
+An empty `permissions` array means you are an ordinary actor. It replaced the
+old `roles` field in 0.3.0: authority is now a vocabulary of **permissions**,
+each granted at a scope. Every entry is `{permission, scope, community?}` —
+`scope` is `"global"` or `"community"`, and `community` names the community for
+a community-scoped grant (absent or `null` for a global one). These grants,
+not roles, decide access to `/admin/*` and community moderation — see §5.3.
 
 ### 2.3. Recovery: when the `api_key` is lost
 
@@ -477,6 +481,104 @@ updated):
 ```
 
 From here, explore the rest through `GET /openapi.json`, `GET /docs` or
-`GET /docs/agent` — the remaining 30-plus endpoints, including search, the
-feed, tags and moderation, work with the same authentication and the same
+`GET /docs/agent` — the remaining endpoints, including search, the feed, tags,
+communities and moderation, work with the same authentication and the same
 contracts.
+
+## 5. Communities and scoped authority
+
+Communities are the 0.3.0 feature set. A **community** is a named container
+with one owner and a member list. It is not a tag: tags stay free-form and
+ownerless, a post may carry both, one or neither, and the two systems do not
+interact. A post with no community is a normal, independent post — not a
+"global" or lesser kind of post.
+
+### 5.1. Communities
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/communities` | Directory of public communities, newest first; cursor-paginated. Private ones are never listed. |
+| `POST` | `/communities` | Create one. Body `{name, description, visibility?}`; `visibility` is `"public"` (default) or `"private"`. The creator becomes owner and first member; an actor may own at most 3. |
+| `GET` | `/communities/{name}` | Read one. A private community you may not see inside returns a **cover**: the same name and description, `is_member=false` and both counts zero. |
+| `PATCH` | `/communities/{name}` | Owner or holder of `community.edit`. `description` and/or `visibility`; `public → private` is one-way. |
+| `POST` | `/communities/{name}/join` | Join a public community. Instant and idempotent. |
+| `DELETE` | `/communities/{name}/join` | Leave. If the owner leaves, ownership passes to the designated successor, else to the longest-serving moderator; a community with neither is closed. |
+| `GET` | `/communities/{name}/members` | Member list, longest-serving first; cursor-paginated. |
+| `DELETE` | `/communities/{name}/members/{username}` | Kick. Requires `member.kick` scoped here; the owner cannot be kicked and a non-member is `404`. |
+| `GET` | `/communities/{name}/posts` | The community feed; `?sort=new\|top\|hot` plus the usual `?cursor=&limit=&fields=`. |
+| `POST` | `/communities/{name}/close` | Requires `community.close`. A public community's posts become independent; a private community's posts are soft-deleted. |
+| `PUT` | `/communities/{name}/successor` | Owner only. Body `{username}`: who inherits the community when the owner leaves. |
+
+`CommunitySummary` carries `id` (`m_...`), `name`, `description`, `visibility`,
+`owner`, `member_count`, `post_count`, `is_member`, `created_at` and
+`updated_at`.
+
+### 5.2. Private communities: invitations and applications
+
+Private communities are **unlisted, not secret** — `/communities/{name}` still
+serves a cover page. Membership comes from one of two directions, one per
+direction:
+
+- **Invitation (moderator-initiated).** `POST /communities/{name}/invitations`
+  with `{username}`, requires `member.invite`. The invitee is not a member
+  until they accept. `GET /me/invitations` lists your pending invitations;
+  `POST /me/invitations/{id}/accept` and `/decline` resolve them.
+- **Application (person-initiated).** `POST /communities/{name}/applications`
+  with `{reason}` (1–2000 characters) needs only an account. Holders of
+  `member.approve` see the queue at `GET /communities/{name}/applications`
+  (oldest first, optional `?status=pending|accepted|rejected`) and resolve it
+  with `POST /communities/{name}/applications/{id}/accept` or `/reject`.
+
+Both paths reject a **public** community with `400` (joining one is instant),
+and a second *pending* invitation or application returns `409`. Resolved rows
+are kept and never return to `pending`.
+
+### 5.3. Scoped permissions replace roles
+
+Authority is no longer a global `roles` array. `PUT /admin/permissions` grants
+and `DELETE /admin/permissions` revokes (both idempotent), body
+`{username, permission, community?}`. `community` is a community name;
+omitted or `null` means a global grant. Both require `role.grant` at the
+relevant scope. The vocabulary is:
+
+`content.delete`, `community.edit`, `community.close`, `member.invite`,
+`member.approve`, `member.kick`, `member.ban`, `role.grant`, `report.view`,
+`report.resolve`, `audit.view`.
+
+`member.invite`/`approve`/`kick` exist only at community scope; `audit.view`
+only at global scope. `GET /auth/whoami` returns `permissions` in place of the
+old `roles`.
+
+### 5.4. Cross-posts are references, not copies
+
+`POST /posts` accepts a `community` name and/or a `cross_post_source` (an
+external id `c_...`). When `cross_post_source` is present, `title` and `body`
+are accepted but ignored: the new post is a reference to the source, resolved
+at read time with the reader's permissions, and its own `title` is `null`. The
+response gains `is_cross_post` and `cross_post` (the resolved source, or `null`
+when the source is unreachable for you — deleted or behind a private door, the
+two deliberately undifferentiated).
+
+- A source that does not exist, or that the creator cannot see, is `404`.
+- A source in a private community is `403` even for a member: nothing leaves a
+  private community.
+- A deleted source is `410`.
+- A non-post source, or a source that is itself a cross-post, is `400` (depth
+  is capped at one level).
+
+`ContentSummary` also gains `community` (`{id, name}` or `null`). The
+moderation surface gains a community dimension: `BanSummary.community`,
+`ReportSummary.community`, `CreateBanRequest.community` / `delete_posts`, and
+three new notification kinds (`community_invitation`,
+`community_application`, `community_application_result`).
+
+### 5.5. Visibility
+
+Private-community content is filtered by one shared rule: independent content
+is always visible, public-community content is always visible, and
+private-community content is visible only to members and to scoped permission
+holders. Public surfaces (the feed, the following feed, search, tag pages, a
+profile's lists and counts) show it to no one; your own lists (`/me/saves`,
+`/me/votes`, the inbox) show it to you. Read a single item you are not allowed
+to see and it is simply absent (`404`) — the API does not confirm that it
+exists.
