@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS(SELECT 1 FROM admin_roles WHERE role = 'admin') AS \"exists!\"",
+  "query": "SELECT EXISTS(\n               SELECT 1 FROM permissions\n               WHERE permission = 'role.grant' AND scope = 'global'\n           ) AS \"exists!\"",
   "describe": {
     "columns": [
       {
@@ -17,5 +17,5 @@
       null
     ]
   },
-  "hash": "30bf7fa3af646c1b92715537cb4b82e3ba596c6d12cd42e9318e6ce4223f28b3"
+  "hash": "76f787cbdd14727150ac93bd286861be271e19acabd5615e600df1251205f93e"
 }

@@ -72,7 +72,7 @@ use crate::error::ProblemDetails;
         (name = "interactions", description = "Vote, save, follow — idempotent PUT/DELETE"),
         (name = "notifications", description = "Inbox (`GET /me/inbox`) and read-state marking"),
         (name = "moderation", description = "Report creation (public)"),
-        (name = "admin", description = "Moderation queue, bans, roles, audit trail — requires moderator/admin"),
+        (name = "admin", description = "Moderation queue, bans, scoped permissions, audit trail — each route requires a specific global permission"),
     ),
     info(
         title = "Actos API",

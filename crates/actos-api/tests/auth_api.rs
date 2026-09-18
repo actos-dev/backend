@@ -474,9 +474,9 @@ async fn kayittan_donen_key_ile_whoami_dogru_kullaniciyi_doner(pool: PgPool) {
     assert_eq!(body["actor"]["username"], "whoami_user");
     assert_eq!(body["actor"]["id"], reg["actor"]["id"]);
     assert!(
-        body["roles"]
+        body["permissions"]
             .as_array()
-            .expect("roles dizi olmalı")
+            .expect("permissions dizi olmalı")
             .is_empty()
     );
     assert!(body["key"]["id"].as_str().is_some());

@@ -8,13 +8,13 @@
 
 use actos_core::{
     Error,
-    auth::{self as core_auth, ActorRecord, ActorType, AdminRole, ApiKeyRecord},
+    auth::{self as core_auth, ActorRecord, ActorType, ApiKeyRecord},
     id::{Actor as ActorIdKind, IdCodec},
 };
 use actos_types::auth::{
     ActorSummary, ApiKeySummary, CreateKeyRequest, CreateKeyResponse, ListKeysResponse,
-    RecoverRequest, RecoverResponse, RegenerateRecoveryCodesResponse, RegisterRequest,
-    RegisterResponse, WhoamiResponse,
+    PermissionSummary, RecoverRequest, RecoverResponse, RegenerateRecoveryCodesResponse,
+    RegisterRequest, RegisterResponse, WhoamiResponse,
 };
 use axum::{
     Json,
@@ -71,13 +71,6 @@ pub(crate) const fn actor_type_str(t: ActorType) -> &'static str {
     match t {
         ActorType::Human => "human",
         ActorType::AiAgent => "ai_agent",
-    }
-}
-
-const fn admin_role_str(r: AdminRole) -> &'static str {
-    match r {
-        AdminRole::Admin => "admin",
-        AdminRole::Moderator => "moderator",
     }
 }
 
@@ -193,10 +186,10 @@ async fn register(
     get,
     path = "/auth/whoami",
     tag = "auth",
-    summary = "Verify your identity and learn your own profile/roles",
+    summary = "Verify your identity and learn your own profile/permissions",
     security(("api_key" = [])),
     responses(
-        (status = 200, description = "The authenticated actor, their roles, and a summary of the key used", body = WhoamiResponse),
+        (status = 200, description = "The authenticated actor, their scoped permissions, and a summary of the key used", body = WhoamiResponse),
         Unauthorized,
         RateLimited,
     )
@@ -230,15 +223,20 @@ async fn whoami(
     let actor = actor_summary(&current.actor, avatar_url, state.id_codec())
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    let roles = current
-        .roles
+    let permissions = current
+        .permissions
         .iter()
-        .map(|r| admin_role_str(*r).to_owned())
+        .map(|g| PermissionSummary {
+            permission: g.permission.as_str().to_owned(),
+            scope: g.scope.as_str().to_owned(),
+            // Phase 1'de topluluk yok; Phase 2'de burada isim çözülecek.
+            community: None,
+        })
         .collect();
 
     Ok(Json(WhoamiResponse {
         actor,
-        roles,
+        permissions,
         key: key_summary(&key),
     }))
 }

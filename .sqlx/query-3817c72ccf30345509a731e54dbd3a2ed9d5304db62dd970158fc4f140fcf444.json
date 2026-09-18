@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO permissions (actor_id, permission, scope, community_id, granted_by)\n                VALUES ($1, $2, $3, NULL, $4)\n                ON CONFLICT (actor_id, permission) WHERE community_id IS NULL\n                DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = now()\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "permission",
+            "kind": {
+              "Enum": [
+                "content.delete",
+                "community.edit",
+                "community.close",
+                "member.invite",
+                "member.approve",
+                "member.kick",
+                "member.ban",
+                "role.grant",
+                "report.view",
+                "report.resolve",
+                "audit.view"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "permission_scope",
+            "kind": {
+              "Enum": [
+                "global",
+                "community"
+              ]
+            }
+          }
+        },
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3817c72ccf30345509a731e54dbd3a2ed9d5304db62dd970158fc4f140fcf444"
+}

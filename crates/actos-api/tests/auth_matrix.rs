@@ -34,9 +34,11 @@
 //! - **normal** — kimlikli, kaynağın sahibi değil, banlı değil, hiçbir rolü
 //!   yok.
 //! - **sahip (owner)** — kaynağı yaratan/kaynağın öznesi olan actor.
-//! - **moderatör** — `AdminRole::Moderator`.
-//! - **admin** — `AdminRole::Admin`.
-//! - **banlı** — kimlikli, banlı, rolsüz.
+//! - **moderatör** — eski moderatör izin kümesi (content.delete, member.ban,
+//!   report.view, report.resolve, audit.view).
+//! - **admin** — eski admin izin kümesi (moderatörün beşi + community.edit,
+//!   community.close, role.grant).
+//! - **banlı** — kimlikli, banlı, izinsiz.
 //!
 //! ## Koddan doğrulanan, tahmin edilmeyen incelikler
 //!
@@ -75,7 +77,7 @@ use std::collections::BTreeSet;
 use actos_api::{app, state::AppState};
 use actos_core::{
     Config, Storage,
-    auth::{self as core_auth, ActorType, AdminRole},
+    auth::{self as core_auth, ActorType, Permission, PermissionScope},
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
         StorageQuotaConfig,
@@ -289,19 +291,49 @@ async fn seed_actor_with_recovery(pool: &PgPool, username: &str) -> (i64, String
     (reg.actor.id, reg.api_key, reg.recovery_codes)
 }
 
+/// Eski rol modelinin izin kümesi — moderatör beş, admin sekiz global izin
+/// tutuyordu (bkz. `migrations/0028_permissions.up.sql` veri göçü).
 #[allow(clippy::expect_used)]
-async fn rol_ver(pool: &PgPool, actor_id: i64, role: AdminRole) {
-    core_auth::grant_role(pool, actor_id, role, None)
+async fn rol_ver(pool: &PgPool, actor_id: i64, rol: &str) {
+    let izinler: &[Permission] = match rol {
+        "moderator" => &[
+            Permission::ContentDelete,
+            Permission::MemberBan,
+            Permission::ReportView,
+            Permission::ReportResolve,
+            Permission::AuditView,
+        ],
+        "admin" => &[
+            Permission::ContentDelete,
+            Permission::CommunityEdit,
+            Permission::CommunityClose,
+            Permission::MemberBan,
+            Permission::RoleGrant,
+            Permission::ReportView,
+            Permission::ReportResolve,
+            Permission::AuditView,
+        ],
+        other => panic!("bilinmeyen rol: {other}"),
+    };
+    for permission in izinler {
+        core_auth::grant_permission(
+            pool,
+            actor_id,
+            *permission,
+            PermissionScope::Global,
+            None,
+            None,
+        )
         .await
-        .expect("rol verilebilmeli");
+        .expect("izin verilebilmeli");
+    }
 }
 
 /// `actor_id`'yi kalıcı olarak banlar. `banlayan_id` yalnızca denetim izi
 /// için — herhangi bir actor id'si olabilir (bu testte gerçekten
 /// moderatör olması şart değil, `ban_actor`'ın kendisi çağıranın rolünü
-/// kontrol etmiyor; HTTP katmanındaki [`crate::auth::ModeratorActor`]
-/// kontrolü zaten ayrı testlerle kapsanıyor — bkz. `moderasyon_uclarinin_
-/// yetki_matrisi`).
+/// kontrol etmiyor; HTTP katmanındaki `Require<CanBan>` izin kontrolü zaten
+/// ayrı testlerle kapsanıyor — bkz. `moderasyon_uclarinin_yetki_matrisi`).
 #[allow(clippy::expect_used)]
 async fn banla(pool: &PgPool, banlayan_id: i64, username: &str) {
     core_mod::ban_actor(pool, banlayan_id, username, "yetki matrisi testi", None)
@@ -525,7 +557,8 @@ const MATRIX_OPERATIONS: &[(&str, &str)] = &[
     ("DELETE", "/admin/contents/{id}"),
     ("POST", "/admin/bans"),
     ("DELETE", "/admin/bans/{username}"),
-    ("POST", "/admin/roles"),
+    ("PUT", "/admin/permissions"),
+    ("DELETE", "/admin/permissions"),
     ("GET", "/admin/actions"),
 ];
 
@@ -640,9 +673,9 @@ async fn auth_uclarinin_yetki_matrisi(pool: PgPool) {
     let (_, normal_key) = seed_actor(&raw_pool, "am_auth_normal").await;
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_auth_owner").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_auth_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_auth_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (_banned_id, banned_key, banned_codes) =
         seed_actor_with_recovery(&raw_pool, "am_auth_banned").await;
     banla(&raw_pool, owner_id, "am_auth_banned").await;
@@ -924,9 +957,9 @@ async fn actor_profil_uclarinin_yetki_matrisi(pool: PgPool) {
     let _ = target_id;
     let (_, normal_key) = seed_actor(&raw_pool, "am_prof_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_prof_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_prof_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (banned_owner_id, banned_key, _) =
         seed_actor_with_recovery(&raw_pool, "am_prof_banned").await;
     banla(&raw_pool, target_id, "am_prof_banned").await;
@@ -1022,9 +1055,9 @@ async fn actor_profil_uclarinin_yetki_matrisi(pool: PgPool) {
         let username = format!("am_delme_{rol}");
         let (actor_id, key, codes) = seed_actor_with_recovery(&raw_pool, &username).await;
         if rol == "moderator" {
-            rol_ver(&raw_pool, actor_id, AdminRole::Moderator).await;
+            rol_ver(&raw_pool, actor_id, "moderator").await;
         } else if rol == "admin" {
-            rol_ver(&raw_pool, actor_id, AdminRole::Admin).await;
+            rol_ver(&raw_pool, actor_id, "admin").await;
         }
         assert_status(
             &router,
@@ -1139,9 +1172,9 @@ async fn post_uclarinin_yetki_matrisi(pool: PgPool) {
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_post_owner").await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_post_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_post_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_post_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_post_banned").await;
     banla(&raw_pool, owner_id, "am_post_banned").await;
     let _ = banned_id;
@@ -1362,9 +1395,9 @@ async fn comment_uclarinin_yetki_matrisi(pool: PgPool) {
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_com_owner").await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_com_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_com_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_com_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_com_banned").await;
     banla(&raw_pool, owner_id, "am_com_banned").await;
     let _ = banned_id;
@@ -1602,9 +1635,9 @@ async fn interaction_uclarinin_yetki_matrisi(pool: PgPool) {
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_int_owner").await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_int_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_int_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_int_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_int_banned").await;
     banla(&raw_pool, owner_id, "am_int_banned").await;
     let _ = banned_id;
@@ -1884,9 +1917,9 @@ async fn notification_uclarinin_yetki_matrisi(pool: PgPool) {
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_notif_owner").await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_notif_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_notif_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_notif_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_notif_banned").await;
     banla(&raw_pool, owner_id, "am_notif_banned").await;
     let _ = banned_id;
@@ -2029,9 +2062,9 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_feed_owner").await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_feed_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_feed_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_feed_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_feed_banned").await;
     banla(&raw_pool, owner_id, "am_feed_banned").await;
     let _ = banned_id;
@@ -2122,7 +2155,7 @@ async fn feed_arama_etiket_uclarinin_yetki_matrisi(pool: PgPool) {
 }
 
 // ============================================================================
-// moderasyon_uclarinin_yetki_matrisi — 8 operasyon
+// moderasyon_uclarinin_yetki_matrisi — 9 operasyon
 // ============================================================================
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
@@ -2134,9 +2167,9 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
     let (owner_id, owner_key) = seed_actor(&raw_pool, "am_mod_owner").await;
     let (_, normal_key) = seed_actor(&raw_pool, "am_mod_normal").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "am_mod_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
     let (admin_id, admin_key) = seed_actor(&raw_pool, "am_mod_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
     let (banned_id, banned_key, _) = seed_actor_with_recovery(&raw_pool, "am_mod_banned").await;
     banla(&raw_pool, owner_id, "am_mod_banned").await;
     let _ = banned_id;
@@ -2513,68 +2546,73 @@ async fn moderasyon_uclarinin_yetki_matrisi(pool: PgPool) {
     )
     .await;
 
-    // --- POST /admin/roles — yalnızca admin (moderatör için de 403,
-    // override yok). ---
-    assert_code(
-        &router,
-        maybe_auth_json_req(
-            "POST",
-            "/admin/roles",
-            None,
-            json!({ "username": "am_mod_normal", "role": "moderator" }),
-        ),
-        StatusCode::UNAUTHORIZED,
-        "MISSING_CREDENTIALS",
-        "POST /admin/roles [anon]",
-    )
-    .await;
-    for (rol, token) in [
-        ("normal", &normal_key),
-        ("sahip", &owner_key),
-        ("moderator", &mod_key),
-    ] {
+    // --- PUT/DELETE /admin/permissions — yalnızca `role.grant` (admin);
+    // moderatör için de 403. ---
+    let izin_govdesi = json!({ "username": "am_mod_role_hedefi", "permission": "content.delete" });
+    for method in ["PUT", "DELETE"] {
+        assert_code(
+            &router,
+            maybe_auth_json_req(method, "/admin/permissions", None, izin_govdesi.clone()),
+            StatusCode::UNAUTHORIZED,
+            "MISSING_CREDENTIALS",
+            &format!("{method} /admin/permissions [anon]"),
+        )
+        .await;
+        for (rol, token) in [
+            ("normal", &normal_key),
+            ("sahip", &owner_key),
+            ("moderator", &mod_key),
+        ] {
+            assert_code(
+                &router,
+                auth_json_req(method, "/admin/permissions", token, izin_govdesi.clone()),
+                StatusCode::FORBIDDEN,
+                "FORBIDDEN",
+                &format!("{method} /admin/permissions [{rol}]"),
+            )
+            .await;
+        }
         assert_code(
             &router,
             auth_json_req(
-                "POST",
-                "/admin/roles",
-                token,
-                json!({ "username": "am_mod_normal", "role": "moderator" }),
+                method,
+                "/admin/permissions",
+                &banned_key,
+                izin_govdesi.clone(),
             ),
             StatusCode::FORBIDDEN,
-            "FORBIDDEN",
-            &format!("POST /admin/roles [{rol}]"),
+            "BANNED",
+            &format!("{method} /admin/permissions [banli]"),
         )
         .await;
     }
     // Ayrı, tek kullanımlık bir hedef: `am_mod_normal`'ın kendisine burada
-    // gerçekten moderatör rolü verilseydi, dosyanın geri kalanındaki
-    // "normal" rolü hücreleri (ör. aşağıdaki `GET /admin/actions [normal]`)
-    // artık normal bir actor'ü değil bir moderatörü sınardı.
+    // gerçekten izin verilseydi, dosyanın geri kalanındaki "normal" rolü
+    // hücreleri (ör. aşağıdaki `GET /admin/actions [normal]`) artık normal
+    // bir actor'ü değil izinli bir aktörü sınardı.
     seed_actor(&raw_pool, "am_mod_role_hedefi").await;
     assert_status(
         &router,
         auth_json_req(
-            "POST",
-            "/admin/roles",
+            "PUT",
+            "/admin/permissions",
             &admin_key,
-            json!({ "username": "am_mod_role_hedefi", "role": "moderator" }),
+            json!({ "username": "am_mod_role_hedefi", "permission": "content.delete" }),
         ),
         StatusCode::NO_CONTENT,
-        "POST /admin/roles [admin]",
+        "PUT /admin/permissions [admin]",
     )
     .await;
-    assert_code(
+    assert_status(
         &router,
         auth_json_req(
-            "POST",
-            "/admin/roles",
-            &banned_key,
-            json!({ "username": "am_mod_role_hedefi", "role": "moderator" }),
+            "DELETE",
+            "/admin/permissions",
+            &admin_key,
+            json!({ "username": "am_mod_role_hedefi", "permission": "content.delete" }),
         ),
-        StatusCode::FORBIDDEN,
-        "BANNED",
-        "POST /admin/roles [banli]",
+        StatusCode::NO_CONTENT,
+        "DELETE /admin/permissions [admin]",
     )
     .await;
 

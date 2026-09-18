@@ -512,9 +512,14 @@ async fn delete_comment(
     let comment_id = decode_content_id(&id, state.id_codec(), "comment")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    core_comment::delete_comment(state.db(), comment_id, current.actor.id, &current.roles)
-        .await
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    core_comment::delete_comment(
+        state.db(),
+        comment_id,
+        current.actor.id,
+        &current.permissions,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(StatusCode::NO_CONTENT)
 }

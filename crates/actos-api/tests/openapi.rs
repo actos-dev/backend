@@ -192,7 +192,7 @@ const EXPECTED_PATHS: &[&str] = &[
     "/admin/contents/{id}",
     "/admin/bans",
     "/admin/bans/{username}",
-    "/admin/roles",
+    "/admin/permissions",
     "/admin/actions",
 ];
 

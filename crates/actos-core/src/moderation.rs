@@ -30,7 +30,7 @@ use sqlx::{PgConnection, PgPool};
 
 use crate::{
     actor::{Page, paginate},
-    auth::AdminRole,
+    auth::{Permission, PermissionScope},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
     notification::{self, NotificationKind},
@@ -580,88 +580,161 @@ pub async fn unban_actor(pool: &PgPool, admin_actor_id: i64, username: &str) -> 
     Ok(())
 }
 
-// --- Roller -----------------------------------------------------------------
+// --- İzinler ----------------------------------------------------------------
 
-/// `POST /admin/roles`: rol ver ya da al. **Yalnızca `admin`.**
+/// `PUT /admin/permissions`: bir aktöre izin verir. **`role.grant` gerektirir.**
 ///
-/// `role` `None` ise rol kaldırılır.
+/// Denetim kaydı (`permission_grant`) ve upsert **aynı transaction'da** —
+/// bkz. modül dokümantasyonu.
 ///
-/// **Kendi rolünü değiştirmek engelli:** son admin'in kendi yetkisini
-/// kazara alması sistemi yönetilemez bırakırdı ve bunu geri almanın API
+/// **Kendi iznini değiştirmek engelli:** son `role.grant` sahibinin kendi
+/// yetkisini kazara alması sistemi yönetilemez bırakırdı ve geri almanın API
 /// üzerinden bir yolu olmazdı (`bin/seed` ile veritabanına elle girmek
 /// gerekirdi).
 ///
 /// # Errors
-/// Kullanıcı yoksa [`Error::NotFound`]; çağıran kendini hedef alıyorsa
+/// Kullanıcı yoksa [`Error::NotFound`]; çağıran kendini hedef alıyorsa,
+/// izin topluluk-kapsamlı değilken topluluk kapsamı isteniyorsa (ya da tersi)
 /// [`Error::Validation`]; veritabanı hatası [`Error::Database`].
-pub async fn set_role(
+pub async fn grant_permission(
     pool: &PgPool,
-    admin_actor_id: i64,
+    granter_actor_id: i64,
     username: &str,
-    role: Option<AdminRole>,
+    permission: Permission,
+    scope: PermissionScope,
+    community_id: Option<i64>,
 ) -> Result<()> {
-    let normalized = text::normalize_text(username);
+    let hedef_id = resolve_target_actor(pool, username).await?;
 
-    let hedef_id: i64 =
-        sqlx::query_scalar!(r#"SELECT id FROM actors WHERE username = $1"#, normalized)
-            .fetch_optional(pool)
-            .await?
-            .ok_or(Error::NotFound("actor"))?;
-
-    if hedef_id == admin_actor_id {
+    if hedef_id == granter_actor_id {
         return Err(Error::Validation(
-            "an admin cannot change their own role".to_owned(),
+            "you cannot change your own permissions".to_owned(),
         ));
     }
 
+    dogrula_kapsam(permission, scope, community_id)?;
+
     let mut tx = pool.begin().await?;
 
-    match role {
-        Some(rol) => {
-            sqlx::query!(
-                r#"
-                INSERT INTO admin_roles (actor_id, role, granted_by)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (actor_id) DO UPDATE
-                SET role = EXCLUDED.role,
-                    granted_by = EXCLUDED.granted_by,
-                    granted_at = now()
-                "#,
-                hedef_id,
-                rol as AdminRole,
-                admin_actor_id,
-            )
-            .execute(&mut *tx)
+    crate::auth::grant_permission_in_tx(
+        &mut tx,
+        hedef_id,
+        permission,
+        scope,
+        community_id,
+        Some(granter_actor_id),
+    )
+    .await?;
+
+    log_action(
+        &mut tx,
+        granter_actor_id,
+        "permission_grant",
+        "actor",
+        hedef_id,
+        Some(permission.as_str()),
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// `DELETE /admin/permissions`: bir aktörden izni kaldırır.
+///
+/// Idempotent: zaten olmayan bir izni kaldırmak hata değildir ve denetim
+/// izine **yalnızca gerçekten bir satır silindiyse** kayıt yazılır (aynı
+/// `unban_actor` deseni).
+///
+/// # Errors
+/// [`grant_permission`] ile aynı.
+pub async fn revoke_permission(
+    pool: &PgPool,
+    revoker_actor_id: i64,
+    username: &str,
+    permission: Permission,
+    scope: PermissionScope,
+    community_id: Option<i64>,
+) -> Result<bool> {
+    let hedef_id = resolve_target_actor(pool, username).await?;
+
+    if hedef_id == revoker_actor_id {
+        return Err(Error::Validation(
+            "you cannot change your own permissions".to_owned(),
+        ));
+    }
+
+    dogrula_kapsam(permission, scope, community_id)?;
+
+    let mut tx = pool.begin().await?;
+
+    let removed =
+        crate::auth::revoke_permission_in_tx(&mut tx, hedef_id, permission, scope, community_id)
             .await?;
 
-            log_action(
-                &mut tx,
-                admin_actor_id,
-                "role_grant",
-                "actor",
-                hedef_id,
-                None,
-            )
-            .await?;
-        }
-        None => {
-            sqlx::query!(r#"DELETE FROM admin_roles WHERE actor_id = $1"#, hedef_id)
-                .execute(&mut *tx)
-                .await?;
-
-            log_action(
-                &mut tx,
-                admin_actor_id,
-                "role_revoke",
-                "actor",
-                hedef_id,
-                None,
-            )
-            .await?;
-        }
+    if removed {
+        log_action(
+            &mut tx,
+            revoker_actor_id,
+            "permission_revoke",
+            "actor",
+            hedef_id,
+            Some(permission.as_str()),
+        )
+        .await?;
     }
 
     tx.commit().await?;
+
+    Ok(removed)
+}
+
+/// Kullanıcı adını hedef actor id'sine çözer.
+async fn resolve_target_actor(pool: &PgPool, username: &str) -> Result<i64> {
+    let normalized = text::normalize_text(username);
+    sqlx::query_scalar!(r#"SELECT id FROM actors WHERE username = $1"#, normalized)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(Error::NotFound("actor"))
+}
+
+/// Kapsam ile iznin uyumunu uygulama katmanında doğrular.
+///
+/// Şemadaki `ck_permissions_*` kısıtları aynı kuralları zorlar; burada
+/// kontrol edilmesinin sebebi, ihlalin `500` değil `400` dönmesi (aynı desen:
+/// [`dogrula_gerekce`]).
+fn dogrula_kapsam(
+    permission: Permission,
+    scope: PermissionScope,
+    community_id: Option<i64>,
+) -> Result<()> {
+    match (scope, community_id) {
+        (PermissionScope::Global, Some(_)) => {
+            return Err(Error::Validation(
+                "a global permission cannot carry a community".to_owned(),
+            ));
+        }
+        (PermissionScope::Community, None) => {
+            return Err(Error::Validation(
+                "a community permission requires a community".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+
+    if permission.is_community_only() && scope != PermissionScope::Community {
+        return Err(Error::Validation(format!(
+            "{} is only valid at community scope",
+            permission.as_str()
+        )));
+    }
+
+    if permission == Permission::AuditView && scope != PermissionScope::Global {
+        return Err(Error::Validation(
+            "audit.view is only valid at global scope".to_owned(),
+        ));
+    }
 
     Ok(())
 }

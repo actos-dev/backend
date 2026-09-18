@@ -82,13 +82,26 @@ pub struct ApiKeySummary {
     pub revoked_at: Option<String>,
 }
 
+/// One scoped permission held by an actor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct PermissionSummary {
+    /// Dotted permission name, e.g. `"content.delete"`.
+    pub permission: String,
+    /// `"global"` or `"community"`.
+    pub scope: String,
+    /// Community name for a community-scoped grant, `None` for global.
+    /// Always `None` until communities exist (COMMUNITY_PLAN.md phase 2).
+    pub community: Option<String>,
+}
+
 /// Response body of `GET /auth/whoami`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WhoamiResponse {
     pub actor: ActorSummary,
-    /// `"admin"`, `"moderator"` — empty for most actors.
-    pub roles: Vec<String>,
+    /// Scoped permissions held by this actor — empty for most actors.
+    pub permissions: Vec<PermissionSummary>,
     /// Summary of the key that authenticated this request.
     pub key: ApiKeySummary,
 }

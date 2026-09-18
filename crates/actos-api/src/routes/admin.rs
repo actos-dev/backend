@@ -1,9 +1,9 @@
 //! Şikayet ve moderasyon rotaları.
 //!
 //! `POST /reports` **herkese açık** (kimlikli her actor şikayet edebilir);
-//! `/admin/*` altındaki her şey [`ModeratorActor`] ya da [`AdminActor`]
-//! extractor'ı gerektiriyor — yetki kontrolü handler gövdesinde değil tip
-//! imzasında, böylece unutulamıyor (bkz. o extractor'ların dokümantasyonu).
+//! `/admin/*` altındaki her şey [`crate::auth::Require`] ile **belirli bir
+//! global izin** gerektiriyor — yetki kontrolü handler gövdesinde değil tip
+//! imzasında, böylece unutulamıyor (bkz. `crate::auth` marker'ları).
 //!
 //! Denetim izi yazımı bu dosyada **hiç görünmüyor**: her admin işlemi kendi
 //! kaydını `actos_core::moderation` içinde, kendi transaction'ında yazıyor.
@@ -12,13 +12,14 @@
 
 use actos_core::{
     Error,
-    auth::AdminRole,
+    auth::{Permission, PermissionScope},
     id::{Content as ContentIdKind, Report as ReportIdKind},
     moderation::{self as core_mod, ReportStatus, ReportTargetType},
 };
 use actos_types::moderation::{
     AdminActionListResponse, AdminActionSummary, BanSummary, CreateBanRequest, CreateReportRequest,
-    ModerateDeleteRequest, ReportListResponse, ReportSummary, SetRoleRequest, UpdateReportRequest,
+    ModerateDeleteRequest, ReportListResponse, ReportSummary, SetPermissionRequest,
+    UpdateReportRequest,
 };
 use axum::{
     Json,
@@ -29,7 +30,10 @@ use serde::Deserialize;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
-    auth::{AdminActor, CurrentActor, ModeratorActor},
+    auth::{
+        CanBan, CanDeleteContent, CanGrantPermission, CanResolveReports, CanViewAudit,
+        CanViewReports, CurrentActor, Require,
+    },
     error::ApiError,
     openapi::{Conflict, Forbidden, Gone, NotFound, RateLimited, Unauthorized, ValidationFailed},
     routes::actors::{decode_cursor, parse_limit},
@@ -44,7 +48,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(moderate_delete_content))
         .routes(routes!(create_ban))
         .routes(routes!(remove_ban))
-        .routes(routes!(set_role))
+        .routes(routes!(grant_permission, revoke_permission))
         .routes(routes!(list_actions))
 }
 
@@ -187,7 +191,7 @@ async fn create_report(
     )
 )]
 async fn list_reports(
-    _moderator: ModeratorActor,
+    _viewer: Require<CanViewReports>,
     State(state): State<AppState>,
     Query(query): Query<ReportListQuery>,
     headers: HeaderMap,
@@ -241,7 +245,7 @@ async fn list_reports(
     )
 )]
 async fn update_report(
-    moderator: ModeratorActor,
+    moderator: Require<CanResolveReports>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -299,7 +303,7 @@ async fn update_report(
     )
 )]
 async fn moderate_delete_content(
-    moderator: ModeratorActor,
+    moderator: Require<CanDeleteContent>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -338,7 +342,7 @@ async fn moderate_delete_content(
     )
 )]
 async fn create_ban(
-    moderator: ModeratorActor,
+    moderator: Require<CanBan>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<CreateBanRequest>,
@@ -398,7 +402,7 @@ async fn create_ban(
     )
 )]
 async fn remove_ban(
-    moderator: ModeratorActor,
+    moderator: Require<CanBan>,
     State(state): State<AppState>,
     Path(username): Path<String>,
     headers: HeaderMap,
@@ -410,23 +414,22 @@ async fn remove_ban(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// --- Roller (yalnızca admin) ------------------------------------------------
+// --- İzinler (yalnızca role.grant) ------------------------------------------
 
-/// `POST /admin/roles` → `204`, `400`, `401`, `403`, `404`.
+/// `PUT /admin/permissions` → `204`.
 ///
-/// [`AdminActor`] gerektiriyor, [`ModeratorActor`] değil: bir moderatörün
-/// kendine ya da başkasına admin verebilmesi yetki sınırını anlamsız
-/// kılardı.
+/// `role.grant` gerektiriyor: bir moderatörün kendine ya da başkasına keyfî
+/// izin verebilmesi yetki sınırını anlamsız kılardı.
 #[utoipa::path(
-    post,
-    path = "/admin/roles",
+    put,
+    path = "/admin/permissions",
     tag = "admin",
-    summary = "Assign a role to an actor (or clear it)",
-    description = "Only an **admin** can call this (moderator is not enough). `role: null` clears the current role.",
+    summary = "Grant a scoped permission to an actor",
+    description = "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
     security(("api_key" = [])),
-    request_body = SetRoleRequest,
+    request_body = SetPermissionRequest,
     responses(
-        (status = 204, description = "Role updated"),
+        (status = 204, description = "Permission granted"),
         ValidationFailed,
         Unauthorized,
         Forbidden,
@@ -434,29 +437,95 @@ async fn remove_ban(
         RateLimited,
     )
 )]
-async fn set_role(
-    admin: AdminActor,
+async fn grant_permission(
+    admin: Require<CanGrantPermission>,
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<SetRoleRequest>,
+    Json(req): Json<SetPermissionRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let role = match req.role.as_deref() {
-        None => None,
-        Some("admin") => Some(AdminRole::Admin),
-        Some("moderator") => Some(AdminRole::Moderator),
-        Some(other) => {
-            return Err(ApiError::new(Error::Validation(format!(
-                "invalid role: \"{other}\" (expected: admin, moderator, or null)"
-            )))
-            .with_request_id(&headers));
-        }
-    };
+    let (permission, scope, community_id) = parse_permission_request(&req, &headers)?;
 
-    core_mod::set_role(state.db(), admin.actor.id, &req.username, role)
-        .await
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    core_mod::grant_permission(
+        state.db(),
+        admin.actor.id,
+        &req.username,
+        permission,
+        scope,
+        community_id,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /admin/permissions` → `204`.
+///
+/// Idempotent: olmayan bir izni kaldırmak da başarı döner.
+#[utoipa::path(
+    delete,
+    path = "/admin/permissions",
+    tag = "admin",
+    summary = "Revoke a scoped permission from an actor",
+    description = "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
+    security(("api_key" = [])),
+    request_body = SetPermissionRequest,
+    responses(
+        (status = 204, description = "Permission revoked (or none existed)"),
+        ValidationFailed,
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        RateLimited,
+    )
+)]
+async fn revoke_permission(
+    admin: Require<CanGrantPermission>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SetPermissionRequest>,
+) -> Result<StatusCode, ApiError> {
+    let (permission, scope, community_id) = parse_permission_request(&req, &headers)?;
+
+    core_mod::revoke_permission(
+        state.db(),
+        admin.actor.id,
+        &req.username,
+        permission,
+        scope,
+        community_id,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// İstek gövdesini `(permission, scope, community_id)` üçlüsüne çevirir.
+///
+/// Phase 1'de `community` alanı reddediliyor: `communities` tablosu henüz
+/// yok, dolayısıyla topluluk kapsamlı bir atama çözülemez. Alan artık
+/// protokolde duruyor ki Phase 2'de yalnızca bu fonksiyon değişsin.
+fn parse_permission_request(
+    req: &SetPermissionRequest,
+    headers: &HeaderMap,
+) -> Result<(Permission, PermissionScope, Option<i64>), ApiError> {
+    let permission = Permission::parse(&req.permission).ok_or_else(|| {
+        ApiError::new(Error::Validation(format!(
+            "invalid permission: \"{}\"",
+            req.permission
+        )))
+        .with_request_id(headers)
+    })?;
+
+    if req.community.is_some() {
+        return Err(ApiError::new(Error::Validation(
+            "communities are not available yet; omit `community` for a global grant".to_owned(),
+        ))
+        .with_request_id(headers));
+    }
+
+    Ok((permission, PermissionScope::Global, None))
 }
 
 // --- Denetim izi ------------------------------------------------------------
@@ -488,7 +557,7 @@ async fn set_role(
     )
 )]
 async fn list_actions(
-    _moderator: ModeratorActor,
+    _viewer: Require<CanViewAudit>,
     State(state): State<AppState>,
     Query(query): Query<ActionListQuery>,
     headers: HeaderMap,

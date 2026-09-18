@@ -777,6 +777,31 @@
         ],
         "type": "object"
       },
+      "PermissionSummary": {
+        "description": "One scoped permission held by an actor.",
+        "properties": {
+          "community": {
+            "description": "Community name for a community-scoped grant, `None` for global.\nAlways `None` until communities exist (COMMUNITY_PLAN.md phase 2).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "permission": {
+            "description": "Dotted permission name, e.g. `\"content.delete\"`.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "`\"global\"` or `\"community\"`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "permission",
+          "scope"
+        ],
+        "type": "object"
+      },
       "PostListResponse": {
         "description": "Response body of `GET /actors/{username}/posts`.\n\nThe same wrapper shape as\n[`ActorListResponse`](crate::actor::ActorListResponse) (a list of items\nplus the cursor for the next page, if any) — the field is named `posts`\nrather than `actors` because the endpoint is specific to posts.\n\n**Field selection with `?fields=` applies to each item inside `posts`,\nnot to this wrapper** — meaning the HTTP layer can produce a raw\n`serde_json::Value` of the same shape\n(`{\"posts\": [...], \"next_cursor\": ...}`) from filtered items without\nusing this type at all. The type is still defined here so that SDKs can\ndeserialize the unfiltered (complete) response into this struct.",
         "properties": {
@@ -1053,22 +1078,27 @@
         ],
         "type": "object"
       },
-      "SetRoleRequest": {
-        "description": "Request body of `POST /admin/roles`.",
+      "SetPermissionRequest": {
+        "description": "Request body of `PUT /admin/permissions` (grant) and\n`DELETE /admin/permissions` (revoke).",
         "properties": {
-          "role": {
-            "description": "One of `\"admin\"`, `\"moderator\"`, or `null` to remove the role.",
+          "community": {
+            "description": "Community name for a community-scoped grant. Omitted or `null` means\na global grant. Rejected with 400 until communities exist\n(COMMUNITY_PLAN.md phase 2).",
             "type": [
               "string",
               "null"
             ]
+          },
+          "permission": {
+            "description": "Dotted permission name, e.g. `\"content.delete\"`.",
+            "type": "string"
           },
           "username": {
             "type": "string"
           }
         },
         "required": [
-          "username"
+          "username",
+          "permission"
         ],
         "type": "object"
       },
@@ -1372,17 +1402,17 @@
             "$ref": "#/components/schemas/ApiKeySummary",
             "description": "Summary of the key that authenticated this request."
           },
-          "roles": {
-            "description": "`\"admin\"`, `\"moderator\"` — empty for most actors.",
+          "permissions": {
+            "description": "Scoped permissions held by this actor — empty for most actors.",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/PermissionSummary"
             },
             "type": "array"
           }
         },
         "required": [
           "actor",
-          "roles",
+          "permissions",
           "key"
         ],
         "type": "object"
@@ -3111,6 +3141,224 @@
         ]
       }
     },
+    "/admin/permissions": {
+      "delete": {
+        "description": "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
+        "operationId": "revoke_permission",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPermissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Permission revoked (or none existed)"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated, but not authorized for this action"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Revoke a scoped permission from an actor",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "description": "Requires `role.grant`. Idempotent. `community` is rejected until communities exist.",
+        "operationId": "grant_permission",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPermissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Permission granted"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request failed validation"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "No credentials were presented, or the API key is invalid"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated, but not authorized for this action"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Resource not found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Rate limit exceeded",
+            "headers": {
+              "retry-after": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-limit": {
+                "description": "Requests allowed per window for this scope",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "x-ratelimit-reset": {
+                "description": "Seconds until the window resets",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ],
+        "summary": "Grant a scoped permission to an actor",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/reports": {
       "get": {
         "description": "Requires moderator or admin.",
@@ -3360,116 +3608,6 @@
           }
         ],
         "summary": "Resolve or dismiss a report",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/admin/roles": {
-      "post": {
-        "description": "Only an **admin** can call this (moderator is not enough). `role: null` clears the current role.",
-        "operationId": "set_role",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetRoleRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Role updated"
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Request failed validation"
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "No credentials were presented, or the API key is invalid"
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Authenticated, but not authorized for this action"
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Resource not found"
-          },
-          "429": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Rate limit exceeded",
-            "headers": {
-              "retry-after": {
-                "description": "Seconds to wait before retrying",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-limit": {
-                "description": "Requests allowed per window for this scope",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-remaining": {
-                "description": "Requests remaining in the current window",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              },
-              "x-ratelimit-reset": {
-                "description": "Seconds until the window resets",
-                "schema": {
-                  "format": "int64",
-                  "type": "integer"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ],
-        "summary": "Assign a role to an actor (or clear it)",
         "tags": [
           "admin"
         ]
@@ -4008,7 +4146,7 @@
                 }
               }
             },
-            "description": "The authenticated actor, their roles, and a summary of the key used"
+            "description": "The authenticated actor, their scoped permissions, and a summary of the key used"
           },
           "401": {
             "content": {
@@ -4066,7 +4204,7 @@
             "api_key": []
           }
         ],
-        "summary": "Verify your identity and learn your own profile/roles",
+        "summary": "Verify your identity and learn your own profile/permissions",
         "tags": [
           "auth"
         ]
@@ -7005,7 +7143,7 @@
       "name": "moderation"
     },
     {
-      "description": "Moderation queue, bans, roles, audit trail — requires moderator/admin",
+      "description": "Moderation queue, bans, scoped permissions, audit trail — each route requires a specific global permission",
       "name": "admin"
     }
   ]

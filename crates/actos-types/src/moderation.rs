@@ -80,14 +80,19 @@ pub struct BanSummary {
     pub expires_at: Option<String>,
 }
 
-/// Request body of `POST /admin/roles`.
+/// Request body of `PUT /admin/permissions` (grant) and
+/// `DELETE /admin/permissions` (revoke).
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-pub struct SetRoleRequest {
+pub struct SetPermissionRequest {
     pub username: String,
-    /// One of `"admin"`, `"moderator"`, or `null` to remove the role.
+    /// Dotted permission name, e.g. `"content.delete"`.
+    pub permission: String,
+    /// Community name for a community-scoped grant. Omitted or `null` means
+    /// a global grant. Rejected with 400 until communities exist
+    /// (COMMUNITY_PLAN.md phase 2).
     #[serde(default)]
-    pub role: Option<String>,
+    pub community: Option<String>,
 }
 
 /// An audit trail record.

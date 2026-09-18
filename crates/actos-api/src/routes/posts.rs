@@ -778,9 +778,14 @@ async fn delete_post(
     let content_id = decode_content_id(&id, state.id_codec(), "post")
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
-    core_content::delete_post(state.db(), content_id, current.actor.id, &current.roles)
-        .await
-        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    core_content::delete_post(
+        state.db(),
+        content_id,
+        current.actor.id,
+        &current.permissions,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
 
     Ok(StatusCode::NO_CONTENT)
 }

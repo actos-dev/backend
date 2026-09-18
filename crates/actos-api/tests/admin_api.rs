@@ -13,7 +13,7 @@
 use actos_api::{app, state::AppState};
 use actos_core::{
     Config, Storage,
-    auth::{self as core_auth, ActorType, AdminRole},
+    auth::{self as core_auth, ActorType, Permission, PermissionScope},
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
         StorageQuotaConfig,
@@ -172,12 +172,48 @@ async fn seed_actor(pool: &PgPool, username: &str) -> (i64, String) {
     (reg.actor.id, reg.api_key)
 }
 
-/// Bir actor'e rol verir.
+/// Bir actor'e tek bir global izin verir.
 #[allow(clippy::expect_used)]
-async fn rol_ver(pool: &PgPool, actor_id: i64, role: AdminRole) {
-    core_auth::grant_role(pool, actor_id, role, None)
-        .await
-        .expect("rol verilebilmeli");
+async fn izin_ver(pool: &PgPool, actor_id: i64, permission: Permission) {
+    core_auth::grant_permission(
+        pool,
+        actor_id,
+        permission,
+        PermissionScope::Global,
+        None,
+        None,
+    )
+    .await
+    .expect("izin verilebilmeli");
+}
+
+/// Eski rol modelinin izin kümesi — moderatör beş, admin sekiz global izin
+/// tutuyordu (bkz. `migrations/0028_permissions.up.sql` veri göçü).
+#[allow(clippy::expect_used)]
+async fn rol_ver(pool: &PgPool, actor_id: i64, rol: &str) {
+    let izinler: &[Permission] = match rol {
+        "moderator" => &[
+            Permission::ContentDelete,
+            Permission::MemberBan,
+            Permission::ReportView,
+            Permission::ReportResolve,
+            Permission::AuditView,
+        ],
+        "admin" => &[
+            Permission::ContentDelete,
+            Permission::CommunityEdit,
+            Permission::CommunityClose,
+            Permission::MemberBan,
+            Permission::RoleGrant,
+            Permission::ReportView,
+            Permission::ReportResolve,
+            Permission::AuditView,
+        ],
+        other => panic!("bilinmeyen rol: {other}"),
+    };
+    for permission in izinler {
+        izin_ver(pool, actor_id, *permission).await;
+    }
 }
 
 #[allow(clippy::expect_used)]
@@ -293,9 +329,14 @@ async fn yetkisiz_erisim_tum_admin_uclarinda_403(pool: PgPool) {
         ),
         ("DELETE", "/admin/bans/biri", None),
         (
-            "POST",
-            "/admin/roles",
-            Some(json!({ "username": "biri", "role": "moderator" })),
+            "PUT",
+            "/admin/permissions",
+            Some(json!({ "username": "biri", "permission": "content.delete" })),
+        ),
+        (
+            "DELETE",
+            "/admin/permissions",
+            Some(json!({ "username": "biri", "permission": "content.delete" })),
         ),
         ("GET", "/admin/actions", None),
     ];
@@ -322,27 +363,27 @@ async fn kimliksiz_admin_erisimi_401(pool: PgPool) {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 }
 
-/// Moderatör rol yönetimine erişemez — yalnızca admin.
+/// Moderatör izin verme yetkisine (`role.grant`) sahip değil — yalnızca admin.
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn moderator_rol_yonetimine_erisemiyor(pool: PgPool) {
+async fn moderator_izin_yonetimine_erisemiyor(pool: PgPool) {
     let raw_pool = pool.clone();
     let router = build_router(pool);
     let (mod_id, mod_key) = seed_actor(&raw_pool, "sadece_moderator").await;
     seed_actor(&raw_pool, "hedef_kullanici").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
 
     // Moderatör kuyruğu görebiliyor...
     let (status, body, _) = send(&router, auth_req("GET", "/admin/reports", &mod_key)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
-    // ...ama rol veremiyor.
+    // ...ama izin veremiyor (`role.grant` yok).
     let (status, body, _) = send(
         &router,
         auth_json_req(
-            "POST",
-            "/admin/roles",
+            "PUT",
+            "/admin/permissions",
             &mod_key,
-            json!({ "username": "hedef_kullanici", "role": "admin" }),
+            json!({ "username": "hedef_kullanici", "permission": "content.delete" }),
         ),
     )
     .await;
@@ -350,19 +391,19 @@ async fn moderator_rol_yonetimine_erisemiyor(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn admin_kendi_rolunu_degistiremiyor(pool: PgPool) {
+async fn admin_kendi_izinini_degistiremiyor(pool: PgPool) {
     let raw_pool = pool.clone();
     let router = build_router(pool);
     let (admin_id, admin_key) = seed_actor(&raw_pool, "kendi_rol_admin").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
 
     let (status, body, _) = send(
         &router,
         auth_json_req(
-            "POST",
-            "/admin/roles",
+            "PUT",
+            "/admin/permissions",
             &admin_key,
-            json!({ "username": "kendi_rol_admin", "role": null }),
+            json!({ "username": "kendi_rol_admin", "permission": "content.delete" }),
         ),
     )
     .await;
@@ -378,7 +419,7 @@ async fn banli_actor_yazamiyor_ama_okuyabiliyor(pool: PgPool) {
     let router = build_router(pool);
     let (mod_id, mod_key) = seed_actor(&raw_pool, "banlayan_mod").await;
     let (_, kurban_key) = seed_actor(&raw_pool, "banlanacak").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
 
     // Ban öncesi yazabiliyor.
     let post = seed_post(&router, &kurban_key, "ban öncesi").await;
@@ -435,7 +476,7 @@ async fn ban_kaldirilinca_yazma_geri_geliyor(pool: PgPool) {
     let router = build_router(pool);
     let (mod_id, mod_key) = seed_actor(&raw_pool, "ban_kaldiran").await;
     let (_, kurban_key) = seed_actor(&raw_pool, "ban_kalkacak").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
 
     let (status, _, _) = send(
         &router,
@@ -480,7 +521,7 @@ async fn her_admin_eylemi_denetim_izine_dusuyor(pool: PgPool) {
     let (admin_id, admin_key) = seed_actor(&raw_pool, "iz_admin").await;
     let (_, yazar_key) = seed_actor(&raw_pool, "iz_yazar").await;
     seed_actor(&raw_pool, "iz_hedef").await;
-    rol_ver(&raw_pool, admin_id, AdminRole::Admin).await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
 
     assert_eq!(iz_sayisi(&raw_pool).await, 0, "başta iz boş olmalı");
 
@@ -520,14 +561,14 @@ async fn her_admin_eylemi_denetim_izine_dusuyor(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    // 4) Rol verme
+    // 4) İzin verme
     let (status, _, _) = send(
         &router,
         auth_json_req(
-            "POST",
-            "/admin/roles",
+            "PUT",
+            "/admin/permissions",
             &admin_key,
-            json!({ "username": "iz_hedef", "role": "moderator" }),
+            json!({ "username": "iz_hedef", "permission": "content.delete" }),
         ),
     )
     .await;
@@ -541,7 +582,7 @@ async fn her_admin_eylemi_denetim_izine_dusuyor(pool: PgPool) {
     let eylemler = body["actions"].as_array().expect("actions dizi");
     assert_eq!(eylemler.len(), 4, "{body}");
     // En yeni önce.
-    assert_eq!(eylemler[0]["action_type"], "role_grant", "{body}");
+    assert_eq!(eylemler[0]["action_type"], "permission_grant", "{body}");
     assert_eq!(eylemler[3]["action_type"], "content_delete", "{body}");
     assert_eq!(eylemler[3]["reason"], "kural ihlali", "{body}");
     assert_eq!(eylemler[0]["admin_username"], "iz_admin", "{body}");
@@ -555,7 +596,7 @@ async fn denetim_izi_silinemiyor(pool: PgPool) {
     let router = build_router(pool);
     let (mod_id, mod_key) = seed_actor(&raw_pool, "iz_silmeye_calisan").await;
     seed_actor(&raw_pool, "iz_silme_hedefi").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
 
     let (status, _, _) = send(
         &router,
@@ -586,7 +627,7 @@ async fn kuyruk_status_filtresi_ve_cozme_akisi(pool: PgPool) {
     let (mod_id, mod_key) = seed_actor(&raw_pool, "kuyruk_mod").await;
     let (_, yazar_key) = seed_actor(&raw_pool, "kuyruk_yazar").await;
     let (_, sikayetci_key) = seed_actor(&raw_pool, "kuyruk_sikayetci").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
 
     let post = seed_post(&router, &yazar_key, "kuyruğa girecek").await;
 
@@ -649,7 +690,7 @@ async fn gecersiz_status_400(pool: PgPool) {
     let raw_pool = pool.clone();
     let router = build_router(pool);
     let (mod_id, mod_key) = seed_actor(&raw_pool, "gecersiz_status_mod").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
 
     let (status, body, _) = send(
         &router,
@@ -666,7 +707,7 @@ async fn moderator_baskasinin_icerigini_silebiliyor(pool: PgPool) {
     let router = build_router(pool);
     let (mod_id, mod_key) = seed_actor(&raw_pool, "silen_mod").await;
     let (_, yazar_key) = seed_actor(&raw_pool, "silinen_yazar").await;
-    rol_ver(&raw_pool, mod_id, AdminRole::Moderator).await;
+    rol_ver(&raw_pool, mod_id, "moderator").await;
 
     let post = seed_post(&router, &yazar_key, "başkasının postu").await;
 
@@ -699,4 +740,206 @@ async fn moderator_baskasinin_icerigini_silebiliyor(pool: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "gerekçe zorunlu: {body}");
+}
+
+// --- Kapsamlı izin modeli ---------------------------------------------------
+
+/// İzin verildikten sonra `whoami` onu global kapsamda, topluluksuz gösterir.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn izin_verilince_whoami_kapsami_gosteriyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "whoami_admin").await;
+    let (_, hedef_key) = seed_actor(&raw_pool, "whoami_hedef").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/admin/permissions",
+            &admin_key,
+            json!({ "username": "whoami_hedef", "permission": "content.delete" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(&router, auth_req("GET", "/auth/whoami", &hedef_key)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let permissions = body["permissions"].as_array().expect("permissions dizi");
+    assert_eq!(permissions.len(), 1, "{body}");
+    assert_eq!(permissions[0]["permission"], "content.delete", "{body}");
+    assert_eq!(permissions[0]["scope"], "global", "{body}");
+    assert!(permissions[0]["community"].is_null(), "{body}");
+}
+
+/// Kaldırma idempotent: izin hiç verilmemişken, verildikten sonra ve tekrar
+/// kaldırıldığında her seferinde `204`.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn izin_kaldirma_idempotent(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "revoke_admin").await;
+    seed_actor(&raw_pool, "revoke_hedef").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+
+    let govde = json!({ "username": "revoke_hedef", "permission": "content.delete" });
+
+    // Hiç verilmemişken kaldırma da başarı döner.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req("DELETE", "/admin/permissions", &admin_key, govde.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Ver, kaldır, tekrar kaldır — ikisi de 204.
+    let (status, _, _) = send(
+        &router,
+        auth_json_req("PUT", "/admin/permissions", &admin_key, govde.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    for _ in 0..2 {
+        let (status, body, _) = send(
+            &router,
+            auth_json_req("DELETE", "/admin/permissions", &admin_key, govde.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    }
+}
+
+/// Bilinmeyen bir izin dizesi `400` (DB enum'una düşmeden doğrulanır).
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn bilinmeyen_izin_400(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "bilinmeyen_izin_admin").await;
+    seed_actor(&raw_pool, "bilinmeyen_izin_hedef").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/admin/permissions",
+            &admin_key,
+            json!({ "username": "bilinmeyen_izin_hedef", "permission": "does.not.exist" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+/// Phase 1'de topluluklar yok: `community` alanı doluysa `400`.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn topluluk_alani_faz1_de_reddediliyor(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "topluluk_admin").await;
+    seed_actor(&raw_pool, "topluluk_hedef").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/admin/permissions",
+            &admin_key,
+            json!({
+                "username": "topluluk_hedef",
+                "permission": "content.delete",
+                "community": "bir-topluluk",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+/// Yalnızca topluluk kapsamında anlamlı olan `member.kick` global verilemez.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn topluluk_izni_global_verilemez(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (admin_id, admin_key) = seed_actor(&raw_pool, "kick_admin").await;
+    seed_actor(&raw_pool, "kick_hedef").await;
+    rol_ver(&raw_pool, admin_id, "admin").await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/admin/permissions",
+            &admin_key,
+            json!({ "username": "kick_hedef", "permission": "member.kick" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+/// Yalnızca `content.delete` tutan bir aktör başkasına izin veremez ve
+/// denetim izini göremez.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn icerik_silme_izni_olan_izin_veremez_ve_izi_goremez(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (silici_id, silici_key) = seed_actor(&raw_pool, "sadece_silici").await;
+    seed_actor(&raw_pool, "izin_hedefi").await;
+    izin_ver(&raw_pool, silici_id, Permission::ContentDelete).await;
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "PUT",
+            "/admin/permissions",
+            &silici_key,
+            json!({ "username": "izin_hedefi", "permission": "content.delete" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (status, body, _) = send(&router, auth_req("GET", "/admin/actions", &silici_key)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+/// `content.delete` başkasının postunu silmeye yeter ama ban için ayrı
+/// `member.ban` gerekir.
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn icerik_silme_izni_olan_silebilir_ama_banlayamaz(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (silici_id, silici_key) = seed_actor(&raw_pool, "silici_actor").await;
+    let (_, yazar_key) = seed_actor(&raw_pool, "silinecek_yazar").await;
+    seed_actor(&raw_pool, "banlanacak_actor").await;
+    izin_ver(&raw_pool, silici_id, Permission::ContentDelete).await;
+
+    let post = seed_post(&router, &yazar_key, "silici hedefi").await;
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "DELETE",
+            &format!("/admin/contents/{post}"),
+            &silici_key,
+            json!({ "reason": "yetki testi" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/admin/bans",
+            &silici_key,
+            json!({ "username": "banlanacak_actor", "reason": "test" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }

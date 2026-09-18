@@ -8,12 +8,12 @@
 //! ayrı bir entegrasyon test binary'si olduğu için paylaşılan bir modül
 //! olmadan tekrar tanımlanıyor.
 //!
-//! **One exception, deliberately outside HTTP:** the first admin's role —
-//! `POST /admin/roles` itself already requires an admin (chicken-and-egg),
-//! so the first admin is written directly to the database with
-//! `actos_core::auth::grant_role` (see the same pattern as `rol_ver` in
-//! `tests/admin_api.rs`). Every role/ban/delete operation after that is a
-//! real HTTP request.
+//! **One exception, deliberately outside HTTP:** the first admin's
+//! permissions — `PUT /admin/permissions` itself already requires
+//! `role.grant` (chicken-and-egg), so the first admin is written directly to
+//! the database with `actos_core::auth::grant_permission` (see the same
+//! pattern as `rol_ver` in `tests/admin_api.rs`). Every permission/ban/delete
+//! operation after that is a real HTTP request.
 //!
 //! ## Doğrulanan sözleşme ayrıntıları
 //!
@@ -39,7 +39,7 @@
 use actos_api::{app, state::AppState};
 use actos_core::{
     Config, Storage,
-    auth::{self as core_auth, AdminRole},
+    auth::{self as core_auth, Permission, PermissionScope},
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
         StorageQuotaConfig,
@@ -211,7 +211,9 @@ async fn register(router: &Router, username: &str) -> (String, String) {
     )
 }
 
-/// İlk admin'in rolü — bkz. dosya başındaki modül dokümanının 1. maddesi.
+/// İlk admin'in izinleri — bkz. dosya başındaki modül dokümanının 1. maddesi.
+/// Eski admin rolünün sekiz global iznini verir (bkz.
+/// `migrations/0028_permissions.up.sql` veri göçü).
 #[allow(clippy::expect_used)]
 async fn bootstrap_ilk_admin(pool: &PgPool, username: &str) {
     let actor_id: i64 =
@@ -219,9 +221,27 @@ async fn bootstrap_ilk_admin(pool: &PgPool, username: &str) {
             .fetch_one(pool)
             .await
             .expect("actor bulunabilmeli");
-    core_auth::grant_role(pool, actor_id, AdminRole::Admin, None)
+    for permission in [
+        Permission::ContentDelete,
+        Permission::CommunityEdit,
+        Permission::CommunityClose,
+        Permission::MemberBan,
+        Permission::RoleGrant,
+        Permission::ReportView,
+        Permission::ReportResolve,
+        Permission::AuditView,
+    ] {
+        core_auth::grant_permission(
+            pool,
+            actor_id,
+            permission,
+            PermissionScope::Global,
+            None,
+            None,
+        )
         .await
-        .expect("ilk admin rolü verilebilmeli");
+        .expect("ilk admin izni verilebilmeli");
+    }
 }
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
@@ -239,25 +259,33 @@ async fn kayittan_bildirime_uctan_uca_senaryo(pool: PgPool) {
     let (_, moderator_key) = register(&router, "e2e_moderator").await;
     let (_, admin_key) = register(&router, "e2e_admin").await;
 
-    // İlk admin'i bootstrap et, sonra gerçek `POST /admin/roles` HTTP
-    // isteğiyle moderatörü ata — buradan itibaren her rol/ban/silme işlemi
-    // gerçek bir istek.
+    // İlk admin'i bootstrap et, sonra gerçek `PUT /admin/permissions` HTTP
+    // istekleriyle moderatörün beş iznini ata — buradan itibaren her
+    // izin/ban/silme işlemi gerçek bir istek.
     bootstrap_ilk_admin(&raw_pool, "e2e_admin").await;
-    let (status, body, _) = send(
-        &router,
-        auth_json_req(
-            "POST",
-            "/admin/roles",
-            &admin_key,
-            json!({ "username": "e2e_moderator", "role": "moderator" }),
-        ),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::NO_CONTENT,
-        "moderatör rolü verilemedi: {body}"
-    );
+    for permission in [
+        "content.delete",
+        "member.ban",
+        "report.view",
+        "report.resolve",
+        "audit.view",
+    ] {
+        let (status, body, _) = send(
+            &router,
+            auth_json_req(
+                "PUT",
+                "/admin/permissions",
+                &admin_key,
+                json!({ "username": "e2e_moderator", "permission": permission }),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "moderatör izni verilemedi ({permission}): {body}"
+        );
+    }
 
     // === 2) Post at =======================================================
     let (status, post_body, headers) = send(

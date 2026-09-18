@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use actos_core::{
     Config,
-    auth::{self, ActorType, AdminRole},
+    auth::{self, ActorType, Permission, PermissionScope},
     db,
 };
 use sqlx::PgPool;
@@ -58,6 +58,22 @@ enum Outcome {
     AdminAlreadyExists,
 }
 
+/// İlk admin'e verilen global izinler.
+///
+/// Topluluk-kapsamlı üç izin (`member.invite`/`approve`/`kick`) bilerek yok:
+/// global kapsamda anlamsızdırlar ve şema (`ck_permissions_community_only`)
+/// onları global kapsamda zaten reddeder.
+const FIRST_ADMIN_GLOBAL_PERMISSIONS: &[Permission] = &[
+    Permission::ContentDelete,
+    Permission::CommunityEdit,
+    Permission::CommunityClose,
+    Permission::MemberBan,
+    Permission::RoleGrant,
+    Permission::ReportView,
+    Permission::ReportResolve,
+    Permission::AuditView,
+];
+
 async fn run(username: &str) -> Result<Outcome, Box<dyn std::error::Error>> {
     let config = Config::from_env()?;
     let pool = db::connect(&config.database).await?;
@@ -72,20 +88,33 @@ async fn run(username: &str) -> Result<Outcome, Box<dyn std::error::Error>> {
     }
 
     // `auth::register` actor + ilk API key + 10 kurtarma kodunu tek
-    // transaction'da yazar (bkz. crates/actos-core/src/auth.rs). Admin rolü
-    // onun bilmediği ayrı bir kavram; bu yüzden `auth::grant_role` ikinci,
-    // bağımsız bir adım. Aradaki kısacık pencerede bir hata olursa (actor
-    // ve key var ama rol yok), bu script yeniden çalıştırılamaz
-    // (`admin_already_exists` koruması yalnızca "bir admin var mı"na
-    // bakar) — o durumda operatörün `admin_roles`'a satırı elle eklemesi
-    // gerekir. Script tek seferlik ve elle çalıştırıldığı için bu
+    // transaction'da yazar (bkz. crates/actos-core/src/auth.rs). İzinler
+    // onun bilmediği ayrı bir kavram; bu yüzden `auth::grant_permission`
+    // ikinci, bağımsız bir adım. Aradaki kısacık pencerede bir hata olursa
+    // (actor ve key var ama izin yok), bu script yeniden çalıştırılamaz
+    // (`admin_already_exists` koruması yalnızca "bir role.grant sahibi var
+    // mı"na bakar) — o durumda operatörün `permissions`'a satırı elle
+    // eklemesi gerekir. Script tek seferlik ve elle çalıştırıldığı için bu
     // trade-off kabul edilebilir.
     let registration = auth::register(&pool, username, ActorType::Human, None).await?;
 
-    // granted_by = None: rolü veren başka bir admin yok, platformun ilk
-    // admin'i bu script tarafından doğrudan atanıyor (bkz.
-    // migrations/0012_admin_roles.up.sql üzerindeki COMMENT).
-    auth::grant_role(&pool, registration.actor.id, AdminRole::Admin, None).await?;
+    // Platformun ilk admin'i, global kapsamda **tüm** izinleri alır —
+    // topluluk-kapsamlı (`member.invite`/`approve`/`kick`) olanlar hariç:
+    // onlar global kapsamda anlamsız ve şema zaten reddediyor (bkz.
+    // `ck_permissions_community_only`).
+    for permission in FIRST_ADMIN_GLOBAL_PERMISSIONS {
+        // granted_by = None: izni veren başka bir admin yok, platformun ilk
+        // admin'i bu script tarafından doğrudan atanıyor.
+        auth::grant_permission(
+            &pool,
+            registration.actor.id,
+            *permission,
+            PermissionScope::Global,
+            None,
+            None,
+        )
+        .await?;
+    }
 
     // Sırlar buradan sonra hiçbir yere (özellikle `tracing`'e) yazılmaz;
     // yalnızca stdout'a, yalnızca bu çalıştırmada basılır.
@@ -101,7 +130,10 @@ async fn run(username: &str) -> Result<Outcome, Box<dyn std::error::Error>> {
 
 async fn admin_already_exists(pool: &PgPool) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar!(
-        r#"SELECT EXISTS(SELECT 1 FROM admin_roles WHERE role = 'admin') AS "exists!""#
+        r#"SELECT EXISTS(
+               SELECT 1 FROM permissions
+               WHERE permission = 'role.grant' AND scope = 'global'
+           ) AS "exists!""#
     )
     .fetch_one(pool)
     .await

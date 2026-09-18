@@ -1,5 +1,5 @@
 //! Kimlik doğrulamanın domain katmanı: kayıt, API key doğrulama, key
-//! yönetimi, kurtarma kodları ve rol atama.
+//! yönetimi, kurtarma kodları ve izin (permission) atama.
 //!
 //! HTTP'yi bilmez — `Authorization` header'ını ayrıştırmak, middleware
 //! kurmak, rota tanımlamak taşıma katmanının (`actos-api`) işi. Burada
@@ -13,7 +13,7 @@
 use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::{
@@ -50,13 +50,129 @@ pub enum ActorType {
     AiAgent,
 }
 
-/// `migrations/0012_admin_roles.up.sql` → `admin_role` Postgres enum'ının
-/// Rust karşılığı.
+/// `migrations/0028_permissions.up.sql` → `permission_scope` Postgres
+/// enum'ının Rust karşılığı.
+///
+/// Bir izin ya platform genelinde (`Global`) ya da tek bir topluluk
+/// özelinde (`Community`) verilir. Kapsam, iznin kendisinden ayrı bir
+/// boyuttur: `content.delete` global kapsamda "herhangi bir içeriği sil",
+/// topluluk kapsamında "bu topluluktaki içeriği sil" demektir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
-#[sqlx(type_name = "admin_role", rename_all = "snake_case")]
-pub enum AdminRole {
-    Admin,
-    Moderator,
+#[sqlx(type_name = "permission_scope", rename_all = "snake_case")]
+pub enum PermissionScope {
+    Global,
+    Community,
+}
+
+impl PermissionScope {
+    /// API'de görünen dize.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Community => "community",
+        }
+    }
+}
+
+/// `migrations/0028_permissions.up.sql` → `permission` Postgres enum'ının
+/// Rust karşılığı.
+///
+/// Sözlük `COMMUNITY_PLAN.md` §5'teki tablodur; `report.view`,
+/// `report.resolve` ve `audit.view` oradaki "draft" listenin uygulama
+/// sırasında netleşen ekleridir (bugünkü moderatör bu üçünü de yapıyordu).
+///
+/// `#[sqlx(rename = ...)]` etiketleri nokta içerdiği için varyant adları
+/// kısaltıldı; DB'de ve API'de görünen dize yine noktalı hâlidir
+/// ([`Permission::as_str`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, sqlx::Type)]
+#[sqlx(type_name = "permission")]
+pub enum Permission {
+    #[sqlx(rename = "content.delete")]
+    ContentDelete,
+    #[sqlx(rename = "community.edit")]
+    CommunityEdit,
+    #[sqlx(rename = "community.close")]
+    CommunityClose,
+    #[sqlx(rename = "member.invite")]
+    MemberInvite,
+    #[sqlx(rename = "member.approve")]
+    MemberApprove,
+    #[sqlx(rename = "member.kick")]
+    MemberKick,
+    #[sqlx(rename = "member.ban")]
+    MemberBan,
+    #[sqlx(rename = "role.grant")]
+    RoleGrant,
+    #[sqlx(rename = "report.view")]
+    ReportView,
+    #[sqlx(rename = "report.resolve")]
+    ReportResolve,
+    #[sqlx(rename = "audit.view")]
+    AuditView,
+}
+
+impl Permission {
+    /// API'de ve `whoami` çıktısında görünen noktalı dize.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ContentDelete => "content.delete",
+            Self::CommunityEdit => "community.edit",
+            Self::CommunityClose => "community.close",
+            Self::MemberInvite => "member.invite",
+            Self::MemberApprove => "member.approve",
+            Self::MemberKick => "member.kick",
+            Self::MemberBan => "member.ban",
+            Self::RoleGrant => "role.grant",
+            Self::ReportView => "report.view",
+            Self::ReportResolve => "report.resolve",
+            Self::AuditView => "audit.view",
+        }
+    }
+
+    /// İstemciden gelen dizeyi ayrıştırır. Bilinmeyen dize `None`.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        Some(match raw {
+            "content.delete" => Self::ContentDelete,
+            "community.edit" => Self::CommunityEdit,
+            "community.close" => Self::CommunityClose,
+            "member.invite" => Self::MemberInvite,
+            "member.approve" => Self::MemberApprove,
+            "member.kick" => Self::MemberKick,
+            "member.ban" => Self::MemberBan,
+            "role.grant" => Self::RoleGrant,
+            "report.view" => Self::ReportView,
+            "report.resolve" => Self::ReportResolve,
+            "audit.view" => Self::AuditView,
+            _ => return None,
+        })
+    }
+
+    /// Bu izin yalnızca topluluk kapsamında mı geçerli?
+    ///
+    /// `member.invite`/`approve`/`kick` platform genelinde anlamsızdır —
+    /// "birini platformdan at" bir ban'dır, ayrı bir izin. DB'de de
+    /// `ck_permissions_community_only` bunu zorlar.
+    #[must_use]
+    pub const fn is_community_only(self) -> bool {
+        matches!(
+            self,
+            Self::MemberInvite | Self::MemberApprove | Self::MemberKick
+        )
+    }
+}
+
+/// Bir aktörün tek bir izin kapsamını taşıyan atama.
+///
+/// `community_id` yalnızca [`PermissionScope::Community`] için doludur;
+/// `permissions.community_id` sütununun aynası.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grant {
+    pub permission: Permission,
+    pub scope: PermissionScope,
+    pub community_id: Option<i64>,
 }
 
 /// `api_keys` tablosundan okunan bir satır. **`secret_hash` kasıtlı olarak
@@ -77,7 +193,9 @@ pub struct ApiKeyRecord {
 pub struct AuthenticatedActor {
     pub actor: ActorRecord,
     pub key_id: Uuid,
-    pub roles: Vec<AdminRole>,
+    /// Aktörün sahip olduğu izin atamaları (global ve topluluk kapsamlı
+    /// olanlar birlikte). Yetki kontrolü [`crate::authz`] üzerinden yapılır.
+    pub permissions: Vec<Grant>,
     /// Actor'ün aktif bir ban'i var mı.
     ///
     /// **Ban kimlik doğrulamayı düşürmüyor**, yalnızca işaretleniyor:
@@ -302,8 +420,16 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
     // Ban burada hata üretmiyor, aşağıda `banned` alanına taşınıyor —
     // gerekçe `AuthenticatedActor::banned` üzerinde.
 
-    let roles = sqlx::query_scalar!(
-        r#"SELECT role AS "role: AdminRole" FROM admin_roles WHERE actor_id = $1"#,
+    let permissions = sqlx::query_as!(
+        Grant,
+        r#"
+        SELECT
+            permission AS "permission: Permission",
+            scope AS "scope: PermissionScope",
+            community_id
+        FROM permissions
+        WHERE actor_id = $1
+        "#,
         row.actor_id,
     )
     .fetch_all(pool)
@@ -319,7 +445,7 @@ pub async fn authenticate(pool: &PgPool, raw_key: &str) -> Result<AuthenticatedA
             created_at: row.created_at,
         },
         key_id: parsed.key_id,
-        roles,
+        permissions,
         banned: row.is_banned,
         avatar_object_key: row.avatar_object_key,
     })
@@ -825,37 +951,142 @@ pub async fn regenerate_recovery_codes(pool: &PgPool, actor_id: i64) -> Result<V
     Ok(new_codes.into_iter().map(|c| c.plaintext).collect())
 }
 
-// --- Roller ----------------------------------------------------------------
+// --- İzinler ---------------------------------------------------------------
 
-/// Bir actor'e admin/moderatör rolü verir (ya da mevcut rolünü değiştirir).
+/// Bir aktöre izin verir; aynı atama zaten varsa `granted_by`/`granted_at`
+/// tazelenir (upsert).
 ///
-/// `admin_roles.actor_id` PK olduğu için (bkz.
-/// `migrations/0012_admin_roles.up.sql`) bir actor'ın en fazla bir rolü
-/// olabilir; ikinci bir `grant_role` çağrısı hata vermez, rolü ve
-/// `granted_by`/`granted_at`'i günceller (upsert).
+/// İki ayrı `ON CONFLICT` hedefi var çünkü kısmi tekillik indeksleri
+/// (`uq_permissions_global` / `uq_permissions_community`) kapsama göre
+/// ayrılmış durumda — `community_id` parametrik olduğu için tek bir çakışma
+/// hedefi yazılamıyor. İki dal, yarış durumunda da tekilliği DB'ye
+/// bırakıyor (sessiz kayıp yok).
 ///
 /// # Errors
-/// Veritabanı hatası [`Error::Database`] (ör. `actor_id` ya da
-/// `granted_by` mevcut değilse yabancı anahtar ihlali).
-pub async fn grant_role(
+/// DB'de `ck_permissions_community_only`/`ck_permissions_global_only` veya
+/// kapsam tutarlılık kısıtı ihlal edilirse [`Error::Database`]; `actor_id`
+/// ya da `granted_by` yoksa yabancı anahtar ihlali yine [`Error::Database`].
+pub async fn grant_permission(
     pool: &PgPool,
     actor_id: i64,
-    role: AdminRole,
+    permission: Permission,
+    scope: PermissionScope,
+    community_id: Option<i64>,
     granted_by: Option<i64>,
 ) -> Result<()> {
-    sqlx::query!(
-        r#"
-        INSERT INTO admin_roles (actor_id, role, granted_by)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (actor_id) DO UPDATE
-        SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by, granted_at = now()
-        "#,
+    let mut tx = pool.begin().await?;
+    grant_permission_in_tx(
+        &mut tx,
         actor_id,
-        role,
+        permission,
+        scope,
+        community_id,
         granted_by,
     )
-    .execute(pool)
     .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`grant_permission`]'ın **çağıranın transaction'ında** çalışan hâli.
+///
+/// Denetim iziyle (`crate::moderation::log_action`) aynı transaction'da
+/// yazılabilmesi için gerekli — üstteki sarmalayıcı kendi transaction'ını açar.
+///
+/// # Errors
+/// [`grant_permission`] ile aynı.
+pub async fn grant_permission_in_tx(
+    tx: &mut PgConnection,
+    actor_id: i64,
+    permission: Permission,
+    scope: PermissionScope,
+    community_id: Option<i64>,
+    granted_by: Option<i64>,
+) -> Result<()> {
+    match community_id {
+        Some(community_id) => {
+            sqlx::query!(
+                r#"
+                INSERT INTO permissions (actor_id, permission, scope, community_id, granted_by)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (actor_id, permission, community_id) WHERE community_id IS NOT NULL
+                DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = now()
+                "#,
+                actor_id,
+                permission as Permission,
+                scope as PermissionScope,
+                community_id,
+                granted_by,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        None => {
+            sqlx::query!(
+                r#"
+                INSERT INTO permissions (actor_id, permission, scope, community_id, granted_by)
+                VALUES ($1, $2, $3, NULL, $4)
+                ON CONFLICT (actor_id, permission) WHERE community_id IS NULL
+                DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = now()
+                "#,
+                actor_id,
+                permission as Permission,
+                scope as PermissionScope,
+                granted_by,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
 
     Ok(())
+}
+
+/// Bir aktörden izni kaldırır (idempotent).
+///
+/// Gerçekten bir satır silindiyse `true`, zaten yoksa `false` döner — çağıran
+/// denetim izine yalnızca gerçek bir değişiklikte kayıt yazabilsin diye.
+///
+/// # Errors
+/// Veritabanı hatası [`Error::Database`].
+pub async fn revoke_permission(
+    pool: &PgPool,
+    actor_id: i64,
+    permission: Permission,
+    scope: PermissionScope,
+    community_id: Option<i64>,
+) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    let removed =
+        revoke_permission_in_tx(&mut tx, actor_id, permission, scope, community_id).await?;
+    tx.commit().await?;
+    Ok(removed)
+}
+
+/// [`revoke_permission`]'ın **çağıranın transaction'ında** çalışan hâli.
+///
+/// # Errors
+/// Veritabanı hatası [`Error::Database`].
+pub async fn revoke_permission_in_tx(
+    tx: &mut PgConnection,
+    actor_id: i64,
+    permission: Permission,
+    scope: PermissionScope,
+    community_id: Option<i64>,
+) -> Result<bool> {
+    let result = sqlx::query!(
+        r#"
+        DELETE FROM permissions
+        WHERE actor_id = $1 AND permission = $2 AND scope = $3
+          AND community_id IS NOT DISTINCT FROM $4
+        "#,
+        actor_id,
+        permission as Permission,
+        scope as PermissionScope,
+        community_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }

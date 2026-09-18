@@ -12,7 +12,7 @@
 use actos_api::{app, state::AppState};
 use actos_core::{
     Config, Storage,
-    auth::{self as core_auth, ActorType, AdminRole},
+    auth::{self as core_auth, ActorType},
     config::{
         DatabaseConfig, LimitTable, RedisConfig, SecurityConfig, ServerConfig, StorageConfig,
         StorageQuotaConfig,
@@ -169,6 +169,30 @@ async fn seed_actor(pool: &PgPool, username: &str) -> (i64, String) {
         .await
         .expect("fixture actor oluşturulabilmeli");
     (reg.actor.id, reg.api_key)
+}
+
+/// Eski moderatör rolünün beş global iznini verir (bkz.
+/// `migrations/0028_permissions.up.sql` veri göçü).
+#[allow(clippy::expect_used)]
+async fn moderator_yap(pool: &PgPool, actor_id: i64) {
+    for permission in [
+        core_auth::Permission::ContentDelete,
+        core_auth::Permission::MemberBan,
+        core_auth::Permission::ReportView,
+        core_auth::Permission::ReportResolve,
+        core_auth::Permission::AuditView,
+    ] {
+        core_auth::grant_permission(
+            pool,
+            actor_id,
+            permission,
+            core_auth::PermissionScope::Global,
+            None,
+            None,
+        )
+        .await
+        .expect("izin verilebilmeli");
+    }
 }
 
 /// Bir post oluşturup dış id'sini döner.
@@ -808,9 +832,7 @@ async fn delete_comment_moderator_204_doner(pool: PgPool) {
     let router = build_router(pool);
     let (_, yazar_key) = seed_actor(&raw_pool, "yorum_yazari").await;
     let (mod_id, mod_key) = seed_actor(&raw_pool, "yorum_moderatoru").await;
-    core_auth::grant_role(&raw_pool, mod_id, AdminRole::Moderator, None)
-        .await
-        .expect("moderatör rolü verilebilmeli");
+    moderator_yap(&raw_pool, mod_id).await;
 
     let post_id = seed_post(&router, &yazar_key, "Moderasyon").await;
     let c1 = seed_comment(&router, &yazar_key, &post_id, None, "başkasının yorumu").await;

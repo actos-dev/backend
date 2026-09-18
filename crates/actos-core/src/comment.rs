@@ -42,7 +42,7 @@ use sqlx::{PgConnection, PgPool};
 
 use crate::{
     actor::{Page, paginate, resolve_live_actor_id, split_new_cursor},
-    auth::{ActorRecord, ActorType, AdminRole},
+    auth::{ActorRecord, ActorType, Grant, Permission},
     content::{BodyFormat, Content, ContentType},
     cursor::{Cursor, SortKey},
     error::{Error, Result},
@@ -1083,13 +1083,13 @@ pub async fn update_comment(pool: &PgPool, id: i64, actor_id: i64, body: &str) -
 ///
 /// # Errors
 /// Yorum yoksa [`Error::NotFound`]; zaten silinmişse [`Error::Gone`];
-/// çağıran ne sahibi ne moderatör/admin ise [`Error::Forbidden`];
+/// çağıran ne sahibi ne `content.delete` sahibi ise [`Error::Forbidden`];
 /// veritabanı hatası [`Error::Database`].
 pub async fn delete_comment(
     pool: &PgPool,
     id: i64,
     actor_id: i64,
-    roles: &[AdminRole],
+    permissions: &[Grant],
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
 
@@ -1111,11 +1111,9 @@ pub async fn delete_comment(
     }
 
     let is_owner = current.actor_id == actor_id;
-    let is_moderator = roles
-        .iter()
-        .any(|r| matches!(r, AdminRole::Admin | AdminRole::Moderator));
+    let can_delete = crate::authz::has_global(permissions, Permission::ContentDelete);
 
-    if !is_owner && !is_moderator {
+    if !is_owner && !can_delete {
         return Err(Error::Forbidden);
     }
 

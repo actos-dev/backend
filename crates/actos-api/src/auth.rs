@@ -9,10 +9,12 @@
 //! Bu dosya yalnızca o extension'ı okuyup `CurrentActor`/`OptionalActor`'a
 //! çeviriyor — istek başına ikinci bir `authenticate` çağrısı yok.
 
+use std::marker::PhantomData;
+
 use axum::{extract::FromRequestParts, http::request::Parts};
 
-use actos_core::auth::AdminRole;
 pub use actos_core::auth::AuthenticatedActor;
+use actos_core::{auth::Permission, authz};
 
 use crate::{error::ApiError, middleware::identity::ResolvedIdentity, state::AppState};
 
@@ -97,51 +99,64 @@ impl FromRequestParts<AppState> for OptionalActor {
     }
 }
 
-/// Moderatör **veya** admin gerektiren uçlar için extractor.
+/// Bir uçun gerektirdiği **global** izni taşıyan marker tipler.
 ///
-/// PLAN.md Faz 14'ün `require_role(Role::Moderator)` maddesi. Yetkiyi
-/// extractor'a taşımak, handler gövdesinde rol kontrolü yapmaya göre iki
-/// şey kazandırıyor: kontrol **unutulamaz** (tip imzasının parçası) ve
-/// yetkisiz istek handler'ın hiçbir satırını çalıştırmadan reddediliyor.
-#[derive(Debug, Clone)]
-pub struct ModeratorActor(pub AuthenticatedActor);
-
-impl std::ops::Deref for ModeratorActor {
-    type Target = AuthenticatedActor;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+/// Her marker [`Permission`] sabitini bildirir; [`Require`] extractor'ı bu
+/// sabiti kontrol eder. Yeni bir izin gerektiren uç eklemek, burada bir
+/// marker tanımlayıp handler imzasına `Require<Marker>` yazmak demektir —
+/// yetki kontrolü yine **tip imzasının parçası**, handler gövdesinde
+/// unutulabilecek bir `if` değil (eski `ModeratorActor`/`AdminActor`
+/// garantisinin kapsamlı izin modelindeki karşılığı).
+pub trait GlobalPermission: Send + Sync + 'static {
+    /// Bu ucun gerektirdiği izin.
+    const PERMISSION: Permission;
 }
 
-impl FromRequestParts<AppState> for ModeratorActor {
-    type Rejection = ApiError;
+macro_rules! global_permission_marker {
+    ($(#[$meta:meta])* $name:ident => $permission:expr) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy)]
+        pub struct $name;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let current = CurrentActor::from_request_parts(parts, state).await?;
-        if current
-            .roles
-            .iter()
-            .any(|r| matches!(r, AdminRole::Admin | AdminRole::Moderator))
-        {
-            Ok(Self(current.0))
-        } else {
-            Err(ApiError::new(actos_core::Error::Forbidden).with_request_id(&parts.headers))
+        impl GlobalPermission for $name {
+            const PERMISSION: Permission = $permission;
         }
-    }
+    };
 }
 
-/// Yalnızca `admin` gerektiren uçlar için extractor.
-///
-/// Rol yönetimi (`POST /admin/roles`) buna bağlı: bir moderatörün kendine
-/// admin verebilmesi yetki sınırını anlamsız kılardı.
-#[derive(Debug, Clone)]
-pub struct AdminActor(pub AuthenticatedActor);
+global_permission_marker!(
+    /// `GET /admin/reports` — moderasyon kuyruğunu görme.
+    CanViewReports => Permission::ReportView
+);
+global_permission_marker!(
+    /// `PATCH /admin/reports/{id}` — şikayeti sonuçlandırma.
+    CanResolveReports => Permission::ReportResolve
+);
+global_permission_marker!(
+    /// `DELETE /admin/contents/{id}` — başkasının içeriğini silme.
+    CanDeleteContent => Permission::ContentDelete
+);
+global_permission_marker!(
+    /// `POST`/`DELETE /admin/bans` — platform geneli ban.
+    CanBan => Permission::MemberBan
+);
+global_permission_marker!(
+    /// `PUT`/`DELETE /admin/permissions` — izin verme/alma.
+    CanGrantPermission => Permission::RoleGrant
+);
+global_permission_marker!(
+    /// `GET /admin/actions` — denetim izini görme.
+    CanViewAudit => Permission::AuditView
+);
 
-impl std::ops::Deref for AdminActor {
+/// Verilen **global** izni gerektiren extractor.
+///
+/// `CurrentActor`'ı (dolayısıyla ban-yazma kontrolünü) temel alır; izin
+/// yoksa handler'ın hiçbir satırı çalışmadan `403` döner.
+#[derive(Debug, Clone)]
+pub struct Require<P: GlobalPermission>(pub AuthenticatedActor, PhantomData<P>);
+
+impl<P: GlobalPermission> std::ops::Deref for Require<P> {
     type Target = AuthenticatedActor;
 
     fn deref(&self) -> &Self::Target {
@@ -149,7 +164,7 @@ impl std::ops::Deref for AdminActor {
     }
 }
 
-impl FromRequestParts<AppState> for AdminActor {
+impl<P: GlobalPermission> FromRequestParts<AppState> for Require<P> {
     type Rejection = ApiError;
 
     async fn from_request_parts(
@@ -157,8 +172,8 @@ impl FromRequestParts<AppState> for AdminActor {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let current = CurrentActor::from_request_parts(parts, state).await?;
-        if current.roles.iter().any(|r| matches!(r, AdminRole::Admin)) {
-            Ok(Self(current.0))
+        if authz::actor_has_global(&current.0, P::PERMISSION) {
+            Ok(Self(current.0, PhantomData))
         } else {
             Err(ApiError::new(actos_core::Error::Forbidden).with_request_id(&parts.headers))
         }

@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM permissions\n        WHERE actor_id = $1 AND permission = $2 AND scope = $3\n          AND community_id IS NOT DISTINCT FROM $4\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        {
+          "Custom": {
+            "name": "permission",
+            "kind": {
+              "Enum": [
+                "content.delete",
+                "community.edit",
+                "community.close",
+                "member.invite",
+                "member.approve",
+                "member.kick",
+                "member.ban",
+                "role.grant",
+                "report.view",
+                "report.resolve",
+                "audit.view"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "permission_scope",
+            "kind": {
+              "Enum": [
+                "global",
+                "community"
+              ]
+            }
+          }
+        },
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa0775ee78775e84e2d333e83ad78127e820f881276dd36b1135fe441a12f90f"
+}

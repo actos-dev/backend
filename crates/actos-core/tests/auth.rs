@@ -7,7 +7,7 @@
 
 use actos_core::{
     Error,
-    auth::{self, ActorType, AdminRole},
+    auth::{self, ActorType, Permission, PermissionScope},
 };
 use sqlx::PgPool;
 
@@ -41,7 +41,7 @@ async fn kayıt_olunca_dönen_key_ile_authenticate_başarılı(
     let authed = auth::authenticate(&pool, &reg.api_key).await?;
     assert_eq!(authed.actor.id, reg.actor.id);
     assert_eq!(authed.actor.username, "alice");
-    assert!(authed.roles.is_empty());
+    assert!(authed.permissions.is_empty());
 
     Ok(())
 }
@@ -480,29 +480,97 @@ async fn eşzamanlı_aynı_kullanıcı_adı_kaydında_yarım_kayıt_kalmıyor(
     Ok(())
 }
 
-// --- roller ------------------------------------------------------------
+// --- izinler -----------------------------------------------------------
 
 #[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
-async fn grant_role_sonrası_authenticate_rolü_görüyor(
+async fn grant_permission_sonrası_authenticate_izni_görüyor(
     pool: PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let reg = auth::register(&pool, "mia", ActorType::Human, None).await?;
 
-    auth::grant_role(&pool, reg.actor.id, AdminRole::Moderator, None).await?;
+    // Başlangıçta hiç izin yok.
     let authed = auth::authenticate(&pool, &reg.api_key).await?;
-    assert_eq!(authed.roles, vec![AdminRole::Moderator]);
+    assert!(authed.permissions.is_empty());
 
-    // İkinci `grant_role` çağrısı upsert: rolü değiştirir, hata vermez.
-    let granter = auth::register(&pool, "nora", ActorType::Human, None).await?;
-    auth::grant_role(
+    // İki izin ver; ikisi de global kapsamda, topluluksuz görünmeli.
+    auth::grant_permission(
         &pool,
         reg.actor.id,
-        AdminRole::Admin,
+        Permission::ContentDelete,
+        PermissionScope::Global,
+        None,
+        None,
+    )
+    .await?;
+    auth::grant_permission(
+        &pool,
+        reg.actor.id,
+        Permission::MemberBan,
+        PermissionScope::Global,
+        None,
+        None,
+    )
+    .await?;
+
+    let authed = auth::authenticate(&pool, &reg.api_key).await?;
+    assert_eq!(authed.permissions.len(), 2);
+    assert!(authed.permissions.contains(&auth::Grant {
+        permission: Permission::ContentDelete,
+        scope: PermissionScope::Global,
+        community_id: None,
+    }));
+    assert!(authed.permissions.contains(&auth::Grant {
+        permission: Permission::MemberBan,
+        scope: PermissionScope::Global,
+        community_id: None,
+    }));
+
+    // Aynı izni başka bir granter ile tekrar vermek upsert: satır çoğalmaz.
+    let granter = auth::register(&pool, "nora", ActorType::Human, None).await?;
+    auth::grant_permission(
+        &pool,
+        reg.actor.id,
+        Permission::ContentDelete,
+        PermissionScope::Global,
+        None,
         Some(granter.actor.id),
     )
     .await?;
-    let authed2 = auth::authenticate(&pool, &reg.api_key).await?;
-    assert_eq!(authed2.roles, vec![AdminRole::Admin]);
+    let authed = auth::authenticate(&pool, &reg.api_key).await?;
+    assert_eq!(authed.permissions.len(), 2, "upsert satır çoğaltmamalı");
+
+    // Kaldırma: gerçekten silindiyse `true`, tekrar denemede `false`
+    // (idempotent).
+    assert!(
+        auth::revoke_permission(
+            &pool,
+            reg.actor.id,
+            Permission::ContentDelete,
+            PermissionScope::Global,
+            None,
+        )
+        .await?
+    );
+    assert!(
+        !auth::revoke_permission(
+            &pool,
+            reg.actor.id,
+            Permission::ContentDelete,
+            PermissionScope::Global,
+            None,
+        )
+        .await?
+    );
+
+    let authed = auth::authenticate(&pool, &reg.api_key).await?;
+    assert_eq!(
+        authed.permissions,
+        vec![auth::Grant {
+            permission: Permission::MemberBan,
+            scope: PermissionScope::Global,
+            community_id: None,
+        }]
+    );
 
     Ok(())
 }
