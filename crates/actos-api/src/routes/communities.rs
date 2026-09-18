@@ -14,16 +14,24 @@
 
 use actos_core::{
     Error,
-    community::{self as core_community, Community, CommunityView, MemberEntry},
+    community::{
+        self as core_community, Application, ApplicationStatus, Community, CommunityView,
+        Invitation, MemberEntry,
+    },
     content::PostSort,
-    id::IdCodec,
+    id::{
+        Application as ApplicationIdKind, Community as CommunityIdKind, IdCodec,
+        Invitation as InvitationIdKind,
+    },
 };
 use actos_types::{
     community::{
-        CommunityListResponse, CommunityMemberListResponse, CommunityMemberSummary,
-        CommunitySummary, CreateCommunityRequest, SuccessorRequest, UpdateCommunityRequest,
+        ApplicationListResponse, ApplicationSummary, CommunityListResponse,
+        CommunityMemberListResponse, CommunityMemberSummary, CommunitySummary,
+        CreateApplicationRequest, CreateCommunityRequest, CreateInvitationRequest,
+        InvitationListResponse, InvitationSummary, SuccessorRequest, UpdateCommunityRequest,
     },
-    content::PostListResponse,
+    content::{CommunityRefSummary, PostListResponse},
 };
 use axum::{
     Json,
@@ -56,6 +64,14 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list_community_posts))
         .routes(routes!(close_community))
         .routes(routes!(set_successor))
+        .routes(routes!(create_invitation))
+        .routes(routes!(list_my_invitations))
+        .routes(routes!(accept_invitation))
+        .routes(routes!(decline_invitation))
+        .routes(routes!(create_application))
+        .routes(routes!(list_applications))
+        .routes(routes!(resolve_application_accept))
+        .routes(routes!(resolve_application_reject))
 }
 
 // --- Query param tipleri -------------------------------------------------
@@ -74,6 +90,17 @@ struct CommunityPostsQuery {
     cursor: Option<String>,
     limit: Option<String>,
     fields: Option<String>,
+}
+
+/// `GET /communities/{name}/applications?status=&cursor=&limit=`.
+///
+/// `cursor`/`limit` için [`ListQuery`] ile aynı alanlar, artı `status`
+/// filtresi. `status` verilmezse her durum listelenir.
+#[derive(Debug, Deserialize)]
+struct ApplicationListQuery {
+    status: Option<String>,
+    cursor: Option<String>,
+    limit: Option<String>,
 }
 
 // --- Ortak dönüşümler --------------------------------------------------
@@ -510,6 +537,62 @@ fn member_summary(
     })
 }
 
+/// Bir topluluk `(id, ad)` çiftini [`CommunityRefSummary`]'e çevirir
+/// (davet/başvuru DTO'ları için).
+fn community_ref_summary(
+    id: i64,
+    name: &str,
+    id_codec: &IdCodec,
+) -> Result<CommunityRefSummary, Error> {
+    Ok(CommunityRefSummary {
+        id: id_codec
+            .encode::<CommunityIdKind>(id)
+            .map_err(|e| Error::Internal(format!("could not encode community id: {e}")))?,
+        name: name.to_owned(),
+    })
+}
+
+/// Bir [`Invitation`]'ı yanıt DTO'suna çevirir.
+fn invitation_summary(
+    invitation: &Invitation,
+    id_codec: &IdCodec,
+) -> Result<InvitationSummary, Error> {
+    Ok(InvitationSummary {
+        id: id_codec
+            .encode::<InvitationIdKind>(invitation.id)
+            .map_err(|e| Error::Internal(format!("could not encode invitation id: {e}")))?,
+        community: community_ref_summary(
+            invitation.community.id,
+            &invitation.community.name,
+            id_codec,
+        )?,
+        invited_by: actor_summary(&invitation.invited_by, None, id_codec)?,
+        created_at: invitation.created_at.to_rfc3339(),
+    })
+}
+
+/// Bir [`Application`]'ı yanıt DTO'suna çevirir.
+fn application_summary(
+    application: &Application,
+    id_codec: &IdCodec,
+) -> Result<ApplicationSummary, Error> {
+    Ok(ApplicationSummary {
+        id: id_codec
+            .encode::<ApplicationIdKind>(application.id)
+            .map_err(|e| Error::Internal(format!("could not encode application id: {e}")))?,
+        community: community_ref_summary(
+            application.community.id,
+            &application.community.name,
+            id_codec,
+        )?,
+        applicant: actor_summary(&application.applicant, None, id_codec)?,
+        reason: application.reason.clone(),
+        status: application.status.as_str().to_owned(),
+        created_at: application.created_at.to_rfc3339(),
+        resolved_at: application.resolved_at.map(|t| t.to_rfc3339()),
+    })
+}
+
 /// `GET /communities/{name}/posts?sort=` → `200`, `404`. Etiket ucundaki
 /// (`GET /tags/{name}/posts`) gövde şeklinin ve `?fields=` davranışının
 /// birebir aynısı.
@@ -672,6 +755,378 @@ async fn set_successor(
     core_community::set_successor(state.db(), current.actor.id, &name, &req.username)
         .await
         .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Faz 4B-2: davetler ve başvurular ----------------------------------
+
+/// `POST /communities/{name}/invitations` → `201`. `member.invite` (o
+/// topluluk kapsamında) gerekir; public topluluk `400`.
+#[utoipa::path(
+    post,
+    path = "/communities/{name}/invitations",
+    tag = "communities",
+    summary = "Invite an actor to a private community",
+    description = "Requires `member.invite` scoped to this community. Private communities only; a \
+        public community is joined instantly and returns `400`. The invitee is not a member until \
+        they accept. A second pending invitation for the same actor returns `409`.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+    ),
+    request_body = CreateInvitationRequest,
+    responses(
+        (status = 201, description = "Invitation created"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Conflict,
+        ValidationFailed,
+        RateLimited,
+    )
+)]
+async fn create_invitation(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(req): Json<CreateInvitationRequest>,
+) -> Result<StatusCode, ApiError> {
+    core_community::invite_member(
+        state.db(),
+        current.actor.id,
+        &current.permissions,
+        &name,
+        &req.username,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::CREATED)
+}
+
+/// `GET /me/invitations?cursor=&limit=` → `200`. Çağırana adreslenmiş
+/// bekleyen davetler, en yeni önce.
+#[utoipa::path(
+    get,
+    path = "/me/invitations",
+    tag = "communities",
+    summary = "List your pending invitations",
+    description = "Pending invitations addressed to the requesting actor, newest first. An \
+        invitation to a community that has since closed is not listed.",
+    security(("api_key" = [])),
+    params(
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
+    ),
+    responses(
+        (status = 200, description = "Invitation list, with a cursor", body = InvitationListResponse),
+        Unauthorized,
+        RateLimited,
+    )
+)]
+async fn list_my_invitations(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Query(query): Query<ListQuery>,
+    headers: HeaderMap,
+) -> Result<Json<InvitationListResponse>, ApiError> {
+    let limit = parse_limit(query.limit, &headers)?;
+    let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
+
+    let page = core_community::list_my_invitations(state.db(), current.actor.id, cursor, limit)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let invitations = page
+        .items
+        .iter()
+        .map(|invitation| invitation_summary(invitation, state.id_codec()))
+        .collect::<Result<Vec<_>, Error>>()
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(Json(InvitationListResponse {
+        invitations,
+        next_cursor: page.next_cursor.map(|c| state.cursor_codec().encode(&c)),
+    }))
+}
+
+/// `POST /me/invitations/{id}/accept` → `204`.
+#[utoipa::path(
+    post,
+    path = "/me/invitations/{id}/accept",
+    tag = "communities",
+    summary = "Accept an invitation",
+    description = "The invitation must be addressed to the requesting actor and still pending. On \
+        success the actor becomes a member of the community. A resolved invitation returns `409`; \
+        another actor's invitation returns `404`.",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "The invitation's external id (`i_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Invitation accepted; now a member"),
+        Unauthorized,
+        NotFound,
+        Conflict,
+        RateLimited,
+    )
+)]
+async fn accept_invitation(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let invitation_id = state
+        .id_codec()
+        .decode::<InvitationIdKind>(&id)
+        .map_err(|_| ApiError::new(Error::NotFound("invitation")).with_request_id(&headers))?;
+
+    core_community::accept_invitation(state.db(), current.actor.id, invitation_id)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /me/invitations/{id}/decline` → `204`.
+#[utoipa::path(
+    post,
+    path = "/me/invitations/{id}/decline",
+    tag = "communities",
+    summary = "Decline an invitation",
+    description = "The invitation must be addressed to the requesting actor and still pending. The \
+        actor is not made a member. A resolved invitation returns `409`; another actor's \
+        invitation returns `404`.",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "The invitation's external id (`i_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Invitation declined"),
+        Unauthorized,
+        NotFound,
+        Conflict,
+        RateLimited,
+    )
+)]
+async fn decline_invitation(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let invitation_id = state
+        .id_codec()
+        .decode::<InvitationIdKind>(&id)
+        .map_err(|_| ApiError::new(Error::NotFound("invitation")).with_request_id(&headers))?;
+
+    core_community::decline_invitation(state.db(), current.actor.id, invitation_id)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /communities/{name}/applications` → `201`. Private topluluğa
+/// başvuru; `member.approve` sahiplerine bildirim gider.
+#[utoipa::path(
+    post,
+    path = "/communities/{name}/applications",
+    tag = "communities",
+    summary = "Apply to a private community",
+    description = "Private communities only; a public community is joined instantly and returns \
+        `400`. The actor must not already be a member and must not be banned. The reason is \
+        1-2000 characters. Every holder of `member.approve` scoped to the community is notified. \
+        A second pending application returns `409`.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+    ),
+    request_body = CreateApplicationRequest,
+    responses(
+        (status = 201, description = "Application submitted"),
+        Unauthorized,
+        NotFound,
+        Conflict,
+        ValidationFailed,
+        RateLimited,
+    )
+)]
+async fn create_application(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Json(req): Json<CreateApplicationRequest>,
+) -> Result<StatusCode, ApiError> {
+    core_community::apply_to_community(state.db(), current.actor.id, &name, &req.reason)
+        .await
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(StatusCode::CREATED)
+}
+
+/// `GET /communities/{name}/applications?status=&cursor=&limit=` → `200`.
+/// `member.approve` (o topluluk kapsamında) gerekir; en eski önce (iş
+/// kuyruğu).
+#[utoipa::path(
+    get,
+    path = "/communities/{name}/applications",
+    tag = "communities",
+    summary = "List a community's applications (the moderation queue)",
+    description = "Requires `member.approve` scoped to this community. Oldest first, like a work \
+        queue. `?status=pending|accepted|rejected` filters; without it every status is listed.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+        ("status" = Option<String>, Query, description = "`pending`, `accepted`, or `rejected`"),
+        ("cursor" = Option<String>, Query, description = "The previous page's `next_cursor`"),
+        ("limit" = Option<String>, Query, description = "Items per page"),
+    ),
+    responses(
+        (status = 200, description = "Application list, with a cursor", body = ApplicationListResponse),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        ValidationFailed,
+        RateLimited,
+    )
+)]
+async fn list_applications(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(query): Query<ApplicationListQuery>,
+    headers: HeaderMap,
+) -> Result<Json<ApplicationListResponse>, ApiError> {
+    let status = query
+        .status
+        .as_deref()
+        .map(ApplicationStatus::parse)
+        .transpose()
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+    let limit = parse_limit(query.limit, &headers)?;
+    let cursor = decode_cursor(state.cursor_codec(), query.cursor.as_deref(), &headers)?;
+
+    let page = core_community::list_applications(
+        state.db(),
+        current.actor.id,
+        &current.permissions,
+        &name,
+        status,
+        cursor,
+        limit,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    let applications = page
+        .items
+        .iter()
+        .map(|application| application_summary(application, state.id_codec()))
+        .collect::<Result<Vec<_>, Error>>()
+        .map_err(|e| ApiError::new(e).with_request_id(&headers))?;
+
+    Ok(Json(ApplicationListResponse {
+        applications,
+        next_cursor: page.next_cursor.map(|c| state.cursor_codec().encode(&c)),
+    }))
+}
+
+/// `POST /communities/{name}/applications/{id}/accept` → `204`.
+#[utoipa::path(
+    post,
+    path = "/communities/{name}/applications/{id}/accept",
+    tag = "communities",
+    summary = "Accept an application",
+    description = "Requires `member.approve` scoped to this community. The application must belong \
+        to this community and still be pending. On success the applicant becomes a member and is \
+        notified.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+        ("id" = String, Path, description = "The application's external id (`p_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Application accepted; applicant is now a member"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Conflict,
+        RateLimited,
+    )
+)]
+async fn resolve_application_accept(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    resolve_application(current, state, name, id, true, &headers).await
+}
+
+/// `POST /communities/{name}/applications/{id}/reject` → `204`.
+#[utoipa::path(
+    post,
+    path = "/communities/{name}/applications/{id}/reject",
+    tag = "communities",
+    summary = "Reject an application",
+    description = "Requires `member.approve` scoped to this community. The application must belong \
+        to this community and still be pending. The applicant is not made a member; they are \
+        notified of the result.",
+    security(("api_key" = [])),
+    params(
+        ("name" = String, Path, description = "Community name"),
+        ("id" = String, Path, description = "The application's external id (`p_...`)"),
+    ),
+    responses(
+        (status = 204, description = "Application rejected"),
+        Unauthorized,
+        Forbidden,
+        NotFound,
+        Conflict,
+        RateLimited,
+    )
+)]
+async fn resolve_application_reject(
+    current: CurrentActor,
+    State(state): State<AppState>,
+    Path((name, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    resolve_application(current, state, name, id, false, &headers).await
+}
+
+/// [`resolve_application_accept`] ve [`resolve_application_reject`]'in ortak
+/// gövdesi: id'yi çözer, core'a devreder. İkisi ayrı handler çünkü accept ve
+/// reject farklı URL yolları (aynı yolun iki metodu değil), `routes!(a, b)`
+/// ile birleştirilemezler.
+async fn resolve_application(
+    current: CurrentActor,
+    state: AppState,
+    name: String,
+    id: String,
+    accept: bool,
+    headers: &HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let application_id = state
+        .id_codec()
+        .decode::<ApplicationIdKind>(&id)
+        .map_err(|_| ApiError::new(Error::NotFound("application")).with_request_id(headers))?;
+
+    core_community::resolve_application(
+        state.db(),
+        current.actor.id,
+        &current.permissions,
+        &name,
+        application_id,
+        accept,
+    )
+    .await
+    .map_err(|e| ApiError::new(e).with_request_id(headers))?;
 
     Ok(StatusCode::NO_CONTENT)
 }

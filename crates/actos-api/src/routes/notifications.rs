@@ -7,7 +7,10 @@
 
 use actos_core::{
     Error,
-    id::{Actor as ActorIdKind, Content as ContentIdKind, Notification as NotificationIdKind},
+    id::{
+        Actor as ActorIdKind, Community as CommunityIdKind, Content as ContentIdKind,
+        Notification as NotificationIdKind,
+    },
     notification as core_notification,
 };
 use actos_types::notification::{InboxResponse, MarkAllReadResponse, NotificationSummary};
@@ -73,12 +76,14 @@ fn parse_unread(raw: Option<String>, headers: &HeaderMap) -> Result<bool, ApiErr
 
 /// `target_type`'a göre `target_id`'yi doğru id uzayında kodlar.
 ///
-/// `"content"`/`"actor"` dışında bir değer bu koddan asla çıkmamalı — bu
-/// crate'teki her yazma yolu (`crate::comment::create_comment`,
-/// `crate::interaction::follow`, `crate::moderation`) yalnızca bu ikisini
-/// yazıyor (bkz. `actos_core::notification` modül dokümantasyonu). Yine de
-/// bir tutarsızlık olursa panik değil [`Error::Internal`] — istemciye asla
-/// detaylandırılmaz, yalnızca loglanır.
+/// `"content"`/`"actor"`/`"community"` dışında bir değer bu koddan asla
+/// çıkmamalı — bu crate'teki her yazma yolu
+/// (`crate::comment::create_comment`, `crate::interaction::follow`,
+/// `crate::moderation`) yalnızca bu üçünü yazıyor (bkz.
+/// `actos_core::notification` modül dokümantasyonu). `"community"` Faz
+/// 4B-2'de eklendi: davet/başvuru bildirimleri hedef olarak topluluğu
+/// taşıyor. Yine de bir tutarsızlık olursa panik değil [`Error::Internal`] —
+/// istemciye asla detaylandırılmaz, yalnızca loglanır.
 fn encode_target_id(
     id_codec: &actos_core::id::IdCodec,
     target_type: &str,
@@ -87,6 +92,7 @@ fn encode_target_id(
     match target_type {
         "content" => Ok(id_codec.encode::<ContentIdKind>(target_id)?),
         "actor" => Ok(id_codec.encode::<ActorIdKind>(target_id)?),
+        "community" => Ok(id_codec.encode::<CommunityIdKind>(target_id)?),
         other => Err(Error::Internal(format!(
             "notifications: unrecognized target_type: \"{other}\""
         ))),

@@ -14,7 +14,10 @@
                 "comment_on_post",
                 "reply_to_comment",
                 "new_follower",
-                "moderation_action"
+                "moderation_action",
+                "community_invitation",
+                "community_application",
+                "community_application_result"
               ]
             }
           }

@@ -68,6 +68,15 @@ pub enum NotificationKind {
     ReplyToComment,
     NewFollower,
     ModerationAction,
+    /// Bir moderatör, private bir topluluğa davet etti (Faz 4B-2, §3).
+    /// `target_type = "community"`, `target_id = topluluk id'si`.
+    CommunityInvitation,
+    /// Private bir topluluğa başvuru yapıldı; `member.approve` sahiplerine
+    /// gider (Faz 4B-2, §3). `target_type = "community"`.
+    CommunityApplication,
+    /// Başvurunun sonucu başvurana bildirilir (Faz 4B-2, §3).
+    /// `payload = {"community": ..., "accepted": bool}`.
+    CommunityApplicationResult,
 }
 
 impl NotificationKind {
@@ -79,6 +88,9 @@ impl NotificationKind {
             Self::ReplyToComment => "reply_to_comment",
             Self::NewFollower => "new_follower",
             Self::ModerationAction => "moderation_action",
+            Self::CommunityInvitation => "community_invitation",
+            Self::CommunityApplication => "community_application",
+            Self::CommunityApplicationResult => "community_application_result",
         }
     }
 }

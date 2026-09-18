@@ -176,6 +176,14 @@ const EXPECTED_PATHS: &[&str] = &[
     "/communities/{name}/posts",
     "/communities/{name}/close",
     "/communities/{name}/successor",
+    // davetler ve başvurular (Faz 4B-2)
+    "/communities/{name}/invitations",
+    "/me/invitations",
+    "/me/invitations/{id}/accept",
+    "/me/invitations/{id}/decline",
+    "/communities/{name}/applications",
+    "/communities/{name}/applications/{id}/accept",
+    "/communities/{name}/applications/{id}/reject",
     // tags
     "/tags/search",
     "/tags",

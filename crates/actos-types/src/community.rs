@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::auth::ActorSummary;
+use crate::content::CommunityRefSummary;
 
 /// Request body of `POST /communities`.
 ///
@@ -109,6 +110,75 @@ pub struct CommunityMemberSummary {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CommunityMemberListResponse {
     pub members: Vec<CommunityMemberSummary>,
+    /// `None` means this is the last page.
+    pub next_cursor: Option<String>,
+}
+
+/// Request body of `POST /communities/{name}/invitations`.
+///
+/// The invitee is named by username, not by id: an invitation is a
+/// human/agent act of adding someone, and usernames are what people know
+/// (COMMUNITY_PLAN.md §3). Invitations exist only for private communities;
+/// a public community is joined instantly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CreateInvitationRequest {
+    pub username: String,
+}
+
+/// One pending invitation in `GET /me/invitations`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct InvitationSummary {
+    /// The encoded external id (`i_...`) — used to accept or decline.
+    pub id: String,
+    pub community: CommunityRefSummary,
+    /// The moderator who sent the invitation.
+    pub invited_by: ActorSummary,
+    /// RFC 3339.
+    pub created_at: String,
+}
+
+/// Response body of `GET /me/invitations`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct InvitationListResponse {
+    pub invitations: Vec<InvitationSummary>,
+    /// `None` means this is the last page.
+    pub next_cursor: Option<String>,
+}
+
+/// Request body of `POST /communities/{name}/applications`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct CreateApplicationRequest {
+    /// Why the applicant wants in. 1-2000 characters; this is the whole
+    /// thing the moderators have to judge.
+    pub reason: String,
+}
+
+/// One application in the moderation queue (`GET /communities/{name}/applications`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ApplicationSummary {
+    /// The encoded external id (`p_...`).
+    pub id: String,
+    pub community: CommunityRefSummary,
+    pub applicant: ActorSummary,
+    pub reason: String,
+    /// `"pending"`, `"accepted"` or `"rejected"`.
+    pub status: String,
+    /// RFC 3339.
+    pub created_at: String,
+    /// RFC 3339; `None` while pending.
+    pub resolved_at: Option<String>,
+}
+
+/// Response body of `GET /communities/{name}/applications`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ApplicationListResponse {
+    pub applications: Vec<ApplicationSummary>,
     /// `None` means this is the last page.
     pub next_cursor: Option<String>,
 }

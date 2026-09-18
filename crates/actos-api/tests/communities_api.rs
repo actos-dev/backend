@@ -1926,3 +1926,551 @@ async fn devralici_yalnizca_sahip_ve_hedef_canli(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
+
+// --- Faz 4B-2: davetler ve başvurular ----------------------------------
+
+/// `POST /communities/{name}/invitations` kısayolu.
+#[allow(clippy::expect_used)]
+async fn invite(
+    router: &Router,
+    token: &str,
+    community: &str,
+    username: &str,
+) -> (StatusCode, Value, HeaderMap) {
+    send(
+        router,
+        auth_json_req(
+            "POST",
+            &format!("/communities/{community}/invitations"),
+            token,
+            json!({ "username": username }),
+        ),
+    )
+    .await
+}
+
+/// `POST /communities/{name}/applications` kısayolu.
+#[allow(clippy::expect_used)]
+async fn apply(
+    router: &Router,
+    token: &str,
+    community: &str,
+    reason: &str,
+) -> (StatusCode, Value, HeaderMap) {
+    send(
+        router,
+        auth_json_req(
+            "POST",
+            &format!("/communities/{community}/applications"),
+            token,
+            json!({ "reason": reason }),
+        ),
+    )
+    .await
+}
+
+/// Gelen kutusundaki bildirimleri (en yeni önce) döner.
+#[allow(clippy::expect_used)]
+async fn inbox(router: &Router, token: &str) -> Vec<Value> {
+    let (status, body, _) = send(router, auth_req("GET", "/me/inbox", token)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["notifications"]
+        .as_array()
+        .expect("notifications dizi olmalı")
+        .clone()
+}
+
+/// `GET /communities/{name}/applications` kısayolu (status filtresiyle).
+#[allow(clippy::expect_used)]
+async fn list_applications(router: &Router, token: &str, community: &str, status: &str) -> Value {
+    let (status_code, body, _) = send(
+        router,
+        auth_req(
+            "GET",
+            &format!("/communities/{community}/applications?status={status}"),
+            token,
+        ),
+    )
+    .await;
+    assert_eq!(status_code, StatusCode::OK, "{body}");
+    body
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn davet_olusturulur_gelen_kutusuna_duser_ve_kabul_edilir(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "dav_owner").await;
+    let (invitee_id, invitee_key) = seed_actor(&raw_pool, "dav_invitee").await;
+
+    create_community_with_visibility(&router, &owner_key, "dav_kulubu", "açıklama", "private")
+        .await;
+
+    let (status, body, _) = invite(&router, &owner_key, "dav_kulubu", "dav_invitee").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // Davet, alıcının gelen kutusuna bir `community_invitation` olarak düşer
+    // ve hedefi topluluktur (`target_type = "community"`).
+    let notifications = inbox(&router, &invitee_key).await;
+    assert_eq!(notifications.len(), 1, "{notifications:?}");
+    assert_eq!(notifications[0]["kind"], "community_invitation");
+    assert_eq!(notifications[0]["target_type"], "community");
+    assert!(
+        notifications[0]["target_id"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("m_")),
+        "topluluk hedefi m_ önekiyle kodlanmalı: {notifications:?}"
+    );
+
+    let (status, list, _) = send(&router, auth_req("GET", "/me/invitations", &invitee_key)).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let invitations = list["invitations"]
+        .as_array()
+        .expect("invitations dizi olmalı");
+    assert_eq!(invitations.len(), 1, "{list}");
+    assert_eq!(invitations[0]["community"]["name"], "dav_kulubu", "{list}");
+    assert_eq!(
+        invitations[0]["invited_by"]["username"], "dav_owner",
+        "{list}"
+    );
+    assert!(
+        invitations[0]["id"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("i_")),
+        "davet id'si i_ önekiyle başlamalı: {list}"
+    );
+    let invitation_id = invitations[0]["id"].as_str().expect("davet id").to_owned();
+
+    // Kabulden önce üye değil: kapak.
+    let (status, cover, _) = send(
+        &router,
+        auth_req("GET", "/communities/dav_kulubu", &invitee_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cover}");
+    assert_eq!(cover["is_member"], false, "{cover}");
+    assert_eq!(cover["member_count"], 0, "{cover}");
+
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{invitation_id}/accept"),
+            &invitee_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Kabul üyeliği kurdu; private topluluk tam görünür.
+    let (status, full, _) = send(
+        &router,
+        auth_req("GET", "/communities/dav_kulubu", &invitee_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{full}");
+    assert_eq!(full["is_member"], true, "{full}");
+    assert_eq!(full["member_count"], 2, "{full}");
+
+    let cid = community_id(&raw_pool, "dav_kulubu").await;
+    assert!(
+        core_community::is_member(&raw_pool, cid, invitee_id)
+            .await
+            .expect("üyelik sorgusu çalışmalı"),
+        "kabul sonrası veritabanında üye olmalı"
+    );
+
+    // Bekleyen davet kalmadı; ikinci kabul 409.
+    let (_, list, _) = send(&router, auth_req("GET", "/me/invitations", &invitee_key)).await;
+    assert!(
+        list["invitations"].as_array().expect("dizi").is_empty(),
+        "kabul edilen davet listede kalmamalı: {list}"
+    );
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{invitation_id}/accept"),
+            &invitee_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn public_topluluga_davet_400_ve_yetkisiz_davet_403(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "davp_owner").await;
+    let (_, other_key) = seed_actor(&raw_pool, "davp_other").await;
+
+    create_community(&router, &owner_key, "davp_public", "açıklama").await;
+
+    // Public topluluğa davet anlamsız: anında katılınır.
+    let (status, body, _) = invite(&router, &owner_key, "davp_public", "davp_other").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+
+    // Private topluluk, ama davet edenin `member.invite` yetkisi yok.
+    create_community_with_visibility(&router, &owner_key, "davp_private", "açıklama", "private")
+        .await;
+    let (status, body, _) = invite(&router, &other_key, "davp_private", "davp_other").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn davet_reddedilince_uye_olmaz_ve_tekrar_kabul_409(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "davr_owner").await;
+    let (invitee_id, invitee_key) = seed_actor(&raw_pool, "davr_invitee").await;
+
+    create_community_with_visibility(&router, &owner_key, "davr_kulubu", "açıklama", "private")
+        .await;
+    invite(&router, &owner_key, "davr_kulubu", "davr_invitee").await;
+
+    let (_, list, _) = send(&router, auth_req("GET", "/me/invitations", &invitee_key)).await;
+    let invitation_id = list["invitations"][0]["id"]
+        .as_str()
+        .expect("davet id")
+        .to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{invitation_id}/decline"),
+            &invitee_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let cid = community_id(&raw_pool, "davr_kulubu").await;
+    assert!(
+        !core_community::is_member(&raw_pool, cid, invitee_id)
+            .await
+            .expect("üyelik sorgusu"),
+        "reddeden üye olmamalı"
+    );
+
+    // Reddedilmiş davet kabul edilemez.
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{invitation_id}/accept"),
+            &invitee_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn ayni_kisiye_ikinci_bekleyen_davet_409(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "davd_owner").await;
+    let (_, invitee_key) = seed_actor(&raw_pool, "davd_invitee").await;
+
+    create_community_with_visibility(&router, &owner_key, "davd_kulubu", "açıklama", "private")
+        .await;
+
+    let (status, body, _) = invite(&router, &owner_key, "davd_kulubu", "davd_invitee").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // İkinci bekleyen davet sessizce birikmez.
+    let (status, body, _) = invite(&router, &owner_key, "davd_kulubu", "davd_invitee").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (_, list, _) = send(&router, auth_req("GET", "/me/invitations", &invitee_key)).await;
+    assert_eq!(
+        list["invitations"].as_array().expect("dizi").len(),
+        1,
+        "tek bekleyen davet olmalı: {list}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn basvuru_kuyrugu_member_approve_sahibine_bildirir_ve_yetki_ister(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "bas_owner").await;
+    let (mod_id, mod_key) = seed_actor(&raw_pool, "bas_mod").await;
+    let (_, applicant_key) = seed_actor(&raw_pool, "bas_applicant").await;
+    let (_, yabanci_key) = seed_actor(&raw_pool, "bas_yabanci").await;
+
+    create_community_with_visibility(&router, &owner_key, "bas_kulubu", "açıklama", "private")
+        .await;
+    let cid = community_id(&raw_pool, "bas_kulubu").await;
+
+    // Public'e başvuru 400.
+    create_community(&router, &owner_key, "bas_public", "açıklama").await;
+    let (status, body, _) = apply(&router, &applicant_key, "bas_public", "sebep").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // Topluluk kapsamlı bir `member.approve` sahibi de bildirimi alır.
+    grant_scoped(&raw_pool, mod_id, Permission::MemberApprove, cid).await;
+
+    let (status, body, _) =
+        apply(&router, &applicant_key, "bas_kulubu", "katılmak istiyorum").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    for (who, token) in [("sahip", &owner_key), ("moderatör", &mod_key)] {
+        let notifications = inbox(&router, token).await;
+        assert_eq!(
+            notifications.len(),
+            1,
+            "{who} bildirim almalı: {notifications:?}"
+        );
+        assert_eq!(notifications[0]["kind"], "community_application");
+        assert_eq!(notifications[0]["target_type"], "community");
+    }
+
+    // Başvurana başvuru bildirimi gitmez (yalnızca sonuç gider).
+    assert!(
+        inbox(&router, &applicant_key).await.is_empty(),
+        "başvurana başvuru bildirimi gitmemeli"
+    );
+
+    // Kuyruk, `member.approve` sahibine açık; yabancıya 403.
+    let (status, body, _) = send(
+        &router,
+        auth_req("GET", "/communities/bas_kulubu/applications", &yabanci_key),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let queue = list_applications(&router, &owner_key, "bas_kulubu", "pending").await;
+    let applications = queue["applications"].as_array().expect("dizi");
+    assert_eq!(applications.len(), 1, "{queue}");
+    assert_eq!(applications[0]["applicant"]["username"], "bas_applicant");
+    assert_eq!(applications[0]["reason"], "katılmak istiyorum");
+    assert_eq!(applications[0]["status"], "pending");
+    assert!(applications[0]["resolved_at"].is_null(), "{queue}");
+
+    // Durum filtresi: kabul edilmiş yok.
+    let accepted = list_applications(&router, &owner_key, "bas_kulubu", "accepted").await;
+    assert!(
+        accepted["applications"]
+            .as_array()
+            .expect("dizi")
+            .is_empty(),
+        "{accepted}"
+    );
+
+    // Yetkisiz çözemez.
+    let application_id = applications[0]["id"]
+        .as_str()
+        .expect("başvuru id")
+        .to_owned();
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/communities/bas_kulubu/applications/{application_id}/accept"),
+            &yabanci_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn basvuru_kabulu_uyelik_ve_sonuc_bildirimi(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "bask_owner").await;
+    let (applicant_id, applicant_key) = seed_actor(&raw_pool, "bask_applicant").await;
+
+    create_community_with_visibility(&router, &owner_key, "bask_kulubu", "açıklama", "private")
+        .await;
+    apply(&router, &applicant_key, "bask_kulubu", "sebep").await;
+
+    let queue = list_applications(&router, &owner_key, "bask_kulubu", "pending").await;
+    let application_id = queue["applications"][0]["id"]
+        .as_str()
+        .expect("başvuru id")
+        .to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/communities/bask_kulubu/applications/{application_id}/accept"),
+            &owner_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let cid = community_id(&raw_pool, "bask_kulubu").await;
+    assert!(
+        core_community::is_member(&raw_pool, cid, applicant_id)
+            .await
+            .expect("üyelik sorgusu"),
+        "kabul edilen başvuru üyeliği kurmalı"
+    );
+
+    let notifications = inbox(&router, &applicant_key).await;
+    assert_eq!(notifications.len(), 1, "{notifications:?}");
+    assert_eq!(notifications[0]["kind"], "community_application_result");
+    assert_eq!(notifications[0]["payload"]["accepted"], true);
+    assert_eq!(notifications[0]["payload"]["community"], "bask_kulubu");
+
+    // Çözülmüş başvuru tekrar çözülemez.
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/communities/bask_kulubu/applications/{application_id}/accept"),
+            &owner_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn basvuru_reddi_uyelik_vermez(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "basr_owner").await;
+    let (applicant_id, applicant_key) = seed_actor(&raw_pool, "basr_applicant").await;
+
+    create_community_with_visibility(&router, &owner_key, "basr_kulubu", "açıklama", "private")
+        .await;
+    apply(&router, &applicant_key, "basr_kulubu", "sebep").await;
+
+    let queue = list_applications(&router, &owner_key, "basr_kulubu", "pending").await;
+    let application_id = queue["applications"][0]["id"]
+        .as_str()
+        .expect("başvuru id")
+        .to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/communities/basr_kulubu/applications/{application_id}/reject"),
+            &owner_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let cid = community_id(&raw_pool, "basr_kulubu").await;
+    assert!(
+        !core_community::is_member(&raw_pool, cid, applicant_id)
+            .await
+            .expect("üyelik sorgusu"),
+        "reddedilen başvuru üyelik kurmamalı"
+    );
+
+    let notifications = inbox(&router, &applicant_key).await;
+    assert_eq!(notifications.len(), 1, "{notifications:?}");
+    assert_eq!(notifications[0]["kind"], "community_application_result");
+    assert_eq!(notifications[0]["payload"]["accepted"], false);
+
+    let rejected = list_applications(&router, &owner_key, "basr_kulubu", "rejected").await;
+    assert_eq!(
+        rejected["applications"].as_array().expect("dizi").len(),
+        1,
+        "{rejected}"
+    );
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn uye_basvuru_yapamaz(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "basu_owner").await;
+
+    create_community_with_visibility(&router, &owner_key, "basu_kulubu", "açıklama", "private")
+        .await;
+
+    let (status, body, _) = apply(&router, &owner_key, "basu_kulubu", "sebep").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VALIDATION_FAILED", "{body}");
+}
+
+#[sqlx::test(migrator = "actos_core::db::MIGRATOR")]
+async fn banli_actor_davet_edilemez_basvuru_yapamaz_ve_kabul_edemez(pool: PgPool) {
+    let raw_pool = pool.clone();
+    let router = build_router(pool);
+    let (_, owner_key) = seed_actor(&raw_pool, "banx_owner").await;
+    let (_, kurban_key) = seed_actor(&raw_pool, "banx_kurban").await;
+
+    create_community_with_visibility(&router, &owner_key, "banx_kulubu", "açıklama", "private")
+        .await;
+
+    // Kurbanı topluluktan banla.
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/admin/bans",
+            &owner_key,
+            json!({ "username": "banx_kurban", "reason": "kural", "community": "banx_kulubu" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // Banlı hedef davet edilemez.
+    let (status, body, _) = invite(&router, &owner_key, "banx_kulubu", "banx_kurban").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "BANNED", "{body}");
+
+    // Banlı actor başvuramaz.
+    let (status, body, _) = apply(&router, &kurban_key, "banx_kulubu", "sebep").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "BANNED", "{body}");
+
+    // Banı kaldır, davet et, yeniden banla: davet kabul edilemez.
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "DELETE",
+            "/admin/bans/banx_kurban?community=banx_kulubu",
+            &owner_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body, _) = invite(&router, &owner_key, "banx_kulubu", "banx_kurban").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (_, list, _) = send(&router, auth_req("GET", "/me/invitations", &kurban_key)).await;
+    let invitation_id = list["invitations"][0]["id"]
+        .as_str()
+        .expect("davet id")
+        .to_owned();
+
+    let (status, body, _) = send(
+        &router,
+        auth_json_req(
+            "POST",
+            "/admin/bans",
+            &owner_key,
+            json!({ "username": "banx_kurban", "reason": "tekrar", "community": "banx_kulubu" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body, _) = send(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{invitation_id}/accept"),
+            &kurban_key,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "BANNED", "{body}");
+}

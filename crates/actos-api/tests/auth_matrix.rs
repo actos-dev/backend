@@ -558,6 +558,14 @@ const MATRIX_OPERATIONS: &[(&str, &str)] = &[
     ("GET", "/communities/{name}/posts"),
     ("POST", "/communities/{name}/close"),
     ("PUT", "/communities/{name}/successor"),
+    ("POST", "/communities/{name}/invitations"),
+    ("GET", "/me/invitations"),
+    ("POST", "/me/invitations/{id}/accept"),
+    ("POST", "/me/invitations/{id}/decline"),
+    ("POST", "/communities/{name}/applications"),
+    ("GET", "/communities/{name}/applications"),
+    ("POST", "/communities/{name}/applications/{id}/accept"),
+    ("POST", "/communities/{name}/applications/{id}/reject"),
     // --- interaction_uclarinin_yetki_matrisi ---
     ("PUT", "/contents/{id}/vote"),
     ("GET", "/me/votes"),
@@ -3058,6 +3066,446 @@ async fn topluluk_uclarinin_yetki_matrisi(pool: PgPool) {
         empty_req("GET", "/communities/am_top_kapat"),
         StatusCode::NOT_FOUND,
         "GET kapanmış topluluk [admin kapattı]",
+    )
+    .await;
+
+    // --- Faz 4B-2: davetler ve başvurular ---
+    //
+    // Davet/başvuru yalnızca private toplulukta anlamlı. Yukarıda kurulmuş
+    // `am_top_devir` (sahibi owner) public→private çevriliyor: sahibi zaten
+    // `member.invite`/`member.approve` satırlarını tutuyor, ayrı bir topluluk
+    // kurup sahiplik sınırına (3) takılmaya gerek yok.
+
+    assert_status(
+        &router,
+        auth_json_req(
+            "PATCH",
+            "/communities/am_top_devir",
+            &owner_key,
+            json!({ "visibility": "private" }),
+        ),
+        StatusCode::OK,
+        "PATCH /communities/{name} [gizli kurulumu]",
+    )
+    .await;
+
+    // --- POST /communities/{name}/invitations — `member.invite` (sahip);
+    // normal/moderatör/admin bu izni tutmuyor (topluluk kapsamlı bir izin). ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "POST",
+            "/communities/am_top_devir/invitations",
+            None,
+            json!({ "username": "am_top_mod" }),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /communities/{name}/invitations [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+    ] {
+        assert_code(
+            &router,
+            auth_json_req(
+                "POST",
+                "/communities/am_top_devir/invitations",
+                token,
+                json!({ "username": "am_top_mod" }),
+            ),
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            &format!("POST /communities/{{name}}/invitations [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities/am_top_devir/invitations",
+            &banned_key,
+            json!({ "username": "am_top_mod" }),
+        ),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /communities/{name}/invitations [banli]",
+    )
+    .await;
+    assert_status(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities/am_top_devir/invitations",
+            &owner_key,
+            json!({ "username": "am_top_mod" }),
+        ),
+        StatusCode::CREATED,
+        "POST /communities/{name}/invitations [sahip]",
+    )
+    .await;
+    assert_status(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities/am_top_devir/invitations",
+            &owner_key,
+            json!({ "username": "am_top_admin" }),
+        ),
+        StatusCode::CREATED,
+        "POST /communities/{name}/invitations [sahip, ikinci]",
+    )
+    .await;
+
+    // --- GET /me/invitations — kimlikli herkes, banlı dahil (GET güvenli). ---
+    assert_code(
+        &router,
+        empty_req("GET", "/me/invitations"),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "GET /me/invitations [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("sahip", &owner_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+        ("banli", &banned_key),
+    ] {
+        assert_status(
+            &router,
+            auth_req("GET", "/me/invitations", token),
+            StatusCode::OK,
+            &format!("GET /me/invitations [{rol}]"),
+        )
+        .await;
+    }
+
+    let mod_invites = assert_status(
+        &router,
+        auth_req("GET", "/me/invitations", &mod_key),
+        StatusCode::OK,
+        "GET /me/invitations [moderator]",
+    )
+    .await;
+    let mod_invitation = mod_invites["invitations"][0]["id"]
+        .as_str()
+        .expect("davet id")
+        .to_owned();
+    let admin_invites = assert_status(
+        &router,
+        auth_req("GET", "/me/invitations", &admin_key),
+        StatusCode::OK,
+        "GET /me/invitations [admin]",
+    )
+    .await;
+    let admin_invitation = admin_invites["invitations"][0]["id"]
+        .as_str()
+        .expect("davet id")
+        .to_owned();
+
+    // --- POST /me/invitations/{id}/accept — yalnızca davet edilen. ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "POST",
+            &format!("/me/invitations/{mod_invitation}/accept"),
+            None,
+            json!({}),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /me/invitations/{id}/accept [anon]",
+    )
+    .await;
+    for (rol, token) in [("normal", &normal_key), ("sahip", &owner_key)] {
+        assert_code(
+            &router,
+            auth_req(
+                "POST",
+                &format!("/me/invitations/{mod_invitation}/accept"),
+                token,
+            ),
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            &format!("POST /me/invitations/{{id}}/accept [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{mod_invitation}/accept"),
+            &banned_key,
+        ),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /me/invitations/{id}/accept [banli]",
+    )
+    .await;
+    assert_status(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{mod_invitation}/accept"),
+            &mod_key,
+        ),
+        StatusCode::NO_CONTENT,
+        "POST /me/invitations/{id}/accept [moderator]",
+    )
+    .await;
+
+    // --- POST /me/invitations/{id}/decline — yalnızca davet edilen. ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "POST",
+            &format!("/me/invitations/{admin_invitation}/decline"),
+            None,
+            json!({}),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /me/invitations/{id}/decline [anon]",
+    )
+    .await;
+    for (rol, token) in [("normal", &normal_key), ("sahip", &owner_key)] {
+        assert_code(
+            &router,
+            auth_req(
+                "POST",
+                &format!("/me/invitations/{admin_invitation}/decline"),
+                token,
+            ),
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            &format!("POST /me/invitations/{{id}}/decline [{rol}]"),
+        )
+        .await;
+    }
+    assert_code(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{admin_invitation}/decline"),
+            &banned_key,
+        ),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /me/invitations/{id}/decline [banli]",
+    )
+    .await;
+    assert_status(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/me/invitations/{admin_invitation}/decline"),
+            &admin_key,
+        ),
+        StatusCode::NO_CONTENT,
+        "POST /me/invitations/{id}/decline [admin]",
+    )
+    .await;
+
+    // --- POST /communities/{name}/applications — herkes başvurabilir;
+    // sahip üye olduğu için 400, banlı 403. ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "POST",
+            "/communities/am_top_devir/applications",
+            None,
+            json!({ "reason": "matris" }),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /communities/{name}/applications [anon]",
+    )
+    .await;
+    assert_code(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities/am_top_devir/applications",
+            &banned_key,
+            json!({ "reason": "matris" }),
+        ),
+        StatusCode::FORBIDDEN,
+        "BANNED",
+        "POST /communities/{name}/applications [banli]",
+    )
+    .await;
+    assert_code(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities/am_top_devir/applications",
+            &owner_key,
+            json!({ "reason": "matris" }),
+        ),
+        StatusCode::BAD_REQUEST,
+        "VALIDATION_FAILED",
+        "POST /communities/{name}/applications [sahip/üye]",
+    )
+    .await;
+    assert_status(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities/am_top_devir/applications",
+            &normal_key,
+            json!({ "reason": "matris normal" }),
+        ),
+        StatusCode::CREATED,
+        "POST /communities/{name}/applications [normal]",
+    )
+    .await;
+
+    // --- GET /communities/{name}/applications — yalnızca `member.approve`
+    // (sahip); diğer roller ve yetkisiz banlı 403. ---
+    assert_code(
+        &router,
+        empty_req("GET", "/communities/am_top_devir/applications"),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "GET /communities/{name}/applications [anon]",
+    )
+    .await;
+    for (rol, token) in [
+        ("normal", &normal_key),
+        ("moderator", &mod_key),
+        ("admin", &admin_key),
+        ("banli", &banned_key),
+    ] {
+        assert_code(
+            &router,
+            auth_req("GET", "/communities/am_top_devir/applications", token),
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            &format!("GET /communities/{{name}}/applications [{rol}]"),
+        )
+        .await;
+    }
+    let queue = assert_status(
+        &router,
+        auth_req("GET", "/communities/am_top_devir/applications", &owner_key),
+        StatusCode::OK,
+        "GET /communities/{name}/applications [sahip]",
+    )
+    .await;
+    let normal_application = queue["applications"][0]["id"]
+        .as_str()
+        .expect("başvuru id")
+        .to_owned();
+
+    // İkinci başvuru (reject için): admin bu topluluğun üyesi değil.
+    assert_status(
+        &router,
+        auth_json_req(
+            "POST",
+            "/communities/am_top_devir/applications",
+            &admin_key,
+            json!({ "reason": "matris admin" }),
+        ),
+        StatusCode::CREATED,
+        "POST /communities/{name}/applications [admin]",
+    )
+    .await;
+    let queue = assert_status(
+        &router,
+        auth_req("GET", "/communities/am_top_devir/applications", &owner_key),
+        StatusCode::OK,
+        "GET /communities/{name}/applications [sahip, ikinci]",
+    )
+    .await;
+    let admin_application = queue["applications"][1]["id"]
+        .as_str()
+        .expect("başvuru id")
+        .to_owned();
+
+    // --- POST /communities/{name}/applications/{id}/accept ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "POST",
+            &format!("/communities/am_top_devir/applications/{normal_application}/accept"),
+            None,
+            json!({}),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /communities/{name}/applications/{id}/accept [anon]",
+    )
+    .await;
+    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key)] {
+        assert_code(
+            &router,
+            auth_req(
+                "POST",
+                &format!("/communities/am_top_devir/applications/{normal_application}/accept"),
+                token,
+            ),
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            &format!("POST /communities/{{name}}/applications/{{id}}/accept [{rol}]"),
+        )
+        .await;
+    }
+    assert_status(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/communities/am_top_devir/applications/{normal_application}/accept"),
+            &owner_key,
+        ),
+        StatusCode::NO_CONTENT,
+        "POST /communities/{name}/applications/{id}/accept [sahip]",
+    )
+    .await;
+
+    // --- POST /communities/{name}/applications/{id}/reject ---
+    assert_code(
+        &router,
+        maybe_auth_json_req(
+            "POST",
+            &format!("/communities/am_top_devir/applications/{admin_application}/reject"),
+            None,
+            json!({}),
+        ),
+        StatusCode::UNAUTHORIZED,
+        "MISSING_CREDENTIALS",
+        "POST /communities/{name}/applications/{id}/reject [anon]",
+    )
+    .await;
+    for (rol, token) in [("normal", &normal_key), ("moderator", &mod_key)] {
+        assert_code(
+            &router,
+            auth_req(
+                "POST",
+                &format!("/communities/am_top_devir/applications/{admin_application}/reject"),
+                token,
+            ),
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN",
+            &format!("POST /communities/{{name}}/applications/{{id}}/reject [{rol}]"),
+        )
+        .await;
+    }
+    assert_status(
+        &router,
+        auth_req(
+            "POST",
+            &format!("/communities/am_top_devir/applications/{admin_application}/reject"),
+            &owner_key,
+        ),
+        StatusCode::NO_CONTENT,
+        "POST /communities/{name}/applications/{id}/reject [sahip]",
     )
     .await;
 }

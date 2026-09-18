@@ -1692,3 +1692,780 @@ pub async fn list_posts_in_community(
         Content::from,
     ))
 }
+
+// --- Faz 4B-2: davetler ve başvurular ----------------------------------
+//
+// Private topluluğa giriş iki yönlüdür ve ikisi de bir gelen kutusu öğesi
+// üretir (§3): moderatörün gönderdiği **davet** ve kişinin yazdığı
+// **başvuru**. Public topluluğa doğrudan katılmak anında gerçekleştiği için
+// (`join_community`) public'e yapılan davet/başvuru bir istemci hatasıdır —
+// yok sayılmaz, [`Error::Validation`] döner.
+//
+// Davet edilen/başvuran kişi, kabul edilene kadar üye DEĞİLDİR. Her iki
+// tabloda `(community_id, actor_id)` üzerinde kısmi bir `UNIQUE` index var
+// (yalnızca `pending` satırlar için): aynı kişiye ikinci bekleyen davet ya da
+// başvuru sessizce birikmez, [`Error::Conflict`] döner. Çözülmüş bir satır
+// index'ten çıkar, dolayısıyla kişi ileride yeniden davet edilebilir.
+//
+// Reddetmek/iptal etmek satırı silmez; durumu ve `resolved_at`'i yazar
+// (`migrations/0033`'ün çözüm şekli CHECK'i bunu zorunlu kılıyor).
+
+/// `migrations/0033_invitations_applications.up.sql` →
+/// `ck_community_applications_reason_length` üst sınırı.
+const APPLICATION_REASON_MAX: usize = 2000;
+
+/// `migrations/0033_invitations_applications.up.sql` → `invitation_status`
+/// Postgres enum'ının Rust karşılığı.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "invitation_status", rename_all = "snake_case")]
+pub enum InvitationStatus {
+    Pending,
+    Accepted,
+    Declined,
+}
+
+/// `migrations/0033_invitations_applications.up.sql` → `application_status`
+/// Postgres enum'ının Rust karşılığı.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "application_status", rename_all = "snake_case")]
+pub enum ApplicationStatus {
+    Pending,
+    Accepted,
+    Rejected,
+}
+
+impl ApplicationStatus {
+    /// API'de görünen dize.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+        }
+    }
+
+    /// İstemciden gelen `?status=` dizesini ayrıştırır.
+    ///
+    /// # Errors
+    /// Tanınmayan değer [`Error::Validation`] — [`CommunityVisibility::parse`]
+    /// ile aynı gerekçe: yazım hatası yapan istemciye sessizce varsayılan
+    /// dönmek, istediği filtreyi uygulamamak olurdu.
+    pub fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "pending" => Ok(Self::Pending),
+            "accepted" => Ok(Self::Accepted),
+            "rejected" => Ok(Self::Rejected),
+            other => Err(Error::Validation(format!(
+                "invalid status: \"{other}\" (expected: pending, accepted, rejected)"
+            ))),
+        }
+    }
+}
+
+/// Davet/başvuru gerekçesini doğrular: [`text::normalize_text`] uygular,
+/// boş olamama ve uzunluk kuralını işletir.
+///
+/// # Errors
+/// Normalize edildikten sonra boşsa ya da `2000` karakteri aşarsa
+/// [`Error::Validation`].
+fn validate_reason(raw: &str) -> Result<String> {
+    let normalized = text::normalize_text(raw);
+    let len = normalized.chars().count();
+
+    if len == 0 {
+        return Err(Error::Validation(
+            "application reason cannot be empty".to_owned(),
+        ));
+    }
+    if len > APPLICATION_REASON_MAX {
+        return Err(Error::Validation(format!(
+            "application reason can be at most {APPLICATION_REASON_MAX} characters (received: {len} characters)"
+        )));
+    }
+
+    Ok(normalized)
+}
+
+/// Alıcıya giden tek bir bekleyen davet: topluluk referansı + davet eden
+/// actor + kurulma anı.
+#[derive(Debug, Clone)]
+pub struct Invitation {
+    pub id: i64,
+    pub community: CommunityRef,
+    /// Daveti gönderen moderatör.
+    pub invited_by: ActorRecord,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Moderasyon kuyruğundaki tek bir başvuru.
+#[derive(Debug, Clone)]
+pub struct Application {
+    pub id: i64,
+    pub community: CommunityRef,
+    pub applicant: ActorRecord,
+    pub reason: String,
+    pub status: ApplicationStatus,
+    pub created_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+struct InvitationRow {
+    id: i64,
+    community_id: i64,
+    community_name: String,
+    invited_by_id: i64,
+    invited_by_username: String,
+    invited_by_actor_type: ActorType,
+    invited_by_display_name: Option<String>,
+    invited_by_bio: Option<String>,
+    invited_by_created_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+impl From<InvitationRow> for Invitation {
+    fn from(row: InvitationRow) -> Self {
+        Self {
+            id: row.id,
+            community: CommunityRef {
+                id: row.community_id,
+                name: row.community_name,
+            },
+            invited_by: ActorRecord {
+                id: row.invited_by_id,
+                username: row.invited_by_username,
+                actor_type: row.invited_by_actor_type,
+                display_name: row.invited_by_display_name,
+                bio: row.invited_by_bio,
+                created_at: row.invited_by_created_at,
+            },
+            created_at: row.created_at,
+        }
+    }
+}
+
+struct ApplicationRow {
+    id: i64,
+    community_id: i64,
+    community_name: String,
+    applicant_id: i64,
+    applicant_username: String,
+    applicant_actor_type: ActorType,
+    applicant_display_name: Option<String>,
+    applicant_bio: Option<String>,
+    applicant_created_at: DateTime<Utc>,
+    reason: String,
+    status: ApplicationStatus,
+    created_at: DateTime<Utc>,
+    resolved_at: Option<DateTime<Utc>>,
+}
+
+impl From<ApplicationRow> for Application {
+    fn from(row: ApplicationRow) -> Self {
+        Self {
+            id: row.id,
+            community: CommunityRef {
+                id: row.community_id,
+                name: row.community_name,
+            },
+            applicant: ActorRecord {
+                id: row.applicant_id,
+                username: row.applicant_username,
+                actor_type: row.applicant_actor_type,
+                display_name: row.applicant_display_name,
+                bio: row.applicant_bio,
+                created_at: row.applicant_created_at,
+            },
+            reason: row.reason,
+            status: row.status,
+            created_at: row.created_at,
+            resolved_at: row.resolved_at,
+        }
+    }
+}
+
+/// `POST /communities/{name}/invitations`: bir moderatör, kullanıcı adıyla
+/// private topluluğa davet eder.
+///
+/// Yalnızca **private** topluluk davet kabul eder (§3): public topluluğa
+/// katılmak anında olduğu için oraya davet anlamsızdır, [`Error::Validation`].
+/// Yetki [`crate::authz::has_for`] ile `member.invite` için, **hedef
+/// topluluğun** kapsamında sorulur; sahip bu izni topluluk kapsamlı bir satır
+/// olarak tutar.
+///
+/// Hedef actor **var olmalı ve canlı olmalı** ([`crate::actor::resolve_live_actor_id`]);
+/// zaten üyeye [`Error::Validation`], topluluktan banlıya [`Error::Banned`]
+/// döner. Davet `pending` yazılır ve alıcıya `community_invitation`
+/// bildirimi gider.
+///
+/// **Aynı kişiye ikinci bekleyen davet [`Error::Conflict`]:** kısmi `UNIQUE`
+/// index çakışır, satır birikmez ve ikinci bildirim gönderilmez. İdempotent
+/// değil çünkü "davet gönder" iki kez çağrıldığında kullanıcının niyeti
+/// genelde gerçekten ikinci bir hatırlatmadır, ama bildirim spam'i olurdu;
+/// çakışmayı açıkça söylemek daha dürüst.
+///
+/// # Errors
+/// Topluluk yoksa (ya da kapalıysa) [`Error::NotFound`]; topluluk public ise,
+/// hedef zaten üye ise, hedef actor değilse (silinmişse [`Error::Gone`]) ya
+/// da hedef actor yoksa [`Error::NotFound`] / [`Error::Validation`]; çağıranın
+/// `member.invite` yetkisi yoksa [`Error::Forbidden`]; zaten bekleyen davet
+/// varsa [`Error::Conflict`]; hedef banlıysa [`Error::Banned`]; veritabanı
+/// hatası [`Error::Database`].
+pub async fn invite_member(
+    pool: &PgPool,
+    inviter_id: i64,
+    permissions: &[Grant],
+    community_name: &str,
+    username: &str,
+) -> Result<()> {
+    let lookup = lookup_community(pool, community_name).await?;
+
+    if lookup.visibility != CommunityVisibility::Private {
+        return Err(Error::Validation(
+            "public communities join instantly; invitations are for private communities".to_owned(),
+        ));
+    }
+
+    if !crate::authz::has_for(permissions, Permission::MemberInvite, Some(lookup.id)) {
+        return Err(Error::Forbidden);
+    }
+
+    let target_id = crate::actor::resolve_live_actor_id(pool, username).await?;
+
+    let mut tx = pool.begin().await?;
+
+    if is_member_in(&mut *tx, lookup.id, target_id).await? {
+        return Err(Error::Validation(
+            "the invited actor is already a member".to_owned(),
+        ));
+    }
+
+    if crate::moderation::is_banned_from_community_in(&mut *tx, lookup.id, target_id).await? {
+        return Err(Error::Banned);
+    }
+
+    let inserted = sqlx::query!(
+        r#"
+        INSERT INTO community_invitations (community_id, invited_actor_id, invited_by)
+        VALUES ($1, $2, $3)
+        "#,
+        lookup.id,
+        target_id,
+        inviter_id,
+    )
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(sqlx::Error::Database(db_err)) = inserted {
+        // `uq_community_invitations_pending`: aynı kişiye zaten bekleyen bir
+        // davet var. Gerekçe fonksiyon dokümanında (Conflict seçimi).
+        if db_err.is_unique_violation() {
+            return Err(Error::Conflict(
+                "an invitation is already pending for this actor".to_owned(),
+            ));
+        }
+        return Err(Error::from(sqlx::Error::Database(db_err)));
+    }
+
+    crate::notification::create_notification(
+        &mut tx,
+        target_id,
+        crate::notification::NotificationKind::CommunityInvitation,
+        Some(inviter_id),
+        "community",
+        lookup.id,
+        serde_json::json!({ "community": text::normalize_text(community_name) }),
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// `GET /me/invitations?cursor=&limit=`: çağırana adreslenmiş bekleyen
+/// davetler, en yeni önce.
+///
+/// Topluluğu kapanmış davet listelenmez (`closed_at IS NULL`): kapanış satırı
+/// silmez, ama o topluluğa kabul edilmek artık `404` olurdu — daveti
+/// göstermek yanıltıcı olurdu.
+///
+/// # Errors
+/// Cursor bu listenin sıralamasına ait değilse [`Error::InvalidCursor`];
+/// veritabanı hatası [`Error::Database`].
+pub async fn list_my_invitations(
+    pool: &PgPool,
+    actor_id: i64,
+    cursor: Option<Cursor>,
+    limit: i64,
+) -> Result<Page<Invitation>> {
+    let (cursor_created_at, cursor_id) = split_new_cursor(cursor);
+
+    let rows = sqlx::query_as!(
+        InvitationRow,
+        r#"
+        SELECT
+            invitations.id,
+            communities.id AS community_id,
+            communities.name AS community_name,
+            actors.id AS invited_by_id,
+            actors.username AS invited_by_username,
+            actors.actor_type AS "invited_by_actor_type: ActorType",
+            actors.display_name AS invited_by_display_name,
+            actors.bio AS invited_by_bio,
+            actors.created_at AS invited_by_created_at,
+            invitations.created_at
+        FROM community_invitations AS invitations
+        JOIN communities ON communities.id = invitations.community_id
+        JOIN actors ON actors.id = invitations.invited_by
+        WHERE invitations.invited_actor_id = $1
+          AND invitations.status = 'pending'::invitation_status
+          AND communities.closed_at IS NULL
+          AND (
+              $2::timestamptz IS NULL
+              OR (invitations.created_at, invitations.id) < ($2::timestamptz, $3::bigint)
+          )
+        ORDER BY invitations.created_at DESC, invitations.id DESC
+        LIMIT $4
+        "#,
+        actor_id,
+        cursor_created_at,
+        cursor_id,
+        limit + 1,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(paginate(
+        rows,
+        limit,
+        |row: &InvitationRow| row.id,
+        |row: &InvitationRow| SortKey::New {
+            created_at: row.created_at,
+        },
+        Invitation::from,
+    ))
+}
+
+/// `POST /me/invitations/{id}/accept`: daveti kabul eder, üyeliği kurar.
+///
+/// Davet **çağıranın olmalı ve hâlâ `pending` olmalı**; başka birinin daveti
+/// ile "hiç yok" ayrımı sızdırılmadan [`Error::NotFound`], çözülmüş davet
+/// [`Error::Conflict`]. Topluluk açık olmalı ([`Error::NotFound`]) ve çağıran
+/// o topluluktan banlı olmamalı ([`Error::Banned`]): private topluluğun banı
+/// davet kabulünü de kapsar (§6). Üyelik `ON CONFLICT DO NOTHING` ile
+/// kurulur — başka bir yoldan çoktan üye olmak hata değil.
+///
+/// Üyelik + davetin `accepted` işaretlenmesi **tek transaction'da**.
+///
+/// # Errors
+/// Davet yoksa/silinmişse ya da çağırana ait değilse [`Error::NotFound`];
+/// davet artık pending değilse [`Error::Conflict`]; topluluk kapalıysa
+/// [`Error::NotFound`]; çağıran banlıysa [`Error::Banned`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn accept_invitation(pool: &PgPool, actor_id: i64, invitation_id: i64) -> Result<()> {
+    let mut tx = pool.begin().await?;
+
+    let invitation = sqlx::query!(
+        r#"
+        SELECT community_id, status AS "status: InvitationStatus"
+        FROM community_invitations
+        WHERE id = $1 AND invited_actor_id = $2
+        FOR UPDATE
+        "#,
+        invitation_id,
+        actor_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound("invitation"))?;
+
+    if invitation.status != InvitationStatus::Pending {
+        return Err(Error::Conflict(
+            "invitation is no longer pending".to_owned(),
+        ));
+    }
+
+    // Kapanmış topluluğa katılma yok (§4): satır durusa da uç artık 404.
+    let open = sqlx::query_scalar!(
+        r#"SELECT EXISTS(
+               SELECT 1 FROM communities WHERE id = $1 AND closed_at IS NULL
+           ) AS "exists!""#,
+        invitation.community_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !open {
+        return Err(Error::NotFound("community"));
+    }
+
+    if crate::moderation::is_banned_from_community_in(&mut *tx, invitation.community_id, actor_id)
+        .await?
+    {
+        return Err(Error::Banned);
+    }
+
+    sqlx::query!(
+        r#"
+        INSERT INTO community_members (community_id, actor_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+        "#,
+        invitation.community_id,
+        actor_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query!(
+        r#"
+        UPDATE community_invitations
+        SET status = 'accepted'::invitation_status, resolved_at = now()
+        WHERE id = $1
+        "#,
+        invitation_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// `POST /me/invitations/{id}/decline`: daveti reddeder.
+///
+/// Sahiplik ve `pending` kontrolleri [`accept_invitation`] ile aynıdır;
+/// üyelik kurulmaz, satır `declined` + `resolved_at` olur. Topluluğun açık
+/// olması gerekmez: davet edildiğin bir topluluğun bu arada kapanmış olması
+/// reddetmeyi engellememeli.
+///
+/// # Errors
+/// Davet yoksa/silinmişse ya da çağırana ait değilse [`Error::NotFound`];
+/// davet artık pending değilse [`Error::Conflict`]; veritabanı hatası
+/// [`Error::Database`].
+pub async fn decline_invitation(pool: &PgPool, actor_id: i64, invitation_id: i64) -> Result<()> {
+    let mut tx = pool.begin().await?;
+
+    let invitation = sqlx::query!(
+        r#"
+        SELECT status AS "status: InvitationStatus"
+        FROM community_invitations
+        WHERE id = $1 AND invited_actor_id = $2
+        FOR UPDATE
+        "#,
+        invitation_id,
+        actor_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound("invitation"))?;
+
+    if invitation.status != InvitationStatus::Pending {
+        return Err(Error::Conflict(
+            "invitation is no longer pending".to_owned(),
+        ));
+    }
+
+    sqlx::query!(
+        r#"
+        UPDATE community_invitations
+        SET status = 'declined'::invitation_status, resolved_at = now()
+        WHERE id = $1
+        "#,
+        invitation_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// `POST /communities/{name}/applications`: private topluluğa başvuru.
+///
+/// Topluluk **private** olmalı ([`Error::Validation`] public için), çağıran
+/// üye olmamalı ([`Error::Validation`]) ve topluluktan banlı olmamalı
+/// ([`Error::Banned`]). Gerekçe 1-2000 karakter ([`validate_reason`]).
+///
+/// Başvuru `pending` yazılır ve o toplulukta `member.approve` tutan **her**
+/// aktöre `community_application` bildirimi gider (`permissions` tablosundan
+/// sorulur; sahip bu izni topluluk kapsamlı bir satır olarak tutar). Aynı
+/// kişinin bekleyen ikinci başvurusu [`Error::Conflict`] — kısmi `UNIQUE`
+/// index çakışır, kuyruk şişmez.
+///
+/// # Errors
+/// Topluluk yoksa/kapalıysa [`Error::NotFound`]; topluluk public ise, çağıran
+/// zaten üye ise ya da gerekçe geçersizse [`Error::Validation`]; çağıran
+/// banlıysa [`Error::Banned`]; bekleyen başvuru varsa [`Error::Conflict`];
+/// veritabanı hatası [`Error::Database`].
+pub async fn apply_to_community(
+    pool: &PgPool,
+    actor_id: i64,
+    community_name: &str,
+    reason: &str,
+) -> Result<()> {
+    let lookup = lookup_community(pool, community_name).await?;
+
+    if lookup.visibility != CommunityVisibility::Private {
+        return Err(Error::Validation(
+            "public communities join instantly; applications are for private communities"
+                .to_owned(),
+        ));
+    }
+
+    let reason = validate_reason(reason)?;
+    let name = text::normalize_text(community_name);
+
+    let mut tx = pool.begin().await?;
+
+    if is_member_in(&mut *tx, lookup.id, actor_id).await? {
+        return Err(Error::Validation(
+            "a member cannot apply to their own community".to_owned(),
+        ));
+    }
+
+    if crate::moderation::is_banned_from_community_in(&mut *tx, lookup.id, actor_id).await? {
+        return Err(Error::Banned);
+    }
+
+    let inserted = sqlx::query!(
+        r#"
+        INSERT INTO community_applications (community_id, applicant_actor_id, reason)
+        VALUES ($1, $2, $3)
+        "#,
+        lookup.id,
+        actor_id,
+        reason,
+    )
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(sqlx::Error::Database(db_err)) = inserted {
+        if db_err.is_unique_violation() {
+            return Err(Error::Conflict(
+                "an application is already pending for this actor".to_owned(),
+            ));
+        }
+        return Err(Error::from(sqlx::Error::Database(db_err)));
+    }
+
+    // `member.approve` topluluk kapsamlı bir izin (`ck_permissions_community_only`),
+    // dolayısıyla global bir atama burada yok. Sahip de bu satırı tutar.
+    let approvers = sqlx::query_scalar!(
+        r#"
+        SELECT actor_id FROM permissions
+        WHERE permission = 'member.approve'::permission
+          AND scope = 'community'::permission_scope
+          AND community_id = $1
+        "#,
+        lookup.id,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    for approver_id in approvers {
+        crate::notification::create_notification(
+            &mut tx,
+            approver_id,
+            crate::notification::NotificationKind::CommunityApplication,
+            Some(actor_id),
+            "community",
+            lookup.id,
+            serde_json::json!({ "community": name }),
+        )
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// `GET /communities/{name}/applications?status=&cursor=&limit=`: başvuru
+/// kuyruğu, **en eski önce** (bir iş kuyruğu, şikayet listesindeki gibi §3).
+///
+/// Yetki [`crate::authz::has_for`] ile `member.approve`, hedef topluluğun
+/// kapsamında. `status` verilmezse her durum listelenir.
+///
+/// # Errors
+/// Topluluk yoksa/kapalıysa [`Error::NotFound`]; çağıranın `member.approve`
+/// yetkisi yoksa [`Error::Forbidden`]; cursor bu listenin sıralamasına ait
+/// değilse [`Error::InvalidCursor`]; veritabanı hatası [`Error::Database`].
+pub async fn list_applications(
+    pool: &PgPool,
+    _actor_id: i64,
+    permissions: &[Grant],
+    community_name: &str,
+    status: Option<ApplicationStatus>,
+    cursor: Option<Cursor>,
+    limit: i64,
+) -> Result<Page<Application>> {
+    let lookup = lookup_community(pool, community_name).await?;
+
+    if !crate::authz::has_for(permissions, Permission::MemberApprove, Some(lookup.id)) {
+        return Err(Error::Forbidden);
+    }
+
+    let (cursor_created_at, cursor_id) = split_new_cursor(cursor);
+    let community_id = lookup.id;
+
+    // Kuyruk **artan** sırada (`created_at ASC, id ASC`) — üye listesindeki
+    // gerekçenin aynısı: cursor mekanizması yön bilmez, SQL karşılaştırması
+    // bu yüzden burada açıkça `>` yazılıyor.
+    let rows = sqlx::query_as!(
+        ApplicationRow,
+        r#"
+        SELECT
+            applications.id,
+            communities.id AS community_id,
+            communities.name AS community_name,
+            actors.id AS applicant_id,
+            actors.username AS applicant_username,
+            actors.actor_type AS "applicant_actor_type: ActorType",
+            actors.display_name AS applicant_display_name,
+            actors.bio AS applicant_bio,
+            actors.created_at AS applicant_created_at,
+            applications.reason,
+            applications.status AS "status: ApplicationStatus",
+            applications.created_at,
+            applications.resolved_at
+        FROM community_applications AS applications
+        JOIN communities ON communities.id = applications.community_id
+        JOIN actors ON actors.id = applications.applicant_actor_id
+        WHERE applications.community_id = $1
+          AND ($4::application_status IS NULL OR applications.status = $4::application_status)
+          AND (
+              $2::timestamptz IS NULL
+              OR (applications.created_at, applications.id) > ($2::timestamptz, $3::bigint)
+          )
+        ORDER BY applications.created_at ASC, applications.id ASC
+        LIMIT $5
+        "#,
+        community_id,
+        cursor_created_at,
+        cursor_id,
+        status as Option<ApplicationStatus>,
+        limit + 1,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(paginate(
+        rows,
+        limit,
+        |row: &ApplicationRow| row.id,
+        |row: &ApplicationRow| SortKey::New {
+            created_at: row.created_at,
+        },
+        Application::from,
+    ))
+}
+
+/// `POST /communities/{name}/applications/{id}/accept|reject`: başvuruyu
+/// sonuçlandırır.
+///
+/// Yetki `member.approve`, hedef topluluğun kapsamında. Başvuru **o topluluğa
+/// ait ve hâlâ `pending`** olmalı ([`Error::NotFound`] / [`Error::Conflict`]).
+///
+/// `accept` ise üyelik `ON CONFLICT DO NOTHING` ile kurulur; her iki dalda da
+/// satır `accepted`/`rejected`, `resolved_by` ve `resolved_at` ile kapatılır
+/// (şemadaki çözüm şekli CHECK'i üçünü bağlar). Başvurana
+/// `community_application_result` bildirimi gider,
+/// `payload = {"community": ..., "accepted": bool}`.
+///
+/// Üyelik + durum + bildirim **tek transaction'da**.
+///
+/// # Errors
+/// Topluluk yoksa/kapalıysa [`Error::NotFound`]; çağıranın `member.approve`
+/// yetkisi yoksa [`Error::Forbidden`]; başvuru bu toplulukta yoksa
+/// [`Error::NotFound`]; başvuru artık pending değilse [`Error::Conflict`];
+/// veritabanı hatası [`Error::Database`].
+pub async fn resolve_application(
+    pool: &PgPool,
+    actor_id: i64,
+    permissions: &[Grant],
+    community_name: &str,
+    application_id: i64,
+    accept: bool,
+) -> Result<()> {
+    let lookup = lookup_community(pool, community_name).await?;
+
+    if !crate::authz::has_for(permissions, Permission::MemberApprove, Some(lookup.id)) {
+        return Err(Error::Forbidden);
+    }
+
+    let name = text::normalize_text(community_name);
+
+    let mut tx = pool.begin().await?;
+
+    let application = sqlx::query!(
+        r#"
+        SELECT applicant_actor_id, status AS "status: ApplicationStatus"
+        FROM community_applications
+        WHERE id = $1 AND community_id = $2
+        FOR UPDATE
+        "#,
+        application_id,
+        lookup.id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(Error::NotFound("application"))?;
+
+    if application.status != ApplicationStatus::Pending {
+        return Err(Error::Conflict(
+            "application is no longer pending".to_owned(),
+        ));
+    }
+
+    if accept {
+        sqlx::query!(
+            r#"
+            INSERT INTO community_members (community_id, actor_id)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+            "#,
+            lookup.id,
+            application.applicant_actor_id,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let status = if accept {
+        ApplicationStatus::Accepted
+    } else {
+        ApplicationStatus::Rejected
+    };
+
+    sqlx::query!(
+        r#"
+        UPDATE community_applications
+        SET status = $2, resolved_by = $3, resolved_at = now()
+        WHERE id = $1
+        "#,
+        application_id,
+        status as ApplicationStatus,
+        actor_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    crate::notification::create_notification(
+        &mut tx,
+        application.applicant_actor_id,
+        crate::notification::NotificationKind::CommunityApplicationResult,
+        Some(actor_id),
+        "community",
+        lookup.id,
+        serde_json::json!({ "community": name, "accepted": accept }),
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(())
+}

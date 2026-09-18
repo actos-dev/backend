@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE community_invitations\n        SET status = 'declined'::invitation_status, resolved_at = now()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8e7843e3d28c80533b1edd869aedd4414b8321f4c613e51b3da3b83cbb754829"
+}

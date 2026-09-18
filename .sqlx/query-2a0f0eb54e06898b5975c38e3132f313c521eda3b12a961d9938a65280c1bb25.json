@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT actor_id FROM permissions\n        WHERE permission = 'member.approve'::permission\n          AND scope = 'community'::permission_scope\n          AND community_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "actor_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "permissions",
+            "name": "actor_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2a0f0eb54e06898b5975c38e3132f313c521eda3b12a961d9938a65280c1bb25"
+}

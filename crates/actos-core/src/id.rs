@@ -177,13 +177,36 @@ impl IdKind for Notification {
 /// `communities` tablosundaki satırlar (Faz 2, topluluklar).
 ///
 /// `m` öneki (`community`), `c` (content) ile karışmasın diye seçildi. Topluluk
-/// dış ID'si yalnızca `ContentSummary.community` içinde taşınıyor; rota
-/// parametreleri isim üzerinden çalışıyor (`/communities/{name}`) ve isim
-/// zaten insan-okunur — bu yüzden topluluk ID'si hiçbir path'te görünmüyor.
+/// dış ID'si yalnızca `ContentSummary.community` ve bildirimlerin
+/// `target_type = "community"` hedefi içinde taşınıyor; rota parametreleri
+/// isim üzerinden çalışıyor (`/communities/{name}`) ve isim zaten
+/// insan-okunur — bu yüzden topluluk ID'si hiçbir path'te görünmüyor.
 pub struct Community;
 impl IdKind for Community {
     const TAG: u8 = 6;
     const PREFIX: &'static str = "m";
+}
+
+/// `community_invitations` tablosundaki satırlar (Faz 4B-2).
+///
+/// `i` öneki (`invitation`). Davet ID'si `POST /me/invitations/{id}/accept`
+/// ve `.../decline` yollarında taşınıyor; `InvitationSummary.id` de bu
+/// uzaydan.
+pub struct Invitation;
+impl IdKind for Invitation {
+    const TAG: u8 = 7;
+    const PREFIX: &'static str = "i";
+}
+
+/// `community_applications` tablosundaki satırlar (Faz 4B-2).
+///
+/// `p` öneki (`application`), `a` (actor) ve `c` (content) alınmış olduğu
+/// için seçildi. Başvuru ID'si `/communities/{name}/applications/{id}/...`
+/// yollarında ve `ApplicationSummary.id` içinde taşınıyor.
+pub struct Application;
+impl IdKind for Application {
+    const TAG: u8 = 8;
+    const PREFIX: &'static str = "p";
 }
 
 /// ID üretme/ayrıştırma sırasında oluşan hatalar. Hiçbiri panik değildir:

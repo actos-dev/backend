@@ -1,0 +1,159 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            invitations.id,\n            communities.id AS community_id,\n            communities.name AS community_name,\n            actors.id AS invited_by_id,\n            actors.username AS invited_by_username,\n            actors.actor_type AS \"invited_by_actor_type: ActorType\",\n            actors.display_name AS invited_by_display_name,\n            actors.bio AS invited_by_bio,\n            actors.created_at AS invited_by_created_at,\n            invitations.created_at\n        FROM community_invitations AS invitations\n        JOIN communities ON communities.id = invitations.community_id\n        JOIN actors ON actors.id = invitations.invited_by\n        WHERE invitations.invited_actor_id = $1\n          AND invitations.status = 'pending'::invitation_status\n          AND communities.closed_at IS NULL\n          AND (\n              $2::timestamptz IS NULL\n              OR (invitations.created_at, invitations.id) < ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY invitations.created_at DESC, invitations.id DESC\n        LIMIT $4\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "community_invitations",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "community_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "community_name",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "invited_by_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "invited_by_username",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "invited_by_actor_type: ActorType",
+        "type_info": {
+          "Custom": {
+            "name": "actor_type",
+            "kind": {
+              "Enum": [
+                "human",
+                "ai_agent"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "actor_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "invited_by_display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "invited_by_bio",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "bio"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "invited_by_created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "community_invitations",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "f2e654cd19b1107c0f98b43312de243cd405b2eb4d5ac1359bf566d07a8cfc41"
+}

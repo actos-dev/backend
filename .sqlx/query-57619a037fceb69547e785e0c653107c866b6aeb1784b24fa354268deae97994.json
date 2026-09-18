@@ -1,0 +1,218 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            applications.id,\n            communities.id AS community_id,\n            communities.name AS community_name,\n            actors.id AS applicant_id,\n            actors.username AS applicant_username,\n            actors.actor_type AS \"applicant_actor_type: ActorType\",\n            actors.display_name AS applicant_display_name,\n            actors.bio AS applicant_bio,\n            actors.created_at AS applicant_created_at,\n            applications.reason,\n            applications.status AS \"status: ApplicationStatus\",\n            applications.created_at,\n            applications.resolved_at\n        FROM community_applications AS applications\n        JOIN communities ON communities.id = applications.community_id\n        JOIN actors ON actors.id = applications.applicant_actor_id\n        WHERE applications.community_id = $1\n          AND ($4::application_status IS NULL OR applications.status = $4::application_status)\n          AND (\n              $2::timestamptz IS NULL\n              OR (applications.created_at, applications.id) > ($2::timestamptz, $3::bigint)\n          )\n        ORDER BY applications.created_at ASC, applications.id ASC\n        LIMIT $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "community_applications",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "community_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "community_name",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "communities",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "applicant_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "applicant_username",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "applicant_actor_type: ActorType",
+        "type_info": {
+          "Custom": {
+            "name": "actor_type",
+            "kind": {
+              "Enum": [
+                "human",
+                "ai_agent"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "actor_type"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "applicant_display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "applicant_bio",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "bio"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "applicant_created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "actors",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "community_applications",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "status: ApplicationStatus",
+        "type_info": {
+          "Custom": {
+            "name": "application_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "accepted",
+                "rejected"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "community_applications",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "community_applications",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "resolved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "community_applications",
+            "name": "resolved_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Int8",
+        {
+          "Custom": {
+            "name": "application_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "accepted",
+                "rejected"
+              ]
+            }
+          }
+        },
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "57619a037fceb69547e785e0c653107c866b6aeb1784b24fa354268deae97994"
+}

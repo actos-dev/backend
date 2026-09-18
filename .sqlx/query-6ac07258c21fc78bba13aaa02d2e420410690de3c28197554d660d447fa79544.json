@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT community_id, status AS \"status: InvitationStatus\"\n        FROM community_invitations\n        WHERE id = $1 AND invited_actor_id = $2\n        FOR UPDATE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "community_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "community_invitations",
+            "name": "community_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status: InvitationStatus",
+        "type_info": {
+          "Custom": {
+            "name": "invitation_status",
+            "kind": {
+              "Enum": [
+                "pending",
+                "accepted",
+                "declined"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "community_invitations",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6ac07258c21fc78bba13aaa02d2e420410690de3c28197554d660d447fa79544"
+}
