@@ -170,7 +170,11 @@ services:
   # frontend/.github/workflows/deploy.yml). Port yalnızca loopback: dışarıya
   # açan tek şey host'taki nginx (actos.com.tr → 127.0.0.1:3000).
   web:
-    image: ${WEB_IMAGE:?WEB_IMAGE zorunlu — ör. ghcr.io/actos-dev/frontend:sha-abc1234}
+    # Varsayılan var: backend dağıtımı yalnızca `up api` yapıyor ve `web`'e
+    # dokunmuyor, ama compose dosyanın tamamını doğruladığı için `:?` olsaydı
+    # backend dağıtımı da WEB_IMAGE isterdi. Frontend dağıtımı bu değeri
+    # ortamdan sabitlenmiş sha ile ezer (bkz. frontend deploy.yml).
+    image: ${WEB_IMAGE:-ghcr.io/actos-dev/frontend:latest}
     container_name: actos_web
     restart: unless-stopped
     depends_on:
